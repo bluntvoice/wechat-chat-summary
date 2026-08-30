@@ -49,7 +49,7 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright bluntvoice"
 
 Section "主程序" SEC_MAIN
   SetOutPath "$INSTDIR"
-  File /oname="WeChat Chat Summary.exe" "${APP_EXE}"
+  File "/oname=WeChat Chat Summary.exe" "${APP_EXE}"
 
   SetOutPath "$INSTDIR\engine"
   File /r "${ENGINE_DIR}\*"

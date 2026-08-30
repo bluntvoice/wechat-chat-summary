@@ -74,6 +74,8 @@ if (-not (Test-Path -LiteralPath $appExe -PathType Leaf)) {
 
 Write-Host "[4/4] 生成可选择安装目录的 NSIS 测试安装包"
 & $MakensisPath `
+    "/INPUTCHARSET" `
+    "UTF8" `
     "/DAPP_EXE=$appExe" `
     "/DENGINE_DIR=$engineDir" `
     "/DOUTPUT_FILE=$outputFile" `
