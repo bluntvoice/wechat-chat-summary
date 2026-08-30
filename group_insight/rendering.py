@@ -6,8 +6,12 @@
 from __future__ import annotations
 
 import html
+import json
 import re
+import shutil
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 from .common import write_json
 from .fetching import get_group_nickname_map, is_resolved_member_display
@@ -269,8 +273,6 @@ def render_html_report(
         )
 
         interaction_labels = [
-            ('pat_sender', '拍一拍最多'),
-            ('pat_target', '被拍最多'),
             ('direct_redpacket_receiver', '定向红包最多'),
             ('reply_sender', '回复最多'),
         ]
@@ -367,6 +369,8 @@ def render_html_report(
             for item in word_cloud_items
         )
 
+        report_date = (start_time or '')[:10]
+
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -454,8 +458,7 @@ def render_html_report(
       <h1 class="title-cn">群聊总结</h1>
       <div class="hero-meta">
         <div class="chat-name">{html.escape(chat_name)}</div>
-        <div>统计区间：{html.escape(start_time)} - {html.escape(end_time)}</div>
-        <div>{render_rich_text(report.get('tagline', ''))}</div>
+        <div>群聊总结：{html.escape(report_date)}</div>
       </div>
       <div class="hero-stats">
         <div class="stat-card"><div class="stat-label">今日信息数</div><div class="stat-value">{stats.get('effective_message_count', stats['message_count'])}</div></div>
@@ -550,7 +553,14 @@ def invalidate_cached_outputs_if_needed(
         if target_dir.exists():
             shutil.rmtree(target_dir)
 
-    for filename in ["group_insight_report.json", "group_insight_report.html", "group_insight_report.png"]:
-        target_file = output_dir / filename
-        if target_file.exists():
-            target_file.unlink()
+    for pattern in (
+        "group_insight_report.json",
+        "group_insight_report.html",
+        "group_insight_report.png",
+        "*_群聊总结.json",
+        "*_群聊总结.html",
+        "*_群聊总结.png",
+    ):
+        for target_file in output_dir.glob(pattern):
+            if target_file.is_file():
+                target_file.unlink()

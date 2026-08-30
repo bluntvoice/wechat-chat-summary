@@ -4,9 +4,10 @@
 """
 import sys
 import time
+from pathlib import Path
 
 # 将 pywechat 路径添加到 Python 路径
-sys.path.insert(0, r'c:\Users\XQH\Downloads\wechat-ability\pywechat')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pywechat"))
 
 from pyweixin.WeChatAuto import Messages
 from pyweixin.WeChatTools import Navigator, Tools

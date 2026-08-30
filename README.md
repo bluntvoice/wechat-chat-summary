@@ -1,101 +1,94 @@
-# 微信能力工作区
+# 微信群聊总结（wechat-chat-summary）
 
-这个仓库是一个本地父工作区，用来编排微信数据库处理、消息查询、群聊日报生成，以及 Windows PC 微信 UI 自动化发送。
+读取 `WeChatDataAnalysis` 提供的本地 API，按指定群聊和时间范围生成结构化统计、
+AI 总结、JSON、HTML 及 300 DPI PNG 长图。真实聊天数据和报告只保存在用户选定
+的独立数据目录中。
 
-当前工作区由三部分组成：
+## 项目来源与使用说明
 
-- `wechat-decrypt/`：微信 4.x 数据库密钥提取、SQLCipher 数据库解密、MCP 查询能力。
-- `pywechat/`：Windows 10/11 下的 PC 微信 UI 自动化能力；其中 `pyweixin/` 适配微信 4.1+，`pywechat/` 主要适配微信 3.9.x。
-- `group_insight/`：基于已解密消息生成群聊洞察日报，并可导出 HTML/PNG、通过 UI 自动化发送，默认走 DeepSeek 分析链路。
+本项目参考并使用了以下两个公开 GitHub 项目：
 
-当前文档口径按收口后的运行原则维护：
+- [wzj042/wechat-auto-insight](https://github.com/wzj042/wechat-auto-insight)：本仓库的基础项目。保留并改造了其中的 `group_insight` 总结流程、报告渲染及可选微信发送能力；已移除不再可用的 `wechat-decrypt` 上游解密模块依赖。
+- [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis)：作为真实微信数据读取工具。本项目通过其本地 REST API 获取会话、成员和消息数据，并在 `group_insight/wechat_data_api.py` 中实现兼容适配；仓库不包含该工具本体、用户数据库或解密后的聊天数据。
 
-- `group_insight` 只把仓库根目录 `.env` 视为受支持的本地配置入口。
-- 发送、调度和分析流程以显式参数为准，支持 `--auto-time`、`--thinking`、`--allow-json-repair` 等开关，不再在总览文档里展开旧兼容参数。
-- 缺少关键输入、依赖或运行条件时优先直接失败，避免静默兜底掩盖问题。
+可选的微信 UI 自动发送功能继续使用 `pywechat` 子模块；数据读取和报告生成不依赖该功能。
 
-## 仓库定位
+## 当前架构
 
-根目录是父仓库，不直接承载 `wechat-decrypt/` 和 `pywechat/` 的完整源码历史。
+- `WeChatDataAnalysis`：负责微信 4.x 数据读取、解密和本地 API。
+- `group_insight/`：负责消息归一化、统计、分片、DeepSeek 分析和报告渲染。
+- `pywechat/`：可选的微信 UI 自动发送子模块。
+- AI 分析当前支持 DeepSeek 兼容 API；通过 MCP 交给外部 AI 客户端分析属于后续接口。
 
-- `wechat-decrypt/` 和 `pywechat/` 通过 `.gitmodules` 记录来源。
-- 父仓库只记录两个子模块的 gitlink 指针。
-- 如果更新子模块源码，应先在各自仓库提交或切到目标 commit，再回到父仓库记录新的指针。
+旧 `wechat-decrypt` gitlink 仍存在于上游提交历史中，但当前代码、依赖和运行流程均不再使用它。
 
-## 子模块职责
+## 配置
 
-### `wechat-decrypt/`
+先启动 `WeChatDataAnalysis` 并完成账号数据加载。复制 `.env.example` 为 `.env`，
+填写 API Key 和独立输出目录：
 
-负责数据库侧能力：
-
-- 提取当前登录微信账号的数据库密钥
-- 解密本地 SQLCipher 数据库
-- 通过 MCP 提供最近会话、聊天记录、消息搜索、联系人、标签、图片解码等查询能力
-
-常见入口：
-
-```powershell
-cd .\wechat-decrypt
-python main.py
-python main.py decrypt
+```dotenv
+DEEPSEEK_API_KEY=sk-your-deepseek-api-key
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
+WECHAT_DATA_API_URL=http://127.0.0.1:10392
+GROUP_INSIGHT_OUTPUT_ROOT=D:\WeChatData\群聊总结
 ```
 
-### `pywechat/`
+`.env` 仅供本机使用，已被 Git 忽略。输出目录应与源码和软件安装目录分离。
 
-负责 Windows UI 自动化侧能力：
+## 运行
 
-- 打开微信会话
-- 发送文本、文件、图片
-- 读取会话窗口和联系人相关控件
-
-版本选择建议：
-
-- 微信 4.1+：优先使用 `pywechat/pyweixin/`
-- 微信 3.9.x：再看 `pywechat/pywechat/`
-
-## 群聊日报模块
-
-`group_insight/` 是当前父仓库内自维护的业务包，不是 Git 子模块。
-
-它负责：
-
-- 读取已解密微信消息
-- 构造 LLM 分析流程（固定 map/reduce/final，含阶段缓存）
-- 生成 JSON、HTML、PNG 报表
-- 通过 Windows UI 自动化发送报表图片（支持多目标）
-- 注册每日定时任务
-- 可选异常告警邮件
-
-详细运行说明见：
-
-- `group_insight/README.md`
-
-## 初始化
-
-克隆或恢复仓库后，先初始化子模块：
+真实数据干跑会生成统计与 HTML，但不调用模型、不导出图片、不发送微信：
 
 ```powershell
-git submodule update --init --recursive
+python -m group_insight `
+  --chat "群聊完整名称" `
+  --start "2026-08-28 00:00:00" `
+  --end "2026-08-28 23:59:59" `
+  --dry-run `
+  --no-image `
+  --no-send-after-run
 ```
 
-创建 Python 3.10 环境并安装根目录依赖：
+完整分析和 PNG 导出：
 
 ```powershell
-uv venv .venv --python 3.10
-.\.venv\Scripts\Activate.ps1
-uv pip install -r requirements.txt
+python -m group_insight `
+  --chat "群聊完整名称" `
+  --start "2026-08-28 00:00:00" `
+  --end "2026-08-28 23:59:59" `
+  --image-dpi 300 `
+  --no-send-after-run
 ```
 
-如果不用 `uv`，也可以使用 `python -m venv .venv`，但后续命令仍建议在 `.venv` 激活状态下运行。
+默认视口宽度为 760 CSS 像素，浏览器以 2 倍缩放导出约 1520 像素宽的长图。
+PNG 会写入 300 DPI 的 `pHYs` 元数据，不会为了修改 DPI 而重采样图片。
 
-## 目录速查
+## 输出
 
-- `README.md`：父工作区总览。
-- `AGENTS.md`：给编码代理的维护说明。
-- `group_insight/README.md`：群聊日报模块的运行说明。
-- `group_insight/`：日报分析、渲染、发送与调度代码（含消息拉取、分片、统计、LLM 流水线、缓存）。
-- `wechat-decrypt/`：数据库密钥提取、解密、MCP 查询。
-- `pywechat/`：Windows 微信 UI 自动化。
-- `.env.example`：`group_insight` 的 DeepSeek 环境变量模板。
-- `requirements.txt`：根目录 Python 依赖。
-- `reports/`：本地生成物目录。
+```text
+D:\WeChatData\群聊总结\<对话名>\YYYY-MM-DD\
+  <对话名>_YYYY-MM-DD_群聊总结.json
+  <对话名>_YYYY-MM-DD_群聊总结.html
+  <对话名>_YYYY-MM-DD_群聊总结.png
+```
+
+## 测试
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+## 隐私
+
+- 只处理本人合法持有或已获授权的数据。
+- `.env`、真实消息快照、密钥和报告不得提交到 Git。
+- 本地 API 默认只连接 `127.0.0.1`，不要无必要开放到局域网。
+- 发布前应检查默认群名、发送目标和绝对路径，避免暴露个人信息。
+
+## 授权状态
+
+本仓库当前不附带 LICENSE，也不宣称整体采用 MIT。两个上游项目当前均未在仓库
+根目录声明许可证；公开可见不等同于授予复制、修改或再分发许可。后续如取得明确
+授权或完成独立重写，再单独确定本项目许可证。

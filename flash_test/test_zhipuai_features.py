@@ -290,7 +290,7 @@ def main():
         print(f"⚠️  测试图片不存在: {image_path}")
 
     # 测试 2: 主题聚类
-    messages_json_path = "reports/group_insight/20260410-004112-有氧运动聊天/snapshot/messages.json"
+    messages_json_path = "reports/group_insight/example-chat/snapshot/messages.json"
     if os.path.exists(messages_json_path):
         test_topic_clustering(client, messages_json_path)
     else:

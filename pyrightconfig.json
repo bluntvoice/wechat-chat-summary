@@ -2,7 +2,6 @@
   "venvPath": ".",
   "venv": ".venv",
   "extraPaths": [
-    "wechat-decrypt",
     "pywechat",
     "flash_test"
   ],

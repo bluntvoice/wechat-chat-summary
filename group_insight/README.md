@@ -1,6 +1,6 @@
 # group_insight
 
-`group_insight` 负责读取已解密微信消息、构造 LLM 分析流程、生成 JSON/HTML/PNG，并在需要时通过 PC 微信 UI 自动化发送报表图片。
+`group_insight` 通过 WeChatDataAnalysis 本地 API 读取微信消息、构造 LLM 分析流程、生成 JSON/HTML/PNG，并在需要时通过 PC 微信 UI 自动化发送报表图片。
 
 默认从仓库根目录执行下面的命令。
 
@@ -20,6 +20,8 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 THINKING=false
 THINKING_LEVEL=high
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
+WECHAT_DATA_API_URL=http://127.0.0.1:10392
+GROUP_INSIGHT_OUTPUT_ROOT=D:\WeChatData\群聊总结
 ```
 
 `.env` 是本机私有文件，不要提交。当前文档口径只支持仓库根目录 `.env` 作为本地配置入口；已经存在于系统环境变量里的同名 Key 不会被覆盖。
@@ -48,24 +50,14 @@ DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
 - LLM 花费改为按任务前后余额快照对比，不再在每次请求后动态打印 usage 计费估算。
 - 文档只保留当前推荐参数，不再展开旧兼容入口。
 
-## 微信数据库准备
+## 微信数据准备
 
-数据库侧依赖 `wechat-decrypt/`。第一次运行前确认：
+数据库读取由已安装的 `WeChatDataAnalysis` 提供。第一次运行前确认：
 
-- Windows PC 微信已登录并正在运行。
-- 需要读取进程内存提取密钥时，PowerShell 通常要用管理员权限启动。
-- `wechat-decrypt/config.json` 已存在；如果没有，执行时会自动填充。
-- `wechat-decrypt/all_keys.json` 和 `wechat-decrypt/decrypted/` 对应当前登录账号。
-
-常用命令：
-
-```powershell
-cd .\wechat-decrypt
-python main.py decrypt
-cd ..
-```
-
-如果已经解密过数据库，只需要确认 `wechat-decrypt/config.json` 指向正确的 `db_dir`、`keys_file` 和 `decrypted_dir`。
+- Windows PC 微信已登录；`WeChatDataAnalysis` 已完成账号数据加载。
+- 本地服务可访问，默认地址为 `http://127.0.0.1:10392`。
+- 多账号时可在 `.env` 中设置 `WECHAT_DATA_ACCOUNT`；通常留空即可。
+- 不需要初始化或运行旧 `wechat-decrypt` 子模块。
 
 ## 生成日报
 
@@ -78,7 +70,7 @@ cd ..
 指定群聊和时间窗：
 
 ```powershell
-.\.venv\Scripts\python.exe -m group_insight --chat "有氧运动聊天" --start "2026-04-14 23:59" --end "2026-04-15 23:59"
+.\.venv\Scripts\python.exe -m group_insight --chat "群聊完整名称" --start "2026-04-14 23:59" --end "2026-04-15 23:59"
 ```
 
 只验证读取、分片、渲染链路，不调用模型、不发送：
@@ -99,13 +91,15 @@ cd ..
 $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 ```
 
-输出目录默认在：
+输出目录默认在独立数据目录：
 
 ```text
-reports/group_insight/
+D:\WeChatData\群聊总结\<对话名>\YYYY-MM-DD\
 ```
 
-每次运行会生成 JSON、HTML、PNG 和阶段缓存；输入签名变化时会自动清理过期阶段缓存。
+每次运行会生成 JSON、HTML、PNG 和阶段缓存；导出文件名采用
+`<对话名>_YYYY-MM-DD_群聊总结.<ext>`。输入签名变化时会自动清理过期阶段缓存。
+PNG 默认写入 300 DPI 元数据；可通过 `--image-dpi` 调整。
 
 ## RPA 发送前预热
 
@@ -154,7 +148,7 @@ print("RPA target opened:", target)
 指定一个或多个目标：
 
 ```powershell
-.\.venv\Scripts\python.exe -m group_insight --send-after-run --send-target "文件传输助手" --send-target "有氧运动聊天"
+.\.venv\Scripts\python.exe -m group_insight --send-after-run --send-target "文件传输助手" --send-target "群聊完整名称"
 ```
 
 ## 任务计划
@@ -178,7 +172,7 @@ python -m group_insight.scheduler --time 23:50 --args "--no-image" --dry-run
 传递日报参数：
 
 ```powershell
-python -m group_insight.scheduler --time 23:50 --args "--chat 有氧运动聊天 --send-after-run"
+python -m group_insight.scheduler --time 23:50 --args "--chat 群聊完整名称 --send-after-run"
 ```
 
 使用最高权限注册：

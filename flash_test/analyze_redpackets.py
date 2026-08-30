@@ -330,9 +330,9 @@ def main():
     """主函数示例"""
     # 配置
     config = {
-        "decrypted_dir": r"C:\Users\XQH\Downloads\wechat-ability\wechat-decrypt\decrypted",
+        "decrypted_dir": r"D:\WeChatData\decrypted",
         "chat_name": None,  # None=所有聊天，或指定群聊名称
-        "output_file": r"C:\Users\XQH\Downloads\wechat-ability\redpacket_report.json",
+        "output_file": r"D:\WeChatData\redpacket_report.json",
     }
 
     # 创建分析器

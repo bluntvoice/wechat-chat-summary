@@ -21,7 +21,6 @@ from .conversation import (
 )
 from .fetching import collect_member_aliases_from_messages, is_resolved_member_display
 from .models import StructuredMessage
-from .rich_content import parse_pat_title_names
 from .settings import jieba, WORD_CLOUD_STOPWORDS
 
 
@@ -41,29 +40,13 @@ def ranked_counter(counter: Counter[str], limit: int = 10) -> list[dict[str, Any
 
 
 def build_interaction_rankings(messages: list[StructuredMessage]) -> dict[str, list[dict[str, Any]]]:
-    """统计拍一拍、定向红包和回复等互动榜单。"""
-    pat_sender_counts: Counter[str] = Counter()
-    pat_target_counts: Counter[str] = Counter()
+    """统计定向红包和回复互动；拍一拍按产品要求不进入报告。"""
     redpacket_receiver_counts: Counter[str] = Counter()
     reply_sender_counts: Counter[str] = Counter()
 
     for message in messages:
         category = classify_message_category(message)
         metadata = message.metadata or {}
-
-        if category == "pat":
-            pat_sender = normalize_rank_name(metadata.get("pat_from_name", "") or metadata.get("pat_from_username", ""))
-            pat_target = normalize_rank_name(metadata.get("pat_to_name", "") or metadata.get("pat_to_username", ""))
-            if not pat_sender:
-                pat_sender, fallback_target = parse_pat_title_names(message.text)
-                pat_sender = normalize_rank_name(message.sender if pat_sender == "我" else pat_sender)
-                pat_target = pat_target or normalize_rank_name(fallback_target)
-            if not pat_sender:
-                pat_sender = normalize_rank_name(message.sender)
-            if pat_sender:
-                pat_sender_counts[pat_sender] += 1
-            if pat_target:
-                pat_target_counts[pat_target] += 1
 
         if metadata.get("interaction_kind") == "direct_redpacket":
             receiver = normalize_rank_name(
@@ -83,8 +66,6 @@ def build_interaction_rankings(messages: list[StructuredMessage]) -> dict[str, l
                 reply_sender_counts[sender] += 1
 
     return {
-        "pat_sender": ranked_counter(pat_sender_counts),
-        "pat_target": ranked_counter(pat_target_counts),
         "direct_redpacket_receiver": ranked_counter(redpacket_receiver_counts),
         "reply_sender": ranked_counter(reply_sender_counts),
     }
@@ -137,8 +118,6 @@ def extract_word_cloud_terms(messages: list[StructuredMessage], top_n: int = 40)
             if re.fullmatch(r"[\W_]+", token):
                 continue
             if token.startswith("http"):
-                continue
-            if token in {"有氧运动聊天", "回复有氧运动聊天"}:
                 continue
             if re.fullmatch(r"\d+", token):
                 continue

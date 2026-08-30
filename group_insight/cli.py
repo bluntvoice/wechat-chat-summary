@@ -34,6 +34,7 @@ from .settings import (
     DEFAULT_MAP_MAX_WORKERS,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_REDUCE_FAN_IN,
+    DEFAULT_REPORT_IMAGE_DPI,
     DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
     DEFAULT_REPORT_IMAGE_WIDTH,
     DEFAULT_SEND_AFTER_RUN,
@@ -42,6 +43,9 @@ from .settings import (
     DEFAULT_SOFT_GAP_MINUTES,
     DEFAULT_TOPIC_MIN_CHUNK_MESSAGES,
     DEFAULT_TOPIC_SIM_THRESHOLD,
+    WECHAT_DATA_ACCOUNT,
+    WECHAT_DATA_API_URL,
+    WECHAT_DATA_SOURCE,
 )
 from .stats import build_local_stats
 from .transport import (
@@ -138,6 +142,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--auto-time", action=argparse.BooleanOptionalAction, default=DEFAULT_AUTO_TIME, help=f"自动使用昨日 {DEFAULT_AUTO_TIME_CUTOFF} 到今日 {DEFAULT_AUTO_TIME_CUTOFF} 的分析时间窗；具体日切点读取 DEFAULT_AUTO_TIME_CUTOFF。")
     parser.add_argument("--start", default=DEFAULT_ANALYZE_START, help="开始时间，支持 YYYY-MM-DD / YYYY-MM-DD HH:MM[:SS]。DEFAULT_AUTO_TIME=False 时读取脚本顶部 DEFAULT_ANALYZE_START。")
     parser.add_argument("--end", default=DEFAULT_ANALYZE_END, help="结束时间，支持 YYYY-MM-DD / YYYY-MM-DD HH:MM[:SS]。DEFAULT_AUTO_TIME=False 时读取脚本顶部 DEFAULT_ANALYZE_END。")
+    parser.add_argument("--wechat-api-url", default=WECHAT_DATA_API_URL, help=f"WeChatDataAnalysis 本地 API 地址，默认 {WECHAT_DATA_API_URL}。")
+    parser.add_argument("--wechat-account", default=WECHAT_DATA_ACCOUNT, help="可选微信账号标识；留空时使用 WeChatDataAnalysis 当前默认账号。")
+    parser.add_argument("--wechat-source", default=WECHAT_DATA_SOURCE, help="可选数据源标识；留空时由 WeChatDataAnalysis 自动选择。")
     parser.add_argument("--api-key", default="", help="DeepSeek API Key；若不传则读取环境变量 DEEPSEEK_API_KEY。")
     parser.add_argument("--api-url", default=os.environ.get("DEEPSEEK_API_URL", DEFAULT_API_URL), help=f"DeepSeek chat completions URL，默认 {DEFAULT_API_URL}")
     parser.add_argument("--model", default="", help=f"DeepSeek 模型名；默认 {DEFAULT_DEEPSEEK_MODEL}。")
@@ -157,6 +164,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="不调用 DeepSeek，只验证导出、切片、reduce 和 HTML 渲染。")
     parser.add_argument("--no-image", action="store_true", help="跳过浏览器渲染 PNG 导出。")
     parser.add_argument("--image-width", type=int, default=DEFAULT_REPORT_IMAGE_WIDTH, help="导出 PNG 时的浏览器视口宽度。")
+    parser.add_argument("--image-dpi", type=int, default=DEFAULT_REPORT_IMAGE_DPI, help="写入 PNG 的打印分辨率元数据，默认 300 DPI。")
     parser.add_argument("--image-timeout-ms", type=int, default=DEFAULT_REPORT_IMAGE_TIMEOUT_MS, help="导出 PNG 时的浏览器等待超时。")
     parser.add_argument("--send-after-run", action=argparse.BooleanOptionalAction, default=DEFAULT_SEND_AFTER_RUN, help="执行完成后发送 PNG 到指定会话。默认读取脚本顶部 DEFAULT_SEND_AFTER_RUN。")
     parser.add_argument("--send-target", action="append", default=None, help="发送目标会话名称；可重复传入，也可用逗号/分号分隔。未传时读取脚本顶部 DEFAULT_SEND_TARGET_CHATS。")
@@ -199,7 +207,14 @@ def main() -> None:
     if not args.dry_run and not api_key:
         raise SystemExit("未提供 DeepSeek API Key。请传 --api-key 或设置环境变量 DEEPSEEK_API_KEY。")
 
-    ctx, messages = fetch_structured_messages(args.chat, args.start, args.end)
+    ctx, messages = fetch_structured_messages(
+        args.chat,
+        args.start,
+        args.end,
+        api_url=args.wechat_api_url,
+        account=args.wechat_account,
+        source=args.wechat_source,
+    )
     if not messages:
         raise SystemExit("指定时间范围内没有消息。")
 
@@ -216,8 +231,10 @@ def main() -> None:
     )
     stats = build_local_stats(messages)
 
-    timestamp_label = datetime.now().strftime("%Y%m%d-%H%M%S")
-    default_dir = DEFAULT_OUTPUT_ROOT / f"{timestamp_label}-{slugify(ctx['display_name'])}"
+    report_date = datetime.fromtimestamp(messages[-1].timestamp).strftime("%Y-%m-%d")
+    chat_slug = slugify(ctx["display_name"])
+    output_stem = f"{chat_slug}_{report_date}_群聊总结"
+    default_dir = DEFAULT_OUTPUT_ROOT / chat_slug / report_date
     output_dir = ensure_dir(Path(args.output_dir) if args.output_dir else default_dir)
 
     snapshot_dir = ensure_dir(output_dir / "snapshot")
@@ -227,6 +244,7 @@ def main() -> None:
 
         return {
             "llm_model": model,
+            "dry_run": bool(args.dry_run),
             "llm_thinking_enabled": thinking_enabled,
             "llm_reasoning_effort": reasoning_effort,
             "max_workers": max(1, args.max_workers),
@@ -329,7 +347,8 @@ def main() -> None:
         provider=provider,
         model=model,
     )
-    write_json(output_dir / "group_insight_report.json", payload)
+    json_output_path = output_dir / f"{output_stem}.json"
+    write_json(json_output_path, payload)
 
     # 生成 HTML 和 PNG，最后按需发送到微信会话。
     html_text = render_html_report(
@@ -340,9 +359,9 @@ def main() -> None:
         stats=stats,
         report=final_report,
     )
-    html_output_path = output_dir / "group_insight_report.html"
+    html_output_path = output_dir / f"{output_stem}.html"
     html_output_path.write_text(html_text, encoding="utf-8")
-    image_output_path = output_dir / "group_insight_report.png"
+    image_output_path = output_dir / f"{output_stem}.png"
     image_error = ""
     send_requested, send_targets, send_text = resolve_send_delivery(args)
     send_results: list[tuple[str, str, str]] = []
@@ -352,6 +371,7 @@ def main() -> None:
             image_output_path,
             viewport_width=max(480, args.image_width),
             timeout_ms=max(5000, args.image_timeout_ms),
+            dpi=max(1, args.image_dpi),
         )
     if send_requested:
         if args.no_image:
@@ -435,7 +455,7 @@ def main() -> None:
     if balance_before and balance_after:
         print(f"余额变化: {format_balance_delta(balance_before, balance_after)}")
     print(f"输出目录: {output_dir}")
-    print(f"JSON: {output_dir / 'group_insight_report.json'}")
+    print(f"JSON: {json_output_path}")
     print(f"HTML: {html_output_path}")
     if args.no_image:
         print("PNG: skipped (--no-image)")

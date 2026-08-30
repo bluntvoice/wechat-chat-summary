@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 import re
 import shutil
+import struct
 import sys
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from subprocess import DEVNULL, CalledProcessError, run
@@ -14,10 +16,63 @@ from typing import Any
 from .common import normalize_text
 from .settings import (
     DEFAULT_AUTO_TIME_CUTOFF,
+    DEFAULT_REPORT_IMAGE_DPI,
     DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
     DEFAULT_REPORT_IMAGE_WIDTH,
     ROOT_DIR,
 )
+
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def set_png_dpi_metadata(image_path: Path, dpi: int = DEFAULT_REPORT_IMAGE_DPI) -> None:
+    """在不重采样图片的前提下写入 PNG ``pHYs`` 分辨率元数据。"""
+
+    if dpi <= 0:
+        raise ValueError("DPI 必须为正整数。")
+
+    source = image_path.read_bytes()
+    if not source.startswith(PNG_SIGNATURE):
+        raise ValueError(f"不是有效的 PNG 文件: {image_path}")
+
+    pixels_per_meter = round(dpi / 0.0254)
+    phys_data = struct.pack(">IIB", pixels_per_meter, pixels_per_meter, 1)
+    phys_type = b"pHYs"
+    phys_chunk = (
+        struct.pack(">I", len(phys_data))
+        + phys_type
+        + phys_data
+        + struct.pack(">I", zlib.crc32(phys_type + phys_data) & 0xFFFFFFFF)
+    )
+
+    chunks: list[bytes] = []
+    offset = len(PNG_SIGNATURE)
+    inserted = False
+    while offset < len(source):
+        if offset + 12 > len(source):
+            raise ValueError(f"PNG chunk 不完整: {image_path}")
+        length = struct.unpack(">I", source[offset : offset + 4])[0]
+        chunk_end = offset + 12 + length
+        if chunk_end > len(source):
+            raise ValueError(f"PNG chunk 长度异常: {image_path}")
+        chunk_type = source[offset + 4 : offset + 8]
+        chunk = source[offset:chunk_end]
+        if chunk_type == b"pHYs":
+            offset = chunk_end
+            continue
+        if chunk_type == b"IDAT" and not inserted:
+            chunks.append(phys_chunk)
+            inserted = True
+        chunks.append(chunk)
+        offset = chunk_end
+
+    if not inserted:
+        raise ValueError(f"PNG 缺少 IDAT 数据块: {image_path}")
+
+    temporary_path = image_path.with_suffix(f"{image_path.suffix}.tmp")
+    temporary_path.write_bytes(PNG_SIGNATURE + b"".join(chunks))
+    temporary_path.replace(image_path)
 
 
 def find_local_browser_executable() -> str:
@@ -136,8 +191,9 @@ def export_report_image(
     image_path: Path,
     viewport_width: int = DEFAULT_REPORT_IMAGE_WIDTH,
     timeout_ms: int = DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
+    dpi: int = DEFAULT_REPORT_IMAGE_DPI,
 ) -> str:
-    """优先用 Playwright 导出，失败后回退到浏览器 CLI。"""
+    """优先用 Playwright 导出，失败后回退，并写入 DPI 元数据。"""
 
     error = export_report_image_with_playwright(
         html_path,
@@ -146,7 +202,11 @@ def export_report_image(
         timeout_ms=timeout_ms,
     )
     if not error and image_path.exists():
-        return ""
+        try:
+            set_png_dpi_metadata(image_path, dpi=dpi)
+            return ""
+        except Exception as exc:
+            error = f"PNG DPI 元数据写入失败: {exc}"
     fallback_error = export_report_image_with_chrome_cli(
         html_path,
         image_path,
@@ -154,7 +214,11 @@ def export_report_image(
         timeout_ms=timeout_ms,
     )
     if not fallback_error and image_path.exists():
-        return ""
+        try:
+            set_png_dpi_metadata(image_path, dpi=dpi)
+            return ""
+        except Exception as exc:
+            fallback_error = f"PNG DPI 元数据写入失败: {exc}"
     return fallback_error or error or "未知截图错误"
 
 

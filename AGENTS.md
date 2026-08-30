@@ -1,144 +1,49 @@
 # AGENTS.md
 
-## 仓库概况
+## 仓库定位
 
-- 当前目录是本地“微信能力”父工作区，根目录现在按父 Git 仓库管理。
-- `wechat-decrypt/` 和 `pywechat/` 是独立上游仓库，在父仓库里作为依赖模块登记，不把它们的源码直接并入根目录历史。
-- 群洞察主入口与任务计划逻辑位于 `group_insight/` 包内。
-- 这个工作区同时包含两类能力：
-  - 数据库侧：微信 4.x 本地数据库密钥提取、SQLCipher 数据库解密、MCP 查询、Web 消息监控。
-  - UI 自动化侧：Windows PC 微信发消息、读聊天窗口、联系人/群操作等自动化。
+- `group_insight/` 是当前主业务包。
+- 微信消息统一通过 `WeChatDataAnalysis` 本地 REST API 读取，默认地址为
+  `http://127.0.0.1:10392`。
+- 不要恢复对旧 `wechat-decrypt` Python 模块、数据库文件或私有函数的运行依赖。
+- `pywechat/` 仅用于可选的 Windows 微信 UI 自动发送，不属于数据读取链路。
 
-## Git 结构
+## 关键模块
 
-- 根目录是父仓库；两个依赖模块通过 `.gitmodules` 记录来源：
-  - `wechat-decrypt/` -> `https://github.com/ylytdeng/wechat-decrypt.git`
-  - `pywechat/` -> `https://github.com/Hello-Mr-Crab/pywechat`
-- 父仓库只记录两个依赖模块的 gitlink 指针。更新子模块源码后，需要在对应子仓库提交或切换到目标 commit，再回到父仓库记录新的指针。
-- 克隆或恢复父仓库时，需要递归初始化依赖模块：
-  - `git submodule update --init --recursive`
-- 不要在父仓库里直接展开提交 `wechat-decrypt/` 或 `pywechat/` 的完整文件内容；这两个目录的改动应优先回到各自仓库处理。
-- `.env`、缓存目录、编辑器状态和 `reports/` 都是本地状态或运行产物，默认不进入父仓库。
+- `group_insight/wechat_data_api.py`：会话解析、联系人兜底和消息分页。
+- `group_insight/fetching.py`：把 API 消息转换为 `StructuredMessage`。
+- `group_insight/stats.py`：本地统计。
+- `group_insight/chunking.py`：消息分片。
+- `group_insight/llm.py`、`pipeline.py`：AI API 与 map/reduce/final 流程。
+- `group_insight/rendering.py`：JSON 载荷与 HTML 报告。
+- `group_insight/transport.py`：可选 PNG 导出和 RPA 发送。
+- `group_insight/cli.py`：命令行装配。
 
-## 依赖模块角色
+## 配置与隐私
 
-- `wechat-decrypt/main.py`
-  - 微信数据库能力总入口。
-  - `python main.py`：提取密钥并启动 Web UI。
-  - `python main.py decrypt`：提取密钥并解密数据库到 `decrypted/`。
-- `wechat-decrypt/mcp_server.py`
-  - FastMCP 服务。
-  - 负责查询最近会话、聊天记录、消息搜索、联系人、联系人标签、图片解码等。
-- `wechat-decrypt/config.example.json`
-  - 说明配置格式，关键字段是 `db_dir`、`keys_file`、`decrypted_dir`、`wechat_process`。
-- `pywechat/pyweixin/`
-  - 面向 Windows 10/11、Python 3.10+、微信 4.1+ 的 UI 自动化代码。
-- `pywechat/pywechat/`
-  - 旧版自动化代码，主要面向微信 3.9.x。
-  - `pywechat/pywechat/__init__.py` 有较强环境限制，不要和 `pyweixin` 的适用范围混淆。
+- 只读取仓库根目录 `.env`；不得提交 `.env`、令牌、消息快照或报告。
+- 数据源配置：`WECHAT_DATA_API_URL`、`WECHAT_DATA_ACCOUNT`、
+  `WECHAT_DATA_SOURCE`。
+- 独立输出根目录：`GROUP_INSIGHT_OUTPUT_ROOT`。
+- 默认输出不得放在源码仓库或 `WeChatDataAnalysis` 安装目录中。
+- 报告文件名必须包含 `YYYY-MM-DD`，默认格式为
+  `<对话名>_YYYY-MM-DD_群聊总结.<ext>`。
 
-## 根目录文件梳理
+## 开发规则
 
-- `AGENTS.md`
-  - 当前工作区给编码代理看的维护说明，记录目录边界、Git 结构、运行前提和修改注意事项。
-- `README`
-  - 父工作区总览，介绍仓库结构、两个 Git 子模块与群聊日报模块的边界。
-- `group_insight/`
-  - 群聊洞察报表的领域化模块包，默认走 DeepSeek v4 flash。
-  - `README.md`：群聊日报模块的运行说明、定时任务与发送说明。
-  - `__main__.py`：`python -m group_insight` 模块入口。
-  - `runtime.py`：工作区 `.venv` 重定向等运行时辅助逻辑。
-  - `settings.py`：默认配置、路径、环境变量读取、正则常量、分片参数和微信 MCP 懒加载入口。
-  - `models.py`：`StructuredMessage`、`MessageChunk` 等领域数据模型。
-  - `common.py`：跨模块通用工具（文本归一化、slugify、主题相似度、文件读写等）。
-  - `conversation.py`：消息清洗、发言人归一、消息分类和微信数据源适配。
-  - `fetching.py`：微信消息拉取与成员身份解析，连接 `wechat-decrypt` 数据库。
-  - `rich_content.py`：富媒体消息解析（appmsg XML、链接卡片、合并聊天、回复、拍一拍、红包等）。
-  - `chunking.py`：消息分片策略（数量、字符数、时间跨度、话题连续性）与 prompt 载荷构造。
-  - `stats.py`：本地统计与词云（发言排行、互动榜单、时段分布、词频），不依赖 LLM。
-  - `llm.py`：LLM 协议、DeepSeek 客户端、余额快照对比、schema 示例和 prompt 构造。
-  - `pipeline.py`：固定 `map/reduce/final` 分析流水线，含阶段输入输出缓存。
-  - `report_model.py`：最终日报结构修复、去重、fallback 报告生成和主题卡片/时间线归并。
-  - `rendering.py`：HTML 报表渲染、最终 payload 打包和缓存失效。
-  - `transport.py`：HTML 转 PNG、浏览器导出、微信图片发送、自动时间窗和发送目标解析。
-  - `alerts.py`：异常告警邮件发送（标准库 smtplib，可选，通过 `.env` 配置 SMTP）。
-  - `cache_utils.py`：map/reduce/final 各阶段基于 SHA1 指纹的输入输出缓存。
-  - `cli.py`：命令行参数（含 `--chat`、`--auto-time`、`--thinking`、`--allow-json-repair` 等）、运行时 DeepSeek 配置和主流程装配。
-  - `scheduler.py`：Windows 任务计划注册模块，支持 `--time`、`--args`、`--highest`、`--no-wake`、`--dry-run`。
-- `.gitmodules`
-  - 父仓库依赖模块清单，记录 `wechat-decrypt/` 和 `pywechat/` 的路径与远端地址。
-- `.gitignore`
-  - 根目录忽略规则，覆盖 `.env`、Python 缓存、编辑器状态、助手历史、报表产物和常见 Windows 临时文件。
-- `.env`
-  - 本机私有环境变量，可能包含 `DEEPSEEK_API_KEY` 等密钥，不得提交。
-  - `group_insight` 文档口径只认仓库根目录 `.env`，不要把当前目录或父目录的隐式 `.env` 搜索当成稳定行为。
-  - DeepSeek 思考模式相关环境变量按 `THINKING` / `THINKING_LEVEL` 维护，默认预计使用 `deepseek-v4-flash` 非思考模式。
-  - 发送失败告警邮件可选，通过 `.env` 中的 `ALERT_SMTP_HOST` / `ALERT_SMTP_USER` / `ALERT_SMTP_PASSWORD` / `ALERT_FROM` / `ALERT_TO` 配置。
-- `reports/`
-  - `group_insight` 报表流程的生成物目录，通常包含快照、阶段缓存、JSON、HTML、PNG，不作为源码维护。
-- `.claude/`、`.history/`、`.ruff_cache/`、`.vscode/`、`__pycache__/`
-  - 本地工具、编辑器和 Python 缓存状态，不作为源码维护。
+- Windows 文件读写统一使用 UTF-8。
+- 根目录 Python 环境优先使用 `uv`；不要把环境或缓存下载到 C 盘。
+- 核心依赖见 `requirements.txt`；RPA 依赖单独见 `requirements-rpa.txt`。
+- 数据源和分析提供方必须解耦。后续 AI 分析支持两种模式：
+  直接调用可配置 AI API，或通过 MCP 把分析任务交给外部 AI 客户端。
+- 缺少群聊、时间范围、本地 API 或关键配置时应 fail-fast，不添加静默兜底。
+- 调试优先使用 `--dry-run --no-image --no-send-after-run`。
+- 修改后至少运行：
+  `python -m unittest discover -s tests -v`、`python -m compileall -q group_insight tests`
+  和 `git diff --check`。
 
-## 技术栈与运行前提
+## 当前迭代边界
 
-- 操作系统按 Windows 11 / PowerShell 使用。
-- 前端项目如后续出现，统一使用 `pnpm` 做包管理。
-- 根目录 Python 环境使用 `uv` 管理：
-  - `uv venv .venv --python 3.10`
-  - `uv pip install -r requirements.txt`
-- VSCode/Pyright 应使用根目录 `.venv`。`pyrightconfig.json` 已配置 `venvPath`、`venv` 和 `extraPaths`，用于解析 `wechat-decrypt/` 与 `pywechat/` 两个本地依赖模块。
-- 不要用 `type: ignore[reportMissingImports]` 掩盖缺依赖问题；缺依赖应通过 `requirements.txt` 或本地模块路径配置解决。
-- `wechat-decrypt` 依赖：
-  - `pycryptodome`
-  - `zstandard`
-  - `mcp`
-- `pywechat` / `pyweixin` 依赖：
-  - `pywinauto`
-  - `pyautogui`
-  - `psutil`
-  - `pywin32`
-  - `pycaw`
-  - `pillow`
-  - `emoji`
-- 根目录 LLM/报告脚本可能额外依赖：
-  - `python-dotenv`
-  - `Pillow`
-  - `jieba`
-  - `playwright` 或本机 Chrome/Edge，用于 HTML 转 PNG。
-- 运行数据库相关能力前，通常需要已登录且正在运行的微信进程；在 Windows 上读取进程内存时往往需要管理员权限。
-- 做数据库相关工作前，先确认 `wechat-decrypt/config.json`、`all_keys.json`、`decrypted/` 是否存在，并且对应当前登录的微信账号。
-- 做 RPA/UI 自动化前，先确认目标微信版本落在哪套库上：
-  - 微信 4.1+：优先看 `pyweixin`
-  - 微信 3.9.x：再看 `pywechat`
-
-## 本地定制痕迹
-
-- 当前 `group_insight` 主入口默认分析群聊为 `有氧运动聊天`，默认使用 `deepseek`，默认输出到 `reports/group_insight/`。
-  - `DEFAULT_SEND_AFTER_RUN` 默认为 `True`，默认发送目标包含 `有氧运动聊天` 和 `禁言｜有氧群布告栏`；未配置发送目标或不需要发送时，可用 `--no-send-after-run` 关闭。
-- 历史说明里曾出现过其他群名、群聊 ID、`room_id` 等硬编码业务参数；改逻辑前要以当前脚本源码为准。
-- 历史文档里也出现过 `send-to-filehelper`、`filehelper-*`、scheduler `--script` 等兼容参数；后续文档维护不再继续暴露这些入口。
-- 部分脚本会通过 `sys.path.insert(...)` 把根目录、`wechat-decrypt/` 或 `pywechat/` 加入导入路径。继续新增脚本时，不要扩散更多硬编码绝对路径。
-- 如果后续要长期维护或复用，优先做下面两件事：
-  - 把群参数、数据库路径、目标联系人改为命令行参数或配置项。
-  - 把 import/path 关系整理清楚，避免继续依赖本机绝对路径。
-
-## 修改建议
-
-- 除非任务明确要求，优先修改根目录本地脚本，不要随意大改 `pywechat/` 和 `wechat-decrypt/` 里的上游代码。
-- 子模块内如果有必要修改，先确认该改动是本地补丁、fork 补丁，还是要提交给上游；不要把子模块源码复制到父仓库绕开 Git 边界。
-- 群聊日报能力已经按领域拆到 `group_insight/`。改动时优先落在对应领域模块，不要重新在根目录恢复兼容包装脚本。
-- 文档和说明优先强调 fail-fast：缺少关键参数、环境变量、数据库准备或交互式桌面条件时，直接报错并修正输入，不要再补充新的静默兼容分支。
-- 报表主流程同时触碰数据库读取、LLM 调用、HTML/PNG 渲染和 UI 自动发送，改动时优先用小范围 dry-run 或 `--no-image`、`--no-send-after-run` 验证。
-- LLM JSON 自动修复已通过 `--allow-json-repair` 显式开关实现，默认关闭。
-- `group_insight.scheduler` 会写 Windows 任务计划；调试时优先使用 `python -m group_insight.scheduler --dry-run`。
-- 根目录某些统计或实验脚本可能并不都基于真实消息解密结果。改逻辑前先读脚本本身，不要假设它们全部是准确生产实现。
-
-## 读取代码时的注意点
-
-- 当前终端里直接 `Get-Content` 查看中文 README/文档时，部分内容可能出现乱码；优先使用 `Get-Content -Encoding utf8`。
-- 遇到说明文档乱码时，优先以这些信息源判断真实行为：
-  - Python 源码中的入口函数和 import 关系
-  - `requirements.txt`
-  - `setup.py`
-  - `config.example.json`
-- 读取大文件时先用 `rg` 定位关键函数或参数，再分段查看，不要整文件读取超大脚本。
+- 已实现：真实数据 API 接入、结构化统计、独立输出与日期命名。
+- 后续迭代：长图视觉重构、每日活跃热力图、AI API/MCP 双分析模式、
+  SQLite 历史中心、全文搜索和 Windows 桌面端。

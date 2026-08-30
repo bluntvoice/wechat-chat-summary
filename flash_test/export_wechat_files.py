@@ -336,8 +336,8 @@ def main():
     # 配置
     config = {
         "wechat_id": "wxid_ldxssnix94gz22",  # 替换为你的微信ID
-        "decrypted_dir": r"C:\Users\XQH\Downloads\wechat-ability\wechat-decrypt\decrypted",
-        "output_dir": r"C:\Users\XQH\Downloads\wechat-ability\exported_files",
+        "decrypted_dir": r"D:\WeChatData\decrypted",
+        "output_dir": r"D:\WeChatData\exported_files",
         "chat_name": None,  # None=所有聊天，或指定联系人/群聊名称
     }
 

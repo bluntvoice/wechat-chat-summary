@@ -12,7 +12,9 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 from .common import collapse_text, parse_int
-from .settings import APPMSG_XML_MAX_LEN, RECORDITEM_XML_MAX_LEN, wechat_mcp
+from .settings import APPMSG_XML_MAX_LEN, RECORDITEM_XML_MAX_LEN
+
+_XML_UNSAFE_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 
 
 def parse_xml_root_with_limit(content: str, max_len: int) -> ET.Element | None:
@@ -20,8 +22,7 @@ def parse_xml_root_with_limit(content: str, max_len: int) -> ET.Element | None:
     content = (content or "").strip()
     if not content or len(content) > max_len:
         return None
-    unsafe_re = getattr(wechat_mcp, "_XML_UNSAFE_RE", None)
-    if unsafe_re is not None and unsafe_re.search(content):
+    if _XML_UNSAFE_RE.search(content):
         return None
     try:
         return ET.fromstring(content)
@@ -92,18 +93,29 @@ def extract_rich_message_metadata(
     """解析微信 appmsg XML，提取链接、合并聊天、回复、拍一拍和红包等元数据。"""
     if not raw_content:
         return {}
-    base_type, sub_type = wechat_mcp._split_msg_type(local_type)
+    type_value = int(local_type or 0)
+    if type_value > 0xFFFFFFFF:
+        base_type, sub_type = type_value & 0xFFFFFFFF, type_value >> 32
+    else:
+        base_type, sub_type = type_value, 0
     if base_type != 49:
         return {}
 
-    _, message_content = wechat_mcp._parse_message_content(raw_content, local_type, is_group)
+    message_content = raw_content.strip()
+    xml_start = message_content.find("<msg")
+    if xml_start < 0:
+        xml_start = message_content.find("<appmsg")
+    if xml_start > 0:
+        message_content = message_content[xml_start:]
+    if message_content.startswith("<appmsg"):
+        message_content = f"<msg>{message_content}</msg>"
     if "<appmsg" not in (message_content or ""):
         return {}
 
     root = parse_xml_root_with_limit(message_content, APPMSG_XML_MAX_LEN)
     if root is None:
         return {}
-    appmsg = root.find(".//appmsg")
+    appmsg = root if root.tag == "appmsg" else root.find(".//appmsg")
     if appmsg is None:
         return {}
 
