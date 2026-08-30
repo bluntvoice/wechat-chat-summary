@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "主窗口仅使用目录选择和受控的本地分析命令。",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open"]
+}

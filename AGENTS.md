@@ -17,17 +17,27 @@
 - `group_insight/llm.py`、`pipeline.py`：AI API 与 map/reduce/final 流程。
 - `group_insight/rendering.py`：JSON 载荷与 HTML 报告。
 - `group_insight/transport.py`：可选 PNG 导出和 RPA 发送。
+- `group_insight/report_paths.py`：导出图/报告数据分层与版本保留。
+- `group_insight/desktop_bridge.py`：桌面端与 Python 核心的 UTF-8 JSONL 桥接。
+- `group_insight/desktop_config.py`：桌面端本机设置与私有密钥。
 - `group_insight/cli.py`：命令行装配。
+- `desktop/`：Tauri 2 + React/TypeScript Windows 桌面端。
 
 ## 配置与隐私
 
-- 只读取仓库根目录 `.env`；不得提交 `.env`、令牌、消息快照或报告。
+- CLI 读取仓库根目录 `.env`；桌面端普通设置默认写入
+  `D:\工具\WeChat Chat Summary\data\config.json`，Key 写入同目录 `secrets.env`。
+- 不得提交 `.env`、令牌、消息快照、桌面私有配置或报告。
 - 数据源配置：`WECHAT_DATA_API_URL`、`WECHAT_DATA_ACCOUNT`、
   `WECHAT_DATA_SOURCE`。
 - 独立输出根目录：`GROUP_INSIGHT_OUTPUT_ROOT`。
 - 默认输出不得放在源码仓库或 `WeChatDataAnalysis` 安装目录中。
-- 报告文件名必须包含 `YYYY-MM-DD`，默认格式为
-  `<对话名>_YYYY-MM-DD_群聊总结.<ext>`。
+- 未来安装器/升级器只允许替换软件根目录的 `program`；不得删除或覆盖 `data`、
+  软件根目录下用户选择的 `reports`，或任何其他用户自定义报告目录。
+- PNG 按 `<群聊>\导出图\YYYY\MM\YYYY-MM-DD报告.png` 保存；HTML/JSON 与派生
+  分析数据按 `<群聊>\报告数据\YYYY-MM-DD报告数据` 保存。
+- 同日重复生成必须使用 `_v2`、`_v3` 递增版本，不得覆盖旧文件。
+- map 原始消息输入不得写入报告目录；统计和派生分析结果允许保存。
 
 ## 开发规则
 
@@ -41,6 +51,7 @@
 - 修改后至少运行：
   `python -m unittest discover -s tests -v`、`python -m compileall -q group_insight tests`
   和 `git diff --check`。
+- 修改桌面端后还需在 D 盘缓存环境下运行 `npm run build` 与 `cargo check`。
 
 ## PRD 与开发执行规范
 
@@ -86,6 +97,7 @@
 
 ## 当前迭代边界
 
-- 已实现：真实数据 API 接入、结构化统计、独立输出与日期命名。
-- 后续迭代：长图视觉重构、每日活跃热力图、AI API/MCP 双分析模式、
-  SQLite 历史中心、全文搜索和 Windows 桌面端。
+- 已实现：真实数据 API、结构化统计、DeepSeek/OpenAI Compatible API、独立输出、
+  版本保留、300 DPI PNG，以及源码可运行的 Windows 桌面端最小闭环。
+- 本地 Windows 测试安装包已有构建脚本；它不等同于正式签名或 GitHub Release。
+- 后续迭代：历史中心、全文搜索、每日活跃热力图、MCP Server、检查更新与正式发布流程。

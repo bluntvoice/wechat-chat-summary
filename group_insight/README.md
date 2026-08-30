@@ -91,15 +91,20 @@ GROUP_INSIGHT_OUTPUT_ROOT=D:\WeChatData\群聊总结
 $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 ```
 
-输出目录默认在独立数据目录：
+输出目录默认在独立报告根目录，并将图片与分析数据分开：
 
 ```text
-D:\WeChatData\群聊总结\<对话名>\YYYY-MM-DD\
+<报告根目录>\<对话名>\
+  导出图\YYYY\MM\YYYY-MM-DD报告.png
+  报告数据\YYYY-MM-DD报告数据\
+    <对话名>_YYYY-MM-DD_群聊总结.json
+    <对话名>_YYYY-MM-DD_群聊总结.html
 ```
 
-每次运行会生成 JSON、HTML、PNG 和阶段缓存；导出文件名采用
-`<对话名>_YYYY-MM-DD_群聊总结.<ext>`。输入签名变化时会自动清理过期阶段缓存。
-PNG 默认写入 300 DPI 元数据；可通过 `--image-dpi` 调整。
+每次运行会生成 JSON、HTML、PNG 和派生阶段缓存。同日重复生成使用 `_v2`、
+`_v3` 递增版本；多日总结使用 `YYYY-MM-DD_至_YYYY-MM-DD`。map 原始消息输入只在
+内存中参与分析，不会写入报告目录。PNG 默认写入 300 DPI 元数据，可通过
+`--image-dpi` 调整。
 
 ## RPA 发送前预热
 
@@ -252,6 +257,9 @@ python -m pip install -U typing-extensions
 - `group_insight/report_model.py`：最终日报结构修复、去重和 fallback 生成。
 - `group_insight/rendering.py`：HTML 渲染和最终 payload。
 - `group_insight/transport.py`：PNG 导出和 RPA 发送。
+- `group_insight/report_paths.py`：报告目录分层、日期标签和历史版本分配。
+- `group_insight/desktop_bridge.py`：桌面端 JSONL 桥接命令。
+- `group_insight/desktop_config.py`：桌面端本机配置和私有 Key 存储。
 - `group_insight/alerts.py`：异常告警邮件发送（可选）。
 - `group_insight/cache_utils.py`：map/reduce/final 阶段缓存工具。
 - `group_insight/scheduler.py`：Windows 任务计划注册模块。

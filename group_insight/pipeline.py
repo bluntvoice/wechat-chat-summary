@@ -1,7 +1,7 @@
 """群聊日报的 LLM 分析流水线。
 
-固定按 map/reduce/final 路径执行，并为每个阶段落盘输入输出与指纹缓存，
-保证重跑时可复用。
+固定按 map/reduce/final 路径执行，并为派生分析结果保存指纹缓存。
+包含原始聊天正文的 map 输入只在内存中使用，不写入报告目录。
 """
 from __future__ import annotations
 
@@ -39,7 +39,6 @@ def run_map_stage(
     def analyze_chunk(chunk: MessageChunk) -> dict[str, Any]:
         """分析单个分片并处理缓存与 dry-run 路径。"""
         chunk_input = chunk_payload(chunk)
-        input_path = map_dir / f"{chunk.id}.input.json"
         output_path = map_dir / f"{chunk.id}.output.json"
         chat_name = chunk.messages[0].chat_name
         system_prompt = ""
@@ -54,9 +53,7 @@ def run_map_stage(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
-        write_json(input_path, chunk_input)
-
-        # 每个阶段先写 input，再按指纹读缓存；这样重跑时不会重复消耗模型额度。
+        # 原始消息分片不落盘；指纹只用于判断派生结果缓存是否可复用。
         cached = load_cached_stage_output(output_path, fingerprint)
         if cached is not None:
             return cached

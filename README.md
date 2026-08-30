@@ -1,8 +1,8 @@
 # 微信群聊总结（wechat-chat-summary）
 
 读取 `WeChatDataAnalysis` 提供的本地 API，按指定群聊和时间范围生成结构化统计、
-AI 总结、JSON、HTML 及 300 DPI PNG 长图。真实聊天数据和报告只保存在用户选定
-的独立数据目录中。
+AI 总结、JSON、HTML 及 300 DPI PNG 长图。项目现已包含第一阶段 Windows 桌面端，
+可以完成“连接数据源 → 选择群聊和日期 → 配置 AI → 生成并打开报告”的闭环。
 
 ## 项目来源与使用说明
 
@@ -17,8 +17,9 @@ AI 总结、JSON、HTML 及 300 DPI PNG 长图。真实聊天数据和报告只�
 
 - `WeChatDataAnalysis`：负责微信 4.x 数据读取、解密和本地 API。
 - `group_insight/`：负责消息归一化、统计、分片、DeepSeek 分析和报告渲染。
+- `desktop/`：Tauri 2 + React/TypeScript 桌面端，通过 UTF-8 JSONL 调用 Python 核心。
 - `pywechat/`：可选的微信 UI 自动发送子模块。
-- AI 分析当前支持 DeepSeek 兼容 API；通过 MCP 交给外部 AI 客户端分析属于后续接口。
+- AI 分析支持 DeepSeek 与通用 OpenAI Compatible API；MCP 属于后续阶段。
 
 旧 `wechat-decrypt` gitlink 仍存在于上游提交历史中，但当前代码、依赖和运行流程均不再使用它。
 
@@ -36,6 +37,28 @@ GROUP_INSIGHT_OUTPUT_ROOT=D:\WeChatData\群聊总结
 ```
 
 `.env` 仅供本机使用，已被 Git 忽略。输出目录应与源码和软件安装目录分离。
+
+桌面端配置默认保存在 `D:\工具\WeChat Chat Summary\data`：普通设置写入
+`config.json`，API Key 写入本机私有的 `secrets.env`。软件升级只能替换未来的
+`program` 目录，不得覆盖 `data` 或用户选择的报告目录。
+
+## 桌面端开发运行
+
+依赖目录和缓存均可固定在 D 盘源码目录：
+
+```powershell
+cd desktop
+$env:npm_config_cache = "D:\工具\wechat-chat-summary\.dev-cache\npm"
+$env:CARGO_HOME = "D:\工具\wechat-chat-summary\.dev-cache\cargo-home"
+$env:CARGO_TARGET_DIR = "D:\工具\wechat-chat-summary\.dev-cache\cargo-target"
+npm install
+npm run tauri dev
+```
+
+当前阶段提供源码可运行的桌面闭环，并提供不依赖源码目录的本地 Windows 测试安装包
+构建脚本。测试包默认安装到 `D:\工具\WeChat Chat Summary\program`，允许用户改选
+目录；程序数据和报告目录位于 `program` 之外，升级或卸载测试程序不会删除它们。
+正式签名、自动更新、GitHub Release、历史中心、搜索、热力图和 MCP 尚未完成。
 
 ## 运行
 
@@ -68,16 +91,25 @@ PNG 会写入 300 DPI 的 `pHYs` 元数据，不会为了修改 DPI 而重采样
 ## 输出
 
 ```text
-D:\WeChatData\群聊总结\<对话名>\YYYY-MM-DD\
-  <对话名>_YYYY-MM-DD_群聊总结.json
-  <对话名>_YYYY-MM-DD_群聊总结.html
-  <对话名>_YYYY-MM-DD_群聊总结.png
+<报告根目录>\<对话名>\
+  导出图\YYYY\MM\YYYY-MM-DD报告.png
+  报告数据\YYYY-MM-DD报告数据\
+    <对话名>_YYYY-MM-DD_群聊总结.json
+    <对话名>_YYYY-MM-DD_群聊总结.html
 ```
+
+同日重复生成使用 `_v2`、`_v3` 递增版本，不覆盖旧报告。多日总结使用
+`YYYY-MM-DD_至_YYYY-MM-DD`。报告目录不保存完整原始消息分片。
 
 ## 测试
 
 ```powershell
 python -m unittest discover -s tests -v
+python -m compileall -q group_insight tests
+cd desktop
+npm run build
+cd src-tauri
+cargo check
 ```
 
 ## 隐私

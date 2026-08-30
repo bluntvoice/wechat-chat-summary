@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .venv/
+.dev-cache/
 
 # Python 缓存
 __pycache__/
@@ -19,6 +20,17 @@ __pycache__/
 # 运行产物
 reports/
 *.log
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/*.exe
+desktop/*.tsbuildinfo
+desktop/vite.config.js
+desktop/vite.config.d.ts
+
+# 本地测试安装包与打包中间产物
+desktop/installer/output/
 
 # Windows 临时文件
 Thumbs.db

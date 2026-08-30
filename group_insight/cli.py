@@ -11,10 +11,10 @@ from typing import Any
 from .alerts import maybe_send_alert
 from .chunking import build_analysis_chunks, chunk_payload, estimate_reduce_call_count
 from .common import ensure_dir, normalize_text, slugify, write_json
-from .conversation import serialize_messages
 from .fetching import fetch_structured_messages
 from .llm import DeepSeekClient, LLMClientProtocol, format_balance_delta, format_balance_snapshot
 from .pipeline import run_final_stage, run_map_stage, run_reduce_stage
+from .report_paths import allocate_report_paths, build_report_date_label
 from .rendering import build_report_payload, invalidate_cached_outputs_if_needed, render_html_report
 from .settings import (
     DEFAULT_ANALYZE_CHAT,
@@ -107,6 +107,7 @@ def create_llm_client(
     allow_json_repair: bool,
     thinking_enabled: bool,
     reasoning_effort: str,
+    provider: str = "deepseek",
 ) -> LLMClientProtocol:
     """创建 DeepSeek LLM 客户端。"""
 
@@ -117,13 +118,14 @@ def create_llm_client(
         allow_json_repair=allow_json_repair,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
+        provider=provider,
     )
 
 
 def capture_balance_snapshot(client: LLMClientProtocol | None, stage: str) -> dict[str, Any] | None:
     """在任务前后抓取一次 DeepSeek 余额快照。"""
     getter = getattr(client, "get_user_balance", None)
-    if client is None or not callable(getter):
+    if client is None or getattr(client, "provider", "") != "deepseek" or not callable(getter):
         return None
     try:
         snapshot = getter()
@@ -146,6 +148,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wechat-account", default=WECHAT_DATA_ACCOUNT, help="可选微信账号标识；留空时使用 WeChatDataAnalysis 当前默认账号。")
     parser.add_argument("--wechat-source", default=WECHAT_DATA_SOURCE, help="可选数据源标识；留空时由 WeChatDataAnalysis 自动选择。")
     parser.add_argument("--api-key", default="", help="DeepSeek API Key；若不传则读取环境变量 DEEPSEEK_API_KEY。")
+    parser.add_argument("--provider", choices=["deepseek", "openai-compatible"], default=DEFAULT_PROVIDER, help="AI 提供方类型。")
     parser.add_argument("--api-url", default=os.environ.get("DEEPSEEK_API_URL", DEFAULT_API_URL), help=f"DeepSeek chat completions URL，默认 {DEFAULT_API_URL}")
     parser.add_argument("--model", default="", help=f"DeepSeek 模型名；默认 {DEFAULT_DEEPSEEK_MODEL}。")
     parser.add_argument("--thinking", action=argparse.BooleanOptionalAction, default=None, help="是否启用 DeepSeek 思考模式；默认读取环境变量 THINKING，未设置时关闭。")
@@ -161,6 +164,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--topic-min-chunk-messages", type=int, default=DEFAULT_TOPIC_MIN_CHUNK_MESSAGES, help="至少达到该消息数后才允许按主题连续性进一步切 shard。")
     parser.add_argument("--allow-json-repair", action="store_true", help="允许 DeepSeek 返回损坏 JSON 时自动发起一次修复请求。默认关闭，避免掩盖模型输出问题。")
     parser.add_argument("--output-dir", default="", help="输出目录；不传则自动生成。")
+    parser.add_argument("--output-root", default="", help="报告导出根目录；按群聊、导出图和报告数据自动归档。")
     parser.add_argument("--dry-run", action="store_true", help="不调用 DeepSeek，只验证导出、切片、reduce 和 HTML 渲染。")
     parser.add_argument("--no-image", action="store_true", help="跳过浏览器渲染 PNG 导出。")
     parser.add_argument("--image-width", type=int, default=DEFAULT_REPORT_IMAGE_WIDTH, help="导出 PNG 时的浏览器视口宽度。")
@@ -202,7 +206,7 @@ def main() -> None:
         raise SystemExit("未提供开始时间。请传 --start 或编辑脚本顶部 DEFAULT_ANALYZE_START。")
     if not normalize_text(args.end):
         raise SystemExit("未提供结束时间。请传 --end 或编辑脚本顶部 DEFAULT_ANALYZE_END。")
-    provider = DEFAULT_PROVIDER
+    provider = args.provider
     api_key, model, thinking_enabled, reasoning_effort = resolve_llm_runtime_config(args)
     if not args.dry_run and not api_key:
         raise SystemExit("未提供 DeepSeek API Key。请传 --api-key 或设置环境变量 DEEPSEEK_API_KEY。")
@@ -231,11 +235,28 @@ def main() -> None:
     )
     stats = build_local_stats(messages)
 
-    report_date = datetime.fromtimestamp(messages[-1].timestamp).strftime("%Y-%m-%d")
     chat_slug = slugify(ctx["display_name"])
-    output_stem = f"{chat_slug}_{report_date}_群聊总结"
-    default_dir = DEFAULT_OUTPUT_ROOT / chat_slug / report_date
-    output_dir = ensure_dir(Path(args.output_dir) if args.output_dir else default_dir)
+    date_label = build_report_date_label(args.start, args.end)
+    if args.output_dir and args.output_root:
+        raise SystemExit("--output-dir 与 --output-root 不能同时使用。")
+    if args.output_dir:
+        output_dir = ensure_dir(Path(args.output_dir))
+        output_stem = f"{chat_slug}_{date_label}_群聊总结"
+        image_output_path = output_dir / f"{output_stem}.png"
+        image_dir = output_dir
+        chat_report_dir = output_dir
+    else:
+        report_paths = allocate_report_paths(
+            Path(args.output_root) if args.output_root else DEFAULT_OUTPUT_ROOT,
+            ctx["display_name"],
+            args.start,
+            args.end,
+        )
+        output_dir = report_paths.data_dir
+        output_stem = report_paths.data_stem
+        image_output_path = report_paths.image_path
+        image_dir = report_paths.image_dir
+        chat_report_dir = report_paths.chat_dir
 
     snapshot_dir = ensure_dir(output_dir / "snapshot")
 
@@ -273,8 +294,6 @@ def main() -> None:
     def write_snapshot_files() -> None:
         """写出本次运行的调试与回溯快照。"""
 
-        write_json(snapshot_dir / "messages.json", serialize_messages(messages))
-        write_json(snapshot_dir / "chunks.json", [chunk_payload(chunk) for chunk in chunks])
         write_json(snapshot_dir / "chunk_plan.json", chunk_plan)
         write_json(snapshot_dir / "stats.json", stats)
         write_json(snapshot_dir / "run_signature.json", run_signature)
@@ -288,6 +307,7 @@ def main() -> None:
         allow_json_repair=bool(args.allow_json_repair),
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
+        provider=provider,
     )
     balance_before = None if args.dry_run else capture_balance_snapshot(client, "before")
 
@@ -361,7 +381,6 @@ def main() -> None:
     )
     html_output_path = output_dir / f"{output_stem}.html"
     html_output_path.write_text(html_text, encoding="utf-8")
-    image_output_path = output_dir / f"{output_stem}.png"
     image_error = ""
     send_requested, send_targets, send_text = resolve_send_delivery(args)
     send_results: list[tuple[str, str, str]] = []
@@ -454,7 +473,9 @@ def main() -> None:
     print(f"reduce fan-in: {max(2, args.reduce_fan_in)}")
     if balance_before and balance_after:
         print(f"余额变化: {format_balance_delta(balance_before, balance_after)}")
-    print(f"输出目录: {output_dir}")
+    print(f"报告数据目录: {output_dir}")
+    print(f"PNG目录: {image_dir}")
+    print(f"群聊报告目录: {chat_report_dir}")
     print(f"JSON: {json_output_path}")
     print(f"HTML: {html_output_path}")
     if args.no_image:

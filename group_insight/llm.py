@@ -53,9 +53,10 @@ class DeepSeekClient(LLMClientProtocol):
         allow_json_repair: bool = False,
         thinking_enabled: bool = DEFAULT_DEEPSEEK_THINKING,
         reasoning_effort: str = DEFAULT_DEEPSEEK_REASONING_EFFORT,
+        provider: str = "deepseek",
     ) -> None:
         """初始化客户端配置和限频/重试参数。"""
-        self.provider = "deepseek"
+        self.provider = provider
         self.api_key = api_key
         self.model = model
         self.api_url = api_url
@@ -84,7 +85,7 @@ class DeepSeekClient(LLMClientProtocol):
                     temperature=temperature,
                 )
                 if not content.strip():
-                    raise ValueError("DeepSeek 返回空内容")
+                    raise ValueError(f"{self.provider} 返回空内容")
                 return safe_json_loads(content)
             except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, RuntimeError) as exc:
                 last_error = exc
@@ -101,7 +102,7 @@ class DeepSeekClient(LLMClientProtocol):
                 if attempt >= self.max_retries:
                     break
                 time.sleep(attempt * 2)
-        raise RuntimeError(f"DeepSeek 调用失败: {last_error}") from last_error
+        raise RuntimeError(f"{self.provider} 调用失败: {last_error}") from last_error
 
     def _request_content(
         self,
@@ -164,9 +165,10 @@ class DeepSeekClient(LLMClientProtocol):
             "temperature": temperature,
             "stream": False,
         }
-        payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
-        if self.thinking_enabled and self.reasoning_effort:
-            payload["reasoning_effort"] = self.reasoning_effort
+        if self.provider == "deepseek":
+            payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
+            if self.thinking_enabled and self.reasoning_effort:
+                payload["reasoning_effort"] = self.reasoning_effort
         if max_tokens is not None and max_tokens > 0:
             payload["max_tokens"] = max_tokens
         return payload
