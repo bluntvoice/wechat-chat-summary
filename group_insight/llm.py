@@ -346,7 +346,7 @@ MAP_SCHEMA_EXAMPLE = {
             "why_it_matters": "为什么值得引用",
         }
     ],
-    "decisions": [{"content": "已达成的结论", "evidence_ids": ["m_xxx"]}],
+    "decisions": [{"content": "已达成的结论", "evidence_ids": ["m_xxx"], "tone": "formal", "confidence": 0.92}],
     "action_items": [
         {
             "owner": "[[user:wxid_xxx]] 或留空",
@@ -354,9 +354,13 @@ MAP_SCHEMA_EXAMPLE = {
             "deadline": "时间或留空",
             "status_hint": "紧急/一般/观察",
             "evidence_ids": ["m_xxx"],
+            "tone": "formal",
+            "confidence": 0.9,
         }
     ],
     "open_questions": [{"question": "未解决的问题", "evidence_ids": ["m_xxx"]}],
+    "risk_flags": [{"content": "需关注的风险", "evidence_ids": ["m_xxx"], "tone": "formal", "confidence": 0.85}],
+    "light_moments": [{"content": "群友间的玩笑或调侃", "evidence_ids": ["m_xxx"], "tone": "joke"}],
     "mood": {
         "label": "活跃/理性/轻松/焦虑/冲突等",
         "reason": "判断依据",
@@ -392,7 +396,7 @@ REDUCE_SCHEMA_EXAMPLE = {
             "source_refs": ["shard-001"],
         }
     ],
-    "decisions": [{"content": "结论", "source_refs": ["shard-001"]}],
+    "decisions": [{"content": "结论", "source_refs": ["shard-001"], "tone": "formal", "confidence": 0.9}],
     "action_items": [
         {
             "owner": "[[user:wxid_xxx]] 或留空",
@@ -400,10 +404,13 @@ REDUCE_SCHEMA_EXAMPLE = {
             "deadline": "时间或留空",
             "status_hint": "紧急/一般/观察",
             "source_refs": ["shard-001"],
+            "tone": "formal",
+            "confidence": 0.9,
         }
     ],
     "open_questions": [{"question": "未决问题", "source_refs": ["shard-001"]}],
-    "risk_flags": ["潜在风险或争议点"],
+    "risk_flags": [{"content": "潜在风险或争议点", "source_refs": ["shard-001"], "tone": "formal", "confidence": 0.85}],
+    "light_moments": [{"content": "轻松插曲", "source_refs": ["shard-001"], "tone": "joke"}],
     "mood": {"label": "整体氛围", "reason": "原因", "source_refs": ["shard-001"]},
 }
 
@@ -412,6 +419,7 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
     "headline": "一句报告总标题",
     "tagline": "一句短副标题",
     "lead_summary": "1-2 段的默认总结",
+    "one_line_summary": "一句精炼自然的当日摘要",
     "theme_cards": [
         {"title": "主题一", "summary": "适合展示在摘要卡片中的简短文本"}
     ],
@@ -436,12 +444,16 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
             "why_it_matters": "为什么重要",
         }
     ],
-    "decisions": ["已明确的结论"],
+    "decisions": [{"content": "已明确的结论", "tone": "formal", "confidence": 0.9}],
     "action_items": [
-        {"owner": "[[user:wxid_xxx]] 或留空", "task": "[[user:wxid_xxx]] 相关行动项", "deadline": "时间或留空"}
+        {"owner": "[[user:wxid_xxx]] 或留空", "task": "[[user:wxid_xxx]] 相关行动项", "deadline": "时间或留空", "tone": "formal", "confidence": 0.9}
     ],
     "open_questions": ["未解决的问题"],
-    "risk_flags": ["需要继续观察的风险或争议"],
+    "risk_flags": [{"content": "需要继续观察的风险或争议", "tone": "formal", "confidence": 0.85}],
+    "light_moments": [{"content": "明确的玩笑、调侃或轻松插曲", "tone": "joke"}],
+    "resource_groups": [
+        {"topic": "与 theme_cards 尽量一致的主题", "summary": "该组资源用途", "resource_ids": ["res_xxx"]}
+    ],
     "mood": {"label": "整体氛围", "reason": "判断依据"},
 }
 
@@ -465,6 +477,8 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 11. highlight_sections 表示“话题簇”而不是机械时间切段；如果同一时间窗口里存在多个不同话题，可以拆成多个 sections，时间范围允许重叠。
 12. 不要只写最显眼的主线，持续时间较短但消息量可观、内容明确的次级话题也要覆盖，避免遗漏例如运动分享、生活分享、工具讨论这类支线。
 13. 输入里会提供 member_directory；提到具体成员时，请统一使用对应的 `[[user:sender_id]]` 占位符，不要直接输出昵称。
+14. 必须区分正式结论、暂时讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 decisions/action_items/risk_flags。
+15. decisions/action_items 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时，降低确定性或放入 light_moments。
 
 输出 json schema 示例：
 {json.dumps(MAP_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -496,6 +510,7 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 10. 如果输入覆盖多个明显不同的活跃区间，highlight_sections 至少为每个输入 shard/bundle 保留一个非重复的话题 section，除非其内容与其他输入完全重复。
 11. 不要让结果出现长时间空洞；如果 source_refs 对应的输入在某一时间段内明显活跃，合并结果应覆盖该时段。
 12. 如果输入里出现 `[[user:sender_id]]` 占位符，输出时保留该占位符，不要改写成昵称。
+13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成正式结论、行动项或风险。
 
 输出 json schema 示例：
 {json.dumps(REDUCE_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -517,6 +532,7 @@ def build_final_prompts(
     end_time: str,
     stats: dict[str, Any],
     bundles: list[dict[str, Any]],
+    resources: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     """构造 final 阶段生成最终日报结构的提示词。"""
     system_prompt = f"""
@@ -536,6 +552,10 @@ def build_final_prompts(
 11. 如果输入 bundles 覆盖多个明显不同的活跃区间，sections 至少为每个 bundle/shard 保留一个非重复 section，除非两个输入本质上是同一话题。
 12. 不要生成大段时间空洞；若输入在某个中段时窗存在明显活跃讨论，最终 sections 应覆盖该时段。
 13. 如果输入里的 bundles 使用 `[[user:sender_id]]` 占位符，最终输出请保留这些占位符，不要改写成昵称。
+14. one_line_summary 必须精炼自然，概括当天真正有区分度的内容，避免机械复述消息数，建议不超过 60 个汉字。
+15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、行动项或风险；不确定时弱化措辞并放入 light_moments。
+16. decisions/action_items/risk_flags 采用高判定门槛。结构化对象若提供 tone/confidence，应如实保留；不得把 casual/joke/sarcasm/uncertain 升级为 formal。
+17. resource_groups 只能引用资源清单中真实存在的 resource_id；相同主题的链接和文件必须放在同一组，主题名尽量与 theme_cards/sections 一致，不能可靠归类时使用“其他 / 未归类”。
 
 最终 json schema 示例：
 {json.dumps(FINAL_REPORT_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -550,6 +570,9 @@ def build_final_prompts(
 
 最终 reduce 输入：
 {json.dumps(bundles, ensure_ascii=False, indent=2)}
+
+当日资源清单（只按 resource_id 引用，不要改写 URL）：
+{json.dumps(resources or [], ensure_ascii=False, indent=2)}
 """.strip()
     return system_prompt, user_prompt
 

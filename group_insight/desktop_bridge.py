@@ -7,11 +7,20 @@ import os
 import subprocess
 import sys
 import urllib.parse
+import re
 from pathlib import Path
 from typing import Any
 
-from .desktop_config import load_desktop_settings, save_desktop_settings
+from .desktop_config import desktop_data_dir, load_desktop_settings, save_desktop_settings
+from .history_store import HistoryStore
+from .progress import read_progress
 from .llm import DeepSeekClient
+from .redaction import list_redaction_targets, redact_report_document
+from .rendering import render_html_report
+from .report_paths import allocate_report_paths
+from .report_schema import upgrade_legacy_report
+from .settings import DEFAULT_REPORT_IMAGE_TIMEOUT_MS, DEFAULT_REPORT_IMAGE_WIDTH
+from .transport import export_report_image
 from .wechat_data_api import WeChatDataAPIClient
 
 
@@ -113,6 +122,11 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
     api_url = normalize_chat_completions_url(str(settings.get("api_url") or ""), provider)
     export_root = Path(str(payload.get("export_root") or settings.get("export_root"))).expanduser()
     export_root.mkdir(parents=True, exist_ok=True)
+    job_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("job_id") or "current"))[:80] or "current"
+    progress_path = desktop_data_dir() / "jobs" / f"{job_id}.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    if progress_path.exists():
+        progress_path.unlink()
 
     command = [
         *build_report_entrypoint(),
@@ -135,6 +149,8 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
         "--image-dpi",
         str(int(settings.get("image_dpi") or 300)),
         "--no-send-after-run",
+        "--progress-file",
+        str(progress_path),
     ]
     if bool(settings.get("thinking", False)) and provider == "deepseek":
         command.append("--thinking")
@@ -148,6 +164,7 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
             "GROUP_INSIGHT_NO_VENV_REDIRECT": "1",
         }
     )
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     completed = subprocess.run(
         command,
         cwd=str(Path(__file__).resolve().parent.parent),
@@ -156,6 +173,7 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=creationflags,
     )
     output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
     if completed.returncode != 0:
@@ -189,12 +207,111 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
     if missing_outputs:
         detail = str(result.get("png_error") or ", ".join(missing_outputs))
         raise RuntimeError(f"报告导出不完整: {detail}")
+    save_desktop_settings({
+        "last_chat_id": str(payload.get("chat") or ""),
+        "last_chat_name": str(payload.get("chat_name") or ""),
+        "range_mode": str(payload.get("range_mode") or "single"),
+    })
     return result
+
+
+def _state_with_history() -> dict[str, Any]:
+    settings = load_desktop_settings(include_secret=False)
+    with HistoryStore() as history:
+        import_result = history.import_export_root(Path(str(settings.get("export_root") or "")))
+        summarized_chat_ids = history.summarized_chat_ids()
+        settings["summarized_chat_ids"] = summarized_chat_ids
+        settings["history_import"] = import_result
+        if not str(settings.get("last_chat_id") or "") and summarized_chat_ids:
+            last_chat_id = summarized_chat_ids[0]
+            row = history.connection.execute(
+                "SELECT display_name FROM chats WHERE chat_id=?", (last_chat_id,)
+            ).fetchone()
+            settings["last_chat_id"] = last_chat_id
+            settings["last_chat_name"] = str(row["display_name"] if row else "")
+    return settings
+
+
+def _load_report_document(payload: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    source_path = Path(str(payload.get("json_path") or "")).expanduser()
+    if not source_path.is_file():
+        raise ValueError("找不到需要编辑的报告 JSON。")
+    try:
+        raw = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"报告 JSON 无法读取: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("报告 JSON 顶层必须是对象。")
+    return source_path, upgrade_legacy_report(raw, source_path)
+
+
+def _get_redaction_targets(payload: dict[str, Any]) -> dict[str, Any]:
+    _source_path, document = _load_report_document(payload)
+    return {
+        "version": int(document.get("metadata", {}).get("version") or 1),
+        "targets": list_redaction_targets(document),
+    }
+
+
+def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """仅在本机重渲染报告；不读取聊天，也不调用 AI。"""
+
+    _source_path, document = _load_report_document(payload)
+    target_ids = payload.get("target_ids", [])
+    if not isinstance(target_ids, list) or not target_ids:
+        raise ValueError("请至少选择一项需要屏蔽的报告内容。")
+    metadata = document.get("metadata", {})
+    chat = metadata.get("chat", {})
+    period = metadata.get("period", {})
+    output_root = Path(str(settings.get("export_root") or "")).expanduser()
+    paths = allocate_report_paths(
+        output_root,
+        str(chat.get("name") or "群聊"),
+        str(period.get("start") or ""),
+        str(period.get("end") or ""),
+    )
+    json_path = paths.data_dir / f"{paths.data_stem}.json"
+    html_path = paths.data_dir / f"{paths.data_stem}.html"
+    exports = {
+        "json": str(json_path.resolve()),
+        "html": str(html_path.resolve()),
+        "png": str(paths.image_path.resolve()),
+    }
+    redacted = redact_report_document(
+        document,
+        [str(value) for value in target_ids],
+        version=paths.version,
+        exports=exports,
+    )
+    json_path.write_text(json.dumps(redacted, ensure_ascii=False, indent=2), encoding="utf-8")
+    html_path.write_text(render_html_report(redacted), encoding="utf-8")
+    image_error = export_report_image(
+        html_path,
+        paths.image_path,
+        viewport_width=DEFAULT_REPORT_IMAGE_WIDTH,
+        timeout_ms=DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
+        dpi=max(1, int(settings.get("image_dpi") or 300)),
+    )
+    if image_error or not paths.image_path.exists():
+        raise RuntimeError(f"屏蔽版 PNG 生成失败: {image_error or '未生成图片'}")
+    with HistoryStore() as history:
+        history.upsert_report(redacted)
+    return {
+        "completed": True,
+        "version": paths.version,
+        "redaction_count": len(redacted.get("redactions", []) or []),
+        "chat_dir": str(paths.chat_dir),
+        "data_dir": str(paths.data_dir),
+        "image_dir": str(paths.image_dir),
+        "json_path": str(json_path),
+        "html_path": str(html_path),
+        "png_path": str(paths.image_path),
+    }
 
 
 def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "get_state":
-        return load_desktop_settings(include_secret=False)
+        return _state_with_history()
     if command == "save_settings":
         values = payload.get("settings", payload)
         if not isinstance(values, dict):
@@ -216,6 +333,13 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _test_ai(settings)
     if command == "generate":
         return _generate(settings, payload)
+    if command == "get_progress":
+        job_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("job_id") or "current"))[:80] or "current"
+        return read_progress(desktop_data_dir() / "jobs" / f"{job_id}.json")
+    if command == "get_redaction_targets":
+        return _get_redaction_targets(payload)
+    if command == "redact_report":
+        return _redact_report(settings, payload)
     raise ValueError(f"未知命令: {command}")
 
 

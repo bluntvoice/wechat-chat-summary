@@ -1,566 +1,250 @@
-"""日报 JSON 载荷与 HTML 页面渲染。
+"""统一报告文档的移动端 HTML 与日报长图排版。"""
 
-本模块把最终 report、统计信息和成员占位符解析成可导出的移动端 HTML，并负责在
-输入签名变化时清理过期阶段缓存。
-"""
 from __future__ import annotations
 
 import html
 import json
 import re
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .common import write_json
-from .fetching import get_group_nickname_map, is_resolved_member_display
-from .settings import MAX_REPORT_SECTIONS
+from .redaction import REDACTION_NOTICE
 
 
-def render_html_report(
-        chat_name: str,
-        chat_id: str,
-        start_time: str,
-        end_time: str,
-        stats: dict[str, Any],
-        report: dict[str, Any],
-    ) -> str:
-        """把最终报表和本地统计渲染为移动端 HTML 页面。"""
-        def format_handle(name: str) -> str:
-            """把成员显示名格式化为报表中的 @昵称。"""
-            name = (name or '').strip()
-            if not name:
-                return ''
-            if name in {'待定', '暂无', 'unknown'}:
-                return name
-            if name.startswith('@'):
-                return name
-            return f'@{name}'
-
-        group_nicknames = get_group_nickname_map(chat_id) if chat_id else {}
-        speaker_directory_map: dict[str, str] = {}
-        member_display_map: dict[str, str] = {}
-
-        def add_member_mapping(member_id: str, display_name: str) -> None:
-            """把成员 ID 与有效展示名加入渲染期映射表。"""
-            member_id = (member_id or '').strip()
-            display_name = (display_name or '').strip()
-            if not is_resolved_member_display(member_id, display_name):
-                return
-            member_display_map[member_id] = display_name
-
-        for item in stats.get('speaker_directory', []):
-            member_id = item.get('sender_id', '')
-            display_name = item.get('sender_name', '')
-            if is_resolved_member_display(member_id, display_name):
-                speaker_directory_map[member_id] = display_name
-            add_member_mapping(member_id, display_name)
-        for item in stats.get('member_aliases', []):
-            add_member_mapping(item.get('sender_id', ''), item.get('sender_name', ''))
-        for member_id, display_name in group_nicknames.items():
-            add_member_mapping(member_id, display_name)
-
-        def resolve_member_id_prefix(prefix: str) -> str:
-            """用唯一前缀兜底修复被截断的成员占位符。"""
-            prefix = (prefix or '').strip().rstrip('.')
-            if not prefix:
-                return ''
-            if prefix in member_display_map:
-                return prefix
-            matches = [member_id for member_id in member_display_map if member_id.startswith(prefix)]
-            return matches[0] if len(matches) == 1 else ''
-
-        def resolve_member_name(value: str) -> str:
-            """把成员占位符或原始 ID 解析为展示名。"""
-            value = (value or '').strip()
-            if not value:
-                return ''
-            match = re.fullmatch(r'\[\[user:([^\]]+)\]\]', value)
-            if match:
-                member_id = match.group(1).strip()
-                return member_display_map.get(member_id, speaker_directory_map.get(member_id, '未知成员'))
-            if value.startswith(('wxid_', 'gh_')) or value.endswith('@chatroom'):
-                member_id = resolve_member_id_prefix(value)
-                if member_id:
-                    return member_display_map.get(member_id, member_id)
-                return '未知成员'
-            return member_display_map.get(value, value)
-
-        def render_member_field(value: str) -> str:
-            """把成员字段渲染为带 mention 样式的 HTML。"""
-            resolved = resolve_member_name(value)
-            if not resolved:
-                return ''
-            return f'<span class="mention">{html.escape(format_handle(resolved))}</span>'
-
-        def render_rich_text(text: Any) -> str:
-            """转义普通文本并替换其中的成员占位符。
-
-            处理顺序：
-            1. ``[[user:...]]`` 占位符（LLM 标准输出）。
-            2. ``wxid_...`` / ``gh_...`` 原始 ID（模型偶发直出）。
-            3. 已知成员昵称/显示名兜底（模型未用占位符时的补偿高亮）。
-            """
-            escaped = html.escape(str(text or ''))
-
-            def replace_placeholder(match: re.Match[str]) -> str:
-                """把富文本中的成员占位符替换为 mention HTML。"""
-                sender_id = match.group(1).strip().rstrip('.')
-                member_id = resolve_member_id_prefix(sender_id) or sender_id
-                sender_name = resolve_member_name(f'[[user:{member_id}]]')
-                return f'<span class="mention">{html.escape(format_handle(sender_name))}</span>'
-
-            def replace_raw_member_id(match: re.Match[str]) -> str:
-                """把模型偶发直出的 wxid/gh id 也替换为成员名。"""
-                sender_id = match.group(1).strip().rstrip('.')
-                member_id = resolve_member_id_prefix(sender_id) or sender_id
-                sender_name = resolve_member_name(f'[[user:{member_id}]]')
-                return f'<span class="mention">{html.escape(format_handle(sender_name))}</span>'
-
-            escaped = re.sub(r'\[\[user:([A-Za-z0-9_@.-]+)(?:\]\]|\.\.\.)?', replace_placeholder, escaped)
-            escaped = re.sub(r'@?\b((?:wxid|gh)_[A-Za-z0-9_.-]{6,})\b', replace_raw_member_id, escaped)
-
-            # 兜底：将已知的成员昵称/显示名也替换为 mention HTML。
-            # 模型有时不遵守 prompt 直接使用昵称，导致摘要中没有高亮。
-            if member_display_map:
-                known_names = sorted(
-                    {
-                        name.strip()
-                        for name in member_display_map.values()
-                        if name and name.strip() not in {'待定', '暂无', 'unknown', '未知成员'}
-                    },
-                    key=len,
-                    reverse=True,
-                )
-                if known_names:
-                    # 保护所有已生成的 mention span（包括占位符/wxid 替换产生的）
-                    mention_spans: list[str] = []
-
-                    def protect_mention(match: re.Match[str]) -> str:
-                        idx = len(mention_spans)
-                        mention_spans.append(match.group(0))
-                        return f'\x00MENTION_{idx}\x00'
-
-                    protected = re.sub(r'<span class="mention">[^<]+</span>', protect_mention, escaped)
-
-                    # 阶段1：先替换所有 @昵称（更具体、歧义更少）
-                    for name in known_names:
-                        escaped_name = re.escape(html.escape(name))
-                        protected = re.sub(
-                            rf'@{escaped_name}(?![A-Za-z0-9_])',
-                            f'<span class="mention">{html.escape(format_handle(name))}</span>',
-                            protected,
-                        )
-
-                    # 阶段1 可能生成了新的 mention span，需要再次保护
-                    protected = re.sub(r'<span class="mention">[^<]+</span>', protect_mention, protected)
-
-                    # 阶段2：替换独立的昵称（长度 >= 2，避免单字符过度误匹配）
-                    for name in known_names:
-                        if len(name) >= 2:
-                            escaped_name = re.escape(html.escape(name))
-                            protected = re.sub(
-                                rf'(?<![A-Za-z0-9_]){escaped_name}(?![A-Za-z0-9_])',
-                                f'<span class="mention">{html.escape(format_handle(name))}</span>',
-                                protected,
-                            )
-
-                    # 恢复被保护的 mention span
-                    for idx, span in enumerate(mention_spans):
-                        protected = protected.replace(f'\x00MENTION_{idx}\x00', span)
-                    escaped = protected
-
-            return escaped
-
-        def render_participant_item(item: dict[str, Any]) -> str:
-            """渲染一条成员观察列表项。"""
-            role = (item.get('role', '') or '').strip()
-            role_html = f'（{html.escape(role)}）' if role else ''
-            return (
-                f"<li><strong>{render_member_field(item.get('name', ''))}</strong>"
-                f"{role_html}：{render_rich_text(item.get('observation', ''))}</li>"
-            )
-
-        def render_quote_item(item: dict[str, Any]) -> str:
-            """渲染一条引用原话块。"""
-            time_value = (item.get('time', '') or '').strip()
-            time_html = f' <span class="quote-time">{html.escape(time_value)}</span>' if time_value else ''
-            return f"""
-            <blockquote>
-              <div class="quote-text">"{render_rich_text(item.get('quote', ''))}"</div>
-              <div class="quote-meta">{render_member_field(item.get('speaker', ''))}{time_html}</div>
-              <div class="quote-why">{render_rich_text(item.get('why', ''))}</div>
-            </blockquote>
-            """
-
-        theme_cards_html = ''.join(
-            f"""
-            <div class="theme-card">
-              <div class="theme-title">{render_rich_text(card.get('title', '主题'))}</div>
-              <div class="theme-summary">{render_rich_text(card.get('summary', ''))}</div>
-            </div>
-            """
-            for card in report.get('theme_cards', [])[:4]
-        )
-
-        participant_sources: list[dict[str, Any]] = []
-        for key in ('participant_insights', 'participant_notes'):
-            value = report.get(key, [])
-            if isinstance(value, list):
-                participant_sources.extend(item for item in value if isinstance(item, dict))
-
-        participant_seen: set[tuple[str, str, str]] = set()
-        participant_items: list[dict[str, Any]] = []
-        for item in participant_sources:
-            name = item.get('name', '') or item.get('participant_ref', '') or ''
-            observation = item.get('insight', '') or item.get('observation', '') or item.get('contribution', '') or ''
-            role = item.get('role', '') or item.get('participant_role', '') or ''
-            if not name and not observation:
-                continue
-            key = (name.strip(), observation.strip(), role.strip())
-            if key in participant_seen:
-                continue
-            participant_seen.add(key)
-            participant_items.append({'name': name, 'observation': observation, 'role': role})
-
-        participant_notes_html = ''.join(render_participant_item(item) for item in participant_items[:6])
-
-        quote_items: list[dict[str, Any]] = []
-        quote_seen: set[tuple[str, str, str, str]] = set()
-        for item in report.get('quotes', []):
-            speaker = item.get('speaker', '') or item.get('speaker_ref', '') or ''
-            quote = item.get('quote', '') or item.get('text', '') or ''
-            why = item.get('why_it_matters', '') or item.get('context', '') or ''
-            time_value = item.get('time', '') or ''
-            key = (speaker.strip(), quote.strip(), why.strip(), time_value.strip())
-            if key in quote_seen:
-                continue
-            quote_seen.add(key)
-            quote_items.append({'speaker': speaker, 'time': time_value, 'quote': quote, 'why': why})
-
-        quotes_html = ''.join(render_quote_item(item) for item in quote_items[:4])
-
-        sections_html = ''.join(
-            f"""
-            <section class="section-card">
-              <div class="section-index">{index}</div>
-              <div class="section-body">
-                <div class="section-header">
-                  <h3>{render_rich_text(section.get('title', f'讨论片段 {index}'))}</h3>
-                  <div class="section-time">{html.escape(section.get('start_time', ''))} - {html.escape(section.get('end_time', ''))}</div>
-                </div>
-                <p class="section-summary">{render_rich_text(section.get('summary', ''))}</p>
-                <ul class="section-bullets">
-                  {''.join(f"<li>{render_rich_text(item)}</li>" for item in section.get('bullets', [])[:4])}
-                </ul>
-                <div class="section-takeaway">{render_rich_text(section.get('takeaway', ''))}</div>
-              </div>
-            </section>
-            """
-            for index, section in enumerate(report.get('sections', [])[:MAX_REPORT_SECTIONS], start=1)
-        )
-
-        leaderboard_html = ''.join(
-            f"""
-            <li>
-              <span class="rank-badge">{speaker['rank']}</span>
-              <span class="speaker-name">{render_member_field(speaker['name'])}</span>
-              <span class="speaker-count">{speaker['message_count']} 条</span>
-            </li>
-            """
-            for speaker in stats.get('top_speakers', [])[:10]
-        )
-
-        interaction_labels = [
-            ('direct_redpacket_receiver', '定向红包最多'),
-            ('reply_sender', '回复最多'),
-        ]
-        interaction_rankings = stats.get('interaction_rankings', {})
-
-        def render_interaction_items(items: list[dict[str, Any]]) -> str:
-            """渲染一个互动榜单分组。"""
-            return ''.join(
-                f"<li>{item.get('rank', index)}. {render_member_field(item.get('name', ''))}：{item.get('count', 0)} 次</li>"
-                for index, item in enumerate(items[:5], start=1)
-            ) or '<li>暂无</li>'
-
-        interaction_rankings_html = ''.join(
-            f"""
-            <div class="interaction-group">
-              <div class="interaction-title">{label}</div>
-              <ul class="simple-list">{render_interaction_items(interaction_rankings.get(key, []))}</ul>
-            </div>
-            """
-            for key, label in interaction_labels
-        )
-
-        def first_dict_value(item: dict[str, Any], keys: tuple[str, ...]) -> str:
-            """按优先级从字典中取第一个非空字段。"""
-            for key in keys:
-                value = item.get(key, "")
-                if value:
-                    return str(value)
-            return ""
-
-        def render_action_item(item: Any) -> str:
-            """渲染行动项，兼容字符串和字典两种输入。"""
-            if not isinstance(item, dict):
-                text = str(item or "").strip()
-                return f"<li>{render_rich_text(text)}</li>" if text else ""
-            owner = first_dict_value(item, ("owner", "name", "participant_ref"))
-            task = first_dict_value(item, ("task", "content", "action", "summary", "text"))
-            deadline = first_dict_value(item, ("deadline", "time", "due"))
-            status_hint = first_dict_value(item, ("status_hint", "status"))
-            meta = " / ".join(part for part in (deadline, status_hint) if part)
-            meta_html = f' <span class="meta">{html.escape(meta)}</span>' if meta else ""
-            if owner and task:
-                return f"<li><strong>{render_member_field(owner)}</strong>：{render_rich_text(task)}{meta_html}</li>"
-            if task:
-                return f"<li>{render_rich_text(task)}{meta_html}</li>"
-            if owner:
-                return f"<li>{render_member_field(owner)}{meta_html}</li>"
-            return ""
-
-        def render_text_item(item: Any, keys: tuple[str, ...]) -> str:
-            """渲染风险、问题等简单文本列表项。"""
-            if isinstance(item, dict):
-                text = first_dict_value(item, keys)
-            else:
-                text = str(item or "")
-            text = text.strip()
-            return f"<li>{render_rich_text(text)}</li>" if text else ""
-
-        action_items_html = ''.join(
-            render_action_item(item)
-            for item in report.get('action_items', [])[:8]
-        )
-
-        open_questions_html = ''.join(
-            render_text_item(item, ("question", "content", "text", "summary"))
-            for item in report.get('open_questions', [])[:8]
-        )
-        risk_flags_html = ''.join(
-            render_text_item(item, ("risk", "flag", "content", "text", "summary", "reason"))
-            for item in report.get('risk_flags', [])[:8]
-        )
-
-        action_items_section_html = (
-            f'<section class="aside-card"><h2 class="aside-title">行动项</h2><ul class="simple-list">{action_items_html}</ul></section>'
-            if action_items_html
-            else ''
-        )
-        open_questions_section_html = (
-            f'<section class="aside-card"><h2 class="aside-title">未决问题</h2><ul class="simple-list">{open_questions_html}</ul></section>'
-            if open_questions_html
-            else ''
-        )
-        risk_flags_section_html = (
-            f'<section class="aside-card"><h2 class="aside-title">风险提示</h2><ul class="simple-list">{risk_flags_html}</ul></section>'
-            if risk_flags_html
-            else ''
-        )
-
-        word_cloud_items = stats.get('word_cloud', [])[:28]
-        max_word_count = max((item['count'] for item in word_cloud_items), default=1)
-        min_word_count = min((item['count'] for item in word_cloud_items), default=1)
-        word_cloud_html = ''.join(
-            f'<span class="cloud-item" style="font-size:{15 + ((item["count"] - min_word_count) / max(1, max_word_count - min_word_count)) * 17:.1f}px">{html.escape(item["word"])}</span>'
-            for item in word_cloud_items
-        )
-
-        report_date = (start_time or '')[:10]
-
-        return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(report.get('headline', '群洞察报表'))}</title>
-  <style>
-    :root {{
-      --bg: #f8fff4;
-      --bg-soft: #fefce8;
-      --panel: #ffffff;
-      --panel-soft: #fffdf5;
-      --ink: #23452d;
-      --ink-light: #6b7f71;
-      --line: rgba(35, 69, 45, 0.10);
-      --shadow: 0 10px 28px rgba(92, 135, 83, 0.10);
-      --spring-green: #7bc96f;
-      --spring-green-dark: #4d9f5f;
-      --spring-yellow: #ffd86b;
-      --spring-pink: #ffc4d6;
-      --spring-pink-dark: #e16a97;
-      --mention-blue: #2563eb;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink);
-      background: linear-gradient(180deg, #fffef7, var(--bg)); }}
-    .page {{ width: min(100%, 520px); margin: 0 auto; padding: 8px; }}
-    .hero {{ border-radius: 8px; background:
-      linear-gradient(160deg, var(--spring-green), #9bd58a 45%, var(--spring-yellow));
-      padding: 16px 14px; box-shadow: var(--shadow); color: #193321; }}
-    .eyebrow {{ display: inline-block; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.55); font-size: 12px; font-weight: 700; }}
-    .title-cn {{ margin: 10px 0 0; font-size: 32px; font-weight: 900; line-height: 1.12; }}
-    .hero-meta {{ margin-top: 10px; display: grid; gap: 4px; font-size: 14px; line-height: 1.55; }}
-    .hero-meta .chat-name {{ font-size: 22px; font-weight: 800; }}
-    .hero-stats {{ margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }}
-    .stat-card {{ border-radius: 8px; padding: 10px 10px; background: rgba(255,255,255,0.55); border: 1px solid rgba(255,255,255,0.65); }}
-    .stat-label {{ font-size: 12px; opacity: 0.86; }}
-    .stat-value {{ margin-top: 4px; font-size: 22px; font-weight: 900; }}
-    .section {{ margin-top: 10px; border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); padding: 14px 12px; }}
-    .lead-box {{ border-radius: 8px; background: linear-gradient(180deg, #f0fdf4, #fef9c3); color: var(--ink); padding: 12px; font-size: 16px; line-height: 1.7; font-weight: 600; }}
-    .theme-grid {{ display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 10px; }}
-    .theme-card {{ padding: 12px; border-radius: 8px; background: linear-gradient(180deg, #fffdf5, #fff7fb); border: 1px solid rgba(225, 106, 151, 0.15); }}
-    .theme-title {{ font-size: 17px; font-weight: 900; color: var(--spring-pink-dark); }}
-    .theme-summary {{ margin-top: 6px; line-height: 1.65; color: var(--ink-light); font-size: 15px; }}
-    .content-grid {{ display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }}
-    .section-card {{ display: grid; grid-template-columns: 32px 1fr; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }}
-    .section-card:last-child {{ border-bottom: none; padding-bottom: 0; }}
-    .section-index {{ width: 28px; height: 28px; border-radius: 50%; background: var(--spring-green); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 900; margin-top: 1px; }}
-    .section-header {{ display: block; }}
-    .section-header h3 {{ margin: 0; font-size: 18px; line-height: 1.4; color: var(--ink); }}
-    .section-time {{ margin-top: 4px; font-size: 12px; color: var(--ink-light); }}
-    .section-summary {{ margin: 8px 0 8px; line-height: 1.72; font-size: 16px; }}
-    .section-bullets {{ margin: 0; padding-left: 18px; line-height: 1.72; color: var(--ink-light); font-size: 15px; }}
-    .section-takeaway {{ margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--spring-green-dark); font-size: 15px; line-height: 1.65; font-weight: 700; }}
-    .aside-card {{ border-radius: 8px; padding: 12px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); }}
-    .aside-title {{ font-size: 17px; font-weight: 900; color: var(--ink); margin: 0 0 8px; }}
-    .leaderboard {{ list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }}
-    .leaderboard li {{ display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px; }}
-    .rank-badge {{ width: 26px; height: 26px; border-radius: 50%; background: #fef3c7; color: #92400e; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 12px; }}
-    .speaker-name {{ font-weight: 700; }} .speaker-count, .meta {{ color: var(--ink-light); font-size: 14px; }}
-    .simple-list {{ margin: 0; padding-left: 18px; line-height: 1.7; font-size: 15px; }}
-    .interaction-list {{ display: grid; gap: 10px; }}
-    .interaction-group {{ border-top: 1px solid var(--line); padding-top: 8px; }}
-    .interaction-group:first-child {{ border-top: 0; padding-top: 0; }}
-    .interaction-title {{ margin-bottom: 6px; font-weight: 900; color: var(--spring-green-dark); }}
-    blockquote {{ margin: 0 0 8px; padding: 12px; border-radius: 8px; background: linear-gradient(180deg, #fffdf5, #fdf2f8); border: 1px solid rgba(225, 106, 151, 0.15); }}
-    .quote-text {{ font-size: 16px; line-height: 1.7; font-weight: 700; }}
-    .quote-meta, .quote-why {{ margin-top: 6px; color: var(--ink-light); font-size: 14px; line-height: 1.55; }}
-    .quote-time {{ color: var(--ink-light); font-size: 12px; }}
-    .stack {{ display: grid; gap: 10px; }}
-    .mention {{ color: var(--mention-blue); font-weight: 700; }}
-    .word-cloud {{ display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }}
-    .cloud-item {{ display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; background: #fdf2f8; color: #9d174d; line-height: 1.2; font-size: 14px; }}
-    .footer {{ margin-top: 12px; color: var(--ink-light); font-size: 12px; line-height: 1.6; text-align: center; }}
-    @media (min-width: 680px) {{
-      .page {{ width: min(100%, 640px); }}
-      .hero-stats {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
-    }}
-  </style>
-</head>
-<body>
-  <div class="page">
-    <header class="hero">
-      <div class="eyebrow">群聊分析</div>
-      <h1 class="title-cn">群聊总结</h1>
-      <div class="hero-meta">
-        <div class="chat-name">{html.escape(chat_name)}</div>
-        <div>群聊总结：{html.escape(report_date)}</div>
-      </div>
-      <div class="hero-stats">
-        <div class="stat-card"><div class="stat-label">今日信息数</div><div class="stat-value">{stats.get('effective_message_count', stats['message_count'])}</div></div>
-        <div class="stat-card"><div class="stat-label">今日字数</div><div class="stat-value">{stats.get('effective_char_count', stats.get('raw_char_count', 0))}</div></div>
-        <div class="stat-card"><div class="stat-label">参与人数</div><div class="stat-value">{stats['participant_count']}</div></div>
-      </div>
-    </header>
-    <section class="section">
-      <div class="lead-box">{render_rich_text(report.get('lead_summary', ''))}</div>
-      <div class="theme-grid">{theme_cards_html}</div>
-    </section>
-    <div class="content-grid">
-      <section class="section">
-        <h2 class="aside-title">讨论脉络</h2>
-        {sections_html}
-      </section>
-      <div class="stack">
-        <section class="aside-card"><h2 class="aside-title">高频词云</h2><div class="word-cloud">{word_cloud_html or '<span class="cloud-item">暂无</span>'}</div></section>
-        <section class="aside-card"><h2 class="aside-title">发言排行</h2><ol class="leaderboard">{leaderboard_html}</ol></section>
-        <section class="aside-card"><h2 class="aside-title">互动榜单</h2><div class="interaction-list">{interaction_rankings_html}</div></section>
-        <section class="aside-card"><h2 class="aside-title">成员观察</h2><ul class="simple-list">{participant_notes_html or '<li>暂无</li>'}</ul></section>
-        <section class="aside-card"><h2 class="aside-title">引用原话</h2>{quotes_html or '<div class="quote-why">当前没有可展示的原话。</div>'}</section>
-        {action_items_section_html}
-        {open_questions_section_html}
-        {risk_flags_section_html}
-      </div>
-    </div>
-    <div class="footer">
-      <div>{html.escape(report.get('headline', '群洞察报表'))}</div>
-      <div>生成时间：{html.escape(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}</div>
-      <div>本地统计来自已解密数据库，语义摘要由模型生成。</div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+def _esc(value: Any) -> str:
+    return html.escape(str(value or ""), quote=True)
 
 
-def build_report_payload(
-    ctx: dict[str, Any],
-    start_time: str,
-    end_time: str,
-    stats: dict[str, Any],
-    report: dict[str, Any],
-    chunk_count: int,
-    chunk_plan: dict[str, Any],
-    dry_run: bool,
-    provider: str,
-    model: str,
-) -> dict[str, Any]:
-    """构造写入 JSON 文件的完整报表载荷。"""
+def _member_names(stats: dict[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in stats.get("member_aliases", []) or []:
+        sender_id = str(item.get("sender_id") or "")
+        sender_name = str(item.get("sender_name") or "")
+        if sender_id and sender_name:
+            result[sender_id] = sender_name
+    return result
+
+
+def _resolve(value: Any, names: dict[str, str]) -> str:
+    text = str(value or "")
+    return re.sub(r"\[\[user:([^\]]+)\]\]", lambda match: names.get(match.group(1), "群成员"), text)
+
+
+def _text(item: Any, *keys: str) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for key in keys:
+            value = item.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _is_redacted(item: Any) -> bool:
+    return isinstance(item, dict) and bool(item.get("redacted"))
+
+
+def _redacted_html(item: dict[str, Any], tag: str = "article") -> str:
+    time_label = _esc(item.get("time_label") or "当日")
+    return (
+        f'<{tag} class="redacted-card"><span>所属时间 · {time_label}</span>'
+        f'<strong>{_esc(item.get("notice") or REDACTION_NOTICE)}</strong></{tag}>'
+    )
+
+
+def _legacy_document(kwargs: dict[str, Any]) -> dict[str, Any]:
+    report = kwargs.get("report", {})
+    stats = kwargs.get("stats", {})
+    chat_name = str(kwargs.get("chat_name") or "群聊")
+    start = str(kwargs.get("start_time") or "")
+    date = start[:10]
     return {
+        "schema_version": "legacy",
         "metadata": {
-            "chat_name": ctx["display_name"],
-            "chat_id": ctx["username"],
-            "start_time": start_time,
-            "end_time": end_time,
-            "chunk_count": chunk_count,
-            "chunk_strategy": chunk_plan.get("strategy", ""),
-            "chunk_mode": chunk_plan.get("mode", ""),
-            "estimated_tokens": chunk_plan.get("estimated_tokens", 0),
-            "dry_run": dry_run,
-            "provider": provider,
-            "model": model,
-            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "chat": {"id": kwargs.get("chat_id", ""), "name": chat_name},
+            "period": {"start": start, "end": kwargs.get("end_time", ""), "report_date": date},
+            "generated_at": "",
         },
         "stats": stats,
-        "report": report,
+        "content": {
+            "headline": f"{chat_name}：{date.replace('-', '')} 总结",
+            "one_line_summary": report.get("one_line_summary") or report.get("tagline") or report.get("lead_summary", ""),
+            "lead_summary": report.get("lead_summary", ""),
+            "themes": report.get("theme_cards", []),
+            "topics": report.get("sections", []),
+            "members": report.get("participant_insights", []) or stats.get("top_speakers", []),
+            "quotes": report.get("quotes", []),
+            "decisions": report.get("decisions", []),
+            "action_items": report.get("action_items", []),
+            "open_questions": report.get("open_questions", []),
+            "risk_flags": report.get("risk_flags", []),
+            "mood": report.get("mood", {}),
+            "resources": {"count": 0, "groups": []},
+        },
     }
 
 
-def invalidate_cached_outputs_if_needed(
-    output_dir: Path,
-    signature: dict[str, Any],
-) -> None:
-    """当运行签名变化时删除过期阶段缓存和导出物。"""
-    signature_path = output_dir / "snapshot" / "run_signature.json"
-    if not signature_path.exists():
-        previous_signature = None
-    else:
-        try:
-            previous_signature = json.loads(signature_path.read_text(encoding="utf-8"))
-        except Exception:
-            previous_signature = {}
+def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: Any) -> str:
+    """将 report schema v2 渲染为完整 HTML；PNG 模式仅保留摘要模块。"""
+    if document is None:
+        document = _legacy_document(legacy_kwargs)
+    metadata = document.get("metadata", {})
+    stats = document.get("stats", {})
+    content = document.get("content", {})
+    chat = metadata.get("chat", {})
+    period = metadata.get("period", {})
+    names = _member_names(stats)
 
+    def resolved(value: Any) -> str:
+        return _esc(_resolve(value, names))
+
+    themes = content.get("themes", []) or []
+    topics = content.get("topics", []) or []
+    members = content.get("members", []) or stats.get("top_speakers", []) or []
+    resources = content.get("resources", {}) or {}
+    groups = resources.get("groups", []) or []
+
+    metric_candidates = [
+        ("今日消息", stats.get("message_count", 0), "条"),
+        ("今日字数", stats.get("effective_char_count", 0), "字"),
+        ("参与人数", stats.get("participant_count", 0), "人"),
+    ]
+    if resources.get("count", 0):
+        metric_candidates.append(("整理资源", resources.get("count", 0), "项"))
+    metric_html = "".join(
+        f'<div class="metric"><span>{_esc(label)}</span><strong>{_esc(value)}</strong><small>{_esc(unit)}</small></div>'
+        for label, value, unit in metric_candidates
+    )
+
+    theme_html = "".join(
+        _redacted_html(item)
+        if _is_redacted(item)
+        else f'<article class="topic-card"><h3>{resolved(_text(item, "title"))}</h3><p>{resolved(_text(item, "summary"))}</p></article>'
+        for item in themes[:5]
+        if _is_redacted(item) or _text(item, "title", "summary")
+    ) or '<p class="empty">今天没有形成明确的主题卡片。</p>'
+
+    member_html = "".join(
+        _redacted_html(item, "li")
+        if _is_redacted(item)
+        else f'<li><span class="rank">{index:02d}</span><div><strong>{resolved(_text(item, "name"))}</strong><p>{resolved(_text(item, "insight") or (str(item.get("message_count", 0)) + " 条消息" if isinstance(item, dict) else ""))}</p></div></li>'
+        for index, item in enumerate(members[:6], 1)
+    ) or '<li class="empty">暂无成员观察</li>'
+
+    word_cloud = stats.get("word_cloud", []) or []
+    words_html = "".join(
+        f'<span class="word" style="--w:{min(5, 1 + int(item.get("count", 1)) // 4)}">{resolved(item.get("word", ""))}</span>'
+        for item in word_cloud[:24]
+        if item.get("word")
+    ) or '<span class="empty">暂无关键词</span>'
+
+    time_segments = stats.get("time_segment_breakdown", []) or []
+    max_time = max([int(item.get("count", 0)) for item in time_segments] or [1])
+    time_html = "".join(
+        f'<div class="time-row"><span>{resolved(item.get("label", ""))}</span><i><b style="width:{max(3, round(100 * int(item.get("count", 0)) / max_time))}%"></b></i><strong>{_esc(item.get("count", 0))}</strong></div>'
+        for item in time_segments
+    )
+
+    def render_resource_group(group: dict[str, Any]) -> str:
+        if _is_redacted(group):
+            return _redacted_html(group)
+        items_html = "".join(
+            _redacted_html(item, "div")
+            if _is_redacted(item)
+            else '<div class="resource-item">'
+            f'<span class="resource-kind">{"文件" if item.get("type") == "file" else "链接"}</span>'
+            f'<div><strong>{resolved(item.get("title") or item.get("file_name") or item.get("url"))}</strong>'
+            f'<p>{resolved(item.get("context_summary", ""))}</p>'
+            f'<small>{resolved(item.get("sender", ""))} · {resolved(item.get("sent_at", ""))}</small>'
+            + (f'<a href="{_esc(item.get("url"))}" rel="noreferrer">查看链接</a>' if str(item.get("url", "")).startswith(("http://", "https://")) else "")
+            + '</div></div>'
+            for item in group.get("items", []) or []
+        )
+        return (
+            '<article class="resource-group">'
+            f'<header><h3>{resolved(group.get("topic", "其他 / 未归类"))}</h3><span>{len(group.get("items", []) or [])} 项</span></header>'
+            f'<p class="group-note">{resolved(group.get("summary", ""))}</p>{items_html}</article>'
+        )
+
+    resource_groups_html = "".join(render_resource_group(group) for group in groups if isinstance(group, dict)) or '<p class="empty">当日未识别到可整理的链接或文件。</p>'
+
+    detail_topics = "".join(
+        _redacted_html(item)
+        if _is_redacted(item)
+        else '<article class="detail-topic">'
+        f'<div class="topic-meta">{resolved(item.get("start_time", ""))} — {resolved(item.get("end_time", ""))}</div>'
+        f'<h3>{resolved(item.get("title", "讨论主题"))}</h3><p>{resolved(item.get("summary", ""))}</p>'
+        + (f'<ul>{"".join(f"<li>{resolved(bullet)}</li>" for bullet in item.get("bullets", []) or [])}</ul>' if item.get("bullets") else "")
+        + (f'<blockquote>{resolved(item.get("takeaway", ""))}</blockquote>' if item.get("takeaway") else "")
+        + '</article>'
+        for item in topics
+        if isinstance(item, dict)
+    )
+
+    def detail_list(title: str, items: list[Any], *keys: str) -> str:
+        rows = [
+            _redacted_html(item, "li") if _is_redacted(item) else f'<li>{resolved(_text(item, *keys))}</li>'
+            for item in items
+            if _is_redacted(item) or _text(item, *keys)
+        ]
+        if not rows:
+            return ""
+        return f'<section class="card html-detail"><h2>{_esc(title)}</h2><ul class="plain-list">' + "".join(rows) + '</ul></section>'
+
+    mood = content.get("mood") if isinstance(content.get("mood"), dict) else {}
+    return f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{resolved(content.get('headline', '群聊总结'))}</title>
+<style>
+:root{{--ink:#24332b;--muted:#6d7b72;--green:#6eb982;--paper:#f4faef;--yellow:#fff7cf;--pink:#fff0f1;--blue:#edf7fb;}}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--paper);color:var(--ink);font-family:"Microsoft YaHei UI","PingFang SC",sans-serif;line-height:1.65}}
+.page{{width:min(100%,640px);margin:0 auto;padding:18px 16px 30px}} .hero{{padding:24px 22px;border-radius:18px;background:linear-gradient(145deg,#91d178,#b9e997);box-shadow:0 8px 24px #6da76822}}
+.eyebrow{{display:inline-flex;padding:3px 10px;border-radius:99px;background:#efffe9aa;font-size:12px;font-weight:800;letter-spacing:.12em}} h1{{font-size:25px;line-height:1.3;margin:13px 0 9px;letter-spacing:-.02em}} .one-line{{font-size:14px;margin:0;color:#314b37}}
+.metrics{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:18px}} .metric{{background:#ffffffbd;border:1px solid #ffffff91;border-radius:11px;padding:10px 9px;min-width:0}} .metric span{{display:block;font-size:10px;color:var(--muted)}} .metric strong{{font-size:20px;margin-right:2px}} .metric small{{font-size:10px}}
+.card{{background:#fff;border:1px solid #e7efe2;border-radius:15px;margin-top:12px;padding:17px;box-shadow:0 3px 14px #748b6c0d}} .card h2{{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:7px}} .card h2:before{{content:"";width:7px;height:7px;border-radius:50%;background:var(--green)}}
+.topic-grid{{display:grid;gap:8px}} .topic-card{{padding:12px 13px;border-radius:11px;background:#fbfdf9;border-left:3px solid var(--green)}} .topic-card:nth-child(2n){{background:var(--yellow);border-color:#e6c75a}} .topic-card:nth-child(3n){{background:var(--pink);border-color:#e49ba5}} h3{{font-size:14px;margin:0 0 4px}} p{{margin:0;font-size:13px;color:#526159}}
+.member-list{{list-style:none;padding:0;margin:0;display:grid;gap:6px}} .member-list li{{display:flex;gap:10px;padding:9px 10px;background:#f7fbf5;border-radius:10px}} .rank{{font:700 12px ui-monospace;color:var(--green);padding-top:2px}} .member-list strong{{font-size:13px}} .member-list p{{font-size:12px}}
+.words{{display:flex;gap:8px 11px;align-items:baseline;flex-wrap:wrap;padding:6px 2px}} .word{{color:#4b8e60;font-weight:700;font-size:calc(11px + var(--w) * 1.5px)}} .time-row{{display:grid;grid-template-columns:35px 1fr 28px;align-items:center;gap:8px;font-size:11px;margin:7px 0}} .time-row i{{height:8px;border-radius:8px;background:#edf2e9;overflow:hidden}} .time-row b{{display:block;height:100%;background:linear-gradient(90deg,#8bd092,#5eae79);border-radius:8px}} .time-row strong{{text-align:right}}
+.fun-grid{{display:grid;grid-template-columns:1fr 1fr;gap:8px}} .fun{{padding:11px;background:var(--blue);border-radius:10px}} .fun:nth-child(2){{background:var(--pink)}} .fun span{{display:block;font-size:11px;color:var(--muted)}} .fun strong{{font-size:14px}}
+.resource-group{{border:1px solid #edf0df;border-radius:12px;padding:12px;margin-top:9px;background:#fffdf4}} .resource-group header{{display:flex;justify-content:space-between;gap:10px}} .resource-group header span{{font-size:11px;color:var(--muted)}} .group-note{{font-size:12px;margin-bottom:7px}} .resource-item{{display:grid;grid-template-columns:36px 1fr;gap:8px;border-top:1px dashed #e8e6d7;padding:9px 0}} .resource-kind{{font-size:10px;color:#48775a;background:#dff0df;border-radius:6px;height:max-content;text-align:center;padding:2px}} .resource-item strong{{font-size:12px;display:block}} .resource-item p,.resource-item small,.resource-item a{{display:block;font-size:10px;color:var(--muted)}} .resource-item a{{color:#3b79bb}}
+.detail-topic{{padding:13px 0;border-top:1px dashed #dfe8da}} .detail-topic:first-of-type{{border-top:0}} .topic-meta{{font-size:10px;color:var(--green);font-weight:700}} .detail-topic ul,.plain-list{{padding-left:18px;font-size:12px}} blockquote{{margin:8px 0 0;padding:7px 9px;background:#f3f8f0;border-left:3px solid var(--green);font-size:12px;color:#526159}}
+.redacted-card{{display:flex!important;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 13px!important;margin:6px 0;border:1px dashed #d5b96a!important;border-radius:10px;background:#fff9e5!important;list-style:none}} .redacted-card span{{font-size:10px;color:#91783a}} .redacted-card strong{{font-size:12px;color:#6b5a32}}
+.footer{{text-align:center;padding:20px 6px 0;font-size:10px;color:#8b978f}} .empty{{font-size:12px;color:#87928b}} body.export-png .html-detail{{display:none!important}} body.export-png .resource-group:nth-of-type(n+4),body.export-png .resource-item:nth-of-type(n+3){{display:none}}
+@media(max-width:520px){{.page{{padding:0 10px 20px}}.hero{{border-radius:0 0 18px 18px;margin:0 -10px}}.metrics{{grid-template-columns:repeat(2,1fr)}}}}
+</style></head><body><main class="page">
+<header class="hero"><span class="eyebrow">群聊拾遗</span><h1>{resolved(content.get('headline'))}</h1><p class="one-line">{resolved(content.get('one_line_summary'))}</p><div class="metrics">{metric_html}</div></header>
+<section class="card"><h2>今日热点</h2><div class="topic-grid">{theme_html}</div></section>
+<section class="card"><h2>活跃成员</h2><ol class="member-list">{member_html}</ol></section>
+<section class="card"><h2>群关键词</h2><div class="words">{words_html}</div></section>
+<section class="card"><h2>活跃时段</h2>{time_html}</section>
+<section class="card"><h2>今日侧写</h2><div class="fun-grid"><div class="fun"><span>整体氛围</span><strong>{resolved(mood.get('label', '平稳'))}</strong></div><div class="fun"><span>有效对话</span><strong>{_esc(stats.get('effective_message_count', 0))} 条</strong></div></div></section>
+<section class="card"><h2>当日资源整理</h2>{resource_groups_html}</section>
+<section class="card html-detail"><h2>详细讨论脉络</h2><p>{resolved(content.get('lead_summary'))}</p>{detail_topics}</section>
+{detail_list('明确结论', content.get('decisions', []) or [], 'content')}
+{detail_list('行动事项', content.get('action_items', []) or [], 'task')}
+{detail_list('开放问题', content.get('open_questions', []) or [], 'question')}
+{detail_list('风险提示', content.get('risk_flags', []) or [], 'content')}
+{detail_list('引用原话', content.get('quotes', []) or [], 'content', 'text')}
+<footer class="footer">报告由群聊拾遗生成 · {_esc(chat.get('name'))} · {_esc(period.get('report_date'))}</footer>
+</main><script>if(new URLSearchParams(location.search).get('export')==='png')document.body.classList.add('export-png');</script></body></html>"""
+
+
+def invalidate_cached_outputs_if_needed(output_dir: Path, signature: dict[str, Any]) -> None:
+    """当运行签名变化时清理当前报告数据目录中的过期阶段缓存。"""
+    signature_path = output_dir / "snapshot" / "run_signature.json"
+    try:
+        previous_signature = json.loads(signature_path.read_text(encoding="utf-8")) if signature_path.exists() else None
+    except Exception:
+        previous_signature = {}
     if previous_signature == signature:
         return
-
-    # 输入签名变化意味着阶段产物不再可信，统一清理后让本次运行重新生成。
-    for dirname in ["map", "reduce", "final"]:
+    for dirname in ("map", "reduce", "final"):
         target_dir = output_dir / dirname
         if target_dir.exists():
             shutil.rmtree(target_dir)
-
-    for pattern in (
-        "group_insight_report.json",
-        "group_insight_report.html",
-        "group_insight_report.png",
-        "*_群聊总结.json",
-        "*_群聊总结.html",
-        "*_群聊总结.png",
-    ):
+    for pattern in ("group_insight_report.json", "group_insight_report.html", "group_insight_report.png", "*_群聊总结.json", "*_群聊总结.html", "*_群聊总结.png"):
         for target_file in output_dir.glob(pattern):
             if target_file.is_file():
                 target_file.unlink()

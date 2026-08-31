@@ -1,0 +1,198 @@
+"""当日链接与文件资源的确定性提取、校验和主题归类。"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+import urllib.parse
+from collections import OrderedDict
+from typing import Any
+
+from .common import extract_topic_tokens, normalize_text, topic_similarity
+from .models import StructuredMessage
+
+URL_RE = re.compile(r"https?://[^\s<>\]\[\"']+", re.IGNORECASE)
+
+
+def _clean_url(value: str) -> str:
+    value = (value or "").strip().rstrip(".,;:!?，。；：！？、）)]}")
+    if not value:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return ""
+    return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+
+def _resource_id(message: StructuredMessage, kind: str, identity: str) -> str:
+    seed = f"{message.chat_id}|{message.id}|{kind}|{identity}"
+    return "res_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _context_summary(messages: list[StructuredMessage], index: int) -> str:
+    """生成短上下文摘要，不持久化完整消息窗口。"""
+
+    current = messages[index]
+    snippets: list[str] = []
+    for nearby_index in range(max(0, index - 2), min(len(messages), index + 3)):
+        if nearby_index == index:
+            continue
+        nearby = messages[nearby_index]
+        if abs(nearby.timestamp - current.timestamp) > 15 * 60:
+            continue
+        text = URL_RE.sub("", normalize_text(nearby.text, max_len=90)).strip(" —-；;，,")
+        if not text or text.startswith("[") and text.endswith("]"):
+            continue
+        snippets.append(text)
+        if len(snippets) >= 2:
+            break
+    return normalize_text("；".join(snippets), max_len=180)
+
+
+def extract_resources(messages: list[StructuredMessage]) -> list[dict[str, Any]]:
+    """从普通 URL、链接卡片和文件卡片中提取稳定资源对象。"""
+
+    resources: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, message in enumerate(messages):
+        metadata = message.metadata or {}
+        rich_kind = str(metadata.get("rich_kind") or "")
+        context = _context_summary(messages, index)
+
+        if rich_kind in {"link_card", "file_card"}:
+            kind = "file" if rich_kind == "file_card" else "link"
+            url = _clean_url(str(metadata.get("url") or ""))
+            title = normalize_text(metadata.get("title", ""), max_len=180)
+            file_name = normalize_text(metadata.get("file_name", "") or title, max_len=180)
+            identity = url or file_name or message.id
+            key = (kind, identity.casefold())
+            if key not in seen:
+                seen.add(key)
+                resources.append(
+                    {
+                        "id": _resource_id(message, kind, identity),
+                        "type": kind,
+                        "title": file_name if kind == "file" else (title or url),
+                        "url": url,
+                        "sender_id": message.sender_username,
+                        "sender": message.sender,
+                        "sent_at": message.time,
+                        "message_id": message.id,
+                        "file_name": file_name if kind == "file" else "",
+                        "file_extension": normalize_text(metadata.get("file_extension", "") or metadata.get("file_ext", ""), max_len=24),
+                        "file_size": int(metadata.get("file_size") or 0),
+                        "source": normalize_text(metadata.get("source", ""), max_len=80),
+                        "context_summary": context or normalize_text(metadata.get("summary", ""), max_len=180),
+                    }
+                )
+
+        rich_url = _clean_url(str(metadata.get("url") or ""))
+        for raw_url in URL_RE.findall(message.text or ""):
+            url = _clean_url(raw_url)
+            if not url or url == rich_url:
+                continue
+            key = ("link", url.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            resources.append(
+                {
+                    "id": _resource_id(message, "link", url),
+                    "type": "link",
+                    "title": urllib.parse.urlsplit(url).netloc,
+                    "url": url,
+                    "sender_id": message.sender_username,
+                    "sender": message.sender,
+                    "sent_at": message.time,
+                    "message_id": message.id,
+                    "file_name": "",
+                    "file_extension": "",
+                    "file_size": 0,
+                    "source": "普通 URL",
+                    "context_summary": context,
+                }
+            )
+    return resources
+
+
+def compact_resources_for_prompt(resources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """仅向模型提供主题归类所需的受控字段。"""
+
+    return [
+        {
+            "id": item.get("id", ""),
+            "type": item.get("type", ""),
+            "title": item.get("title", ""),
+            "source": item.get("source", ""),
+            "sender": item.get("sender", ""),
+            "sent_at": item.get("sent_at", ""),
+            "context_summary": item.get("context_summary", ""),
+        }
+        for item in resources
+    ]
+
+
+def _local_topic(item: dict[str, Any], topics: list[dict[str, Any]]) -> tuple[str, str]:
+    item_tokens = extract_topic_tokens(
+        " ".join(
+            str(item.get(key) or "")
+            for key in ("title", "source", "context_summary")
+        )
+    )
+    best_title = ""
+    best_key = ""
+    best_score = 0.0
+    for index, topic in enumerate(topics, start=1):
+        title = normalize_text(topic.get("title", ""), max_len=60)
+        summary = normalize_text(topic.get("summary", ""), max_len=160)
+        score = topic_similarity(item_tokens, extract_topic_tokens(f"{title} {summary}"))
+        if score > best_score:
+            best_title = title
+            best_key = str(topic.get("id") or f"topic-{index}")
+            best_score = score
+    return (best_key, best_title) if best_title and best_score >= 0.08 else ("other", "其他 / 未归类")
+
+
+def build_resource_catalog(
+    resources: list[dict[str, Any]],
+    ai_groups: list[dict[str, Any]] | None,
+    topics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """校验模型归类并为遗漏资源提供本地主题兜底。"""
+
+    by_id = {str(item.get("id")): dict(item) for item in resources if item.get("id")}
+    assignments: dict[str, tuple[str, str, str]] = {}
+    for index, group in enumerate(ai_groups or [], start=1):
+        title = normalize_text(group.get("topic", ""), max_len=60)
+        if not title:
+            continue
+        group_key = (
+            "other"
+            if title in {"其他", "未归类", "其他 / 未归类"}
+            else normalize_text(group.get("topic_id", ""), max_len=80) or f"ai-{index}"
+        )
+        summary = normalize_text(group.get("summary", ""), max_len=180)
+        for resource_id in group.get("resource_ids", []):
+            resource_id = str(resource_id)
+            if resource_id in by_id and resource_id not in assignments:
+                assignments[resource_id] = (group_key, title, summary)
+
+    grouped: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+    for resource_id, item in by_id.items():
+        if resource_id in assignments:
+            topic_key, topic_title, group_summary = assignments[resource_id]
+        else:
+            topic_key, topic_title = _local_topic(item, topics)
+            group_summary = ""
+        item["topic_id"] = topic_key
+        item["topic"] = topic_title
+        group = grouped.setdefault(
+            topic_key,
+            {"topic_id": topic_key, "topic": topic_title, "summary": group_summary, "items": []},
+        )
+        group["items"].append(item)
+
+    groups = list(grouped.values())
+    groups.sort(key=lambda group: (group["topic_id"] == "other", -len(group["items"]), group["topic"]))
+    return {"count": len(resources), "groups": groups}

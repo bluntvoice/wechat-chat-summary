@@ -63,6 +63,16 @@ def build_rich_card_preview(metadata: dict[str, Any], fallback_text: str) -> str
         if item_summary:
             parts.append(f"包含：{item_summary}")
         return "；".join(parts)
+    if kind == "file_card":
+        file_name = collapse_text(metadata.get("file_name", "") or title, max_len=100)
+        file_ext = collapse_text(metadata.get("file_ext", ""), max_len=16)
+        file_size = int(metadata.get("file_size", 0) or 0)
+        parts = [f"[文件] {file_name}" if file_name else "[文件]"]
+        if file_ext:
+            parts.append(f"格式：{file_ext}")
+        if file_size:
+            parts.append(f"大小：{file_size} 字节")
+        return "；".join(parts)
     return fallback_text
 
 
@@ -224,14 +234,26 @@ def extract_rich_message_metadata(
         return metadata
 
     if app_type == 6:
-        return {
+        appattach = appmsg.find(".//appattach")
+        file_name = title
+        file_ext = ""
+        file_size = 0
+        if appattach is not None:
+            file_ext = collapse_text(appattach.findtext("fileext") or "", max_len=16)
+            file_size = parse_int(appattach.findtext("totallen") or 0, 0)
+        metadata = {
             "rich_kind": "file_card",
             "title": title,
+            "file_name": file_name,
+            "file_ext": file_ext,
+            "file_size": file_size,
             "summary": summary,
             "source": source,
             "url": url,
             "app_type": app_type,
         }
+        metadata["analysis_text"] = build_rich_card_preview(metadata, f"[文件] {title}" if title else "[文件]")
+        return metadata
 
     return {}
 
@@ -246,4 +268,6 @@ def has_meaningful_rich_content(message) -> bool:
         return bool(metadata.get("title") or metadata.get("summary"))
     if kind == "merged_chat":
         return bool(metadata.get("title") or metadata.get("summary") or metadata.get("items"))
+    if kind == "file_card":
+        return bool(metadata.get("file_name") or metadata.get("title"))
     return False

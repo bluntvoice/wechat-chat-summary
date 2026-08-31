@@ -131,6 +131,39 @@ def _analysis_text(row: dict[str, Any], msg_type: str) -> str:
 
 def _build_metadata(row: dict[str, Any], raw_content: str, local_type: int) -> dict[str, Any]:
     metadata = extract_rich_message_metadata(raw_content, local_type, True)
+    render_type = str(row.get("renderType") or "").strip().lower()
+    title = normalize_text(str(row.get("title") or ""), max_len=180)
+    url = normalize_text(str(row.get("url") or ""), max_len=600)
+    content = normalize_text(str(row.get("content") or ""), max_len=240)
+    source_value = row.get("from")
+    source = normalize_text(source_value if isinstance(source_value, str) else "", max_len=80)
+    if not metadata.get("rich_kind") and render_type == "link":
+        metadata.update(
+            {
+                "rich_kind": "link_card",
+                "title": title,
+                "summary": content if content != title else "",
+                "source": source,
+                "url": url,
+                "analysis_text": f"[链接] {title or url}" + (f"；摘要：{content}" if content and content != title else ""),
+            }
+        )
+    elif not metadata.get("rich_kind") and render_type in {"file", "attachment"}:
+        file_name = title or content
+        file_ext = file_name.rsplit(".", 1)[-1] if "." in file_name else ""
+        metadata.update(
+            {
+                "rich_kind": "file_card",
+                "title": file_name,
+                "file_name": file_name,
+                "file_ext": normalize_text(file_ext, max_len=16),
+                "file_size": int(row.get("fileSize") or 0),
+                "url": url,
+                "analysis_text": f"[文件] {file_name}" if file_name else "[文件]",
+            }
+        )
+    elif render_type.lower() in {"redpacket", "transfer"}:
+        metadata.setdefault("interaction_kind", "redpacket")
     metadata.update(
         {
             "data_source": "wechat_data_analysis_api",

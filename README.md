@@ -1,8 +1,8 @@
 # 微信群聊总结（wechat-chat-summary）
 
 读取 `WeChatDataAnalysis` 提供的本地 API，按指定群聊和时间范围生成结构化统计、
-AI 总结、JSON、HTML 及 300 DPI PNG 长图。项目现已包含第一阶段 Windows 桌面端，
-可以完成“连接数据源 → 选择群聊和日期 → 配置 AI → 生成并打开报告”的闭环。
+AI 总结、统一结构 JSON、完整 HTML 及 300 DPI PNG 摘要长图。v0.2.0 已包含 Windows 桌面端闭环、
+SQLite 历史数据底座、当日链接/文件整理、真实阶段进度、人工屏蔽，以及面向手机分享的日报长图。
 
 ## 项目来源与使用说明
 
@@ -16,7 +16,7 @@ AI 总结、JSON、HTML 及 300 DPI PNG 长图。项目现已包含第一阶段 
 ## 当前架构
 
 - `WeChatDataAnalysis`：负责微信 4.x 数据读取、解密和本地 API。
-- `group_insight/`：负责消息归一化、统计、分片、DeepSeek 分析和报告渲染。
+- `group_insight/`：负责消息归一化、统计、分片、AI 分析、资源整理、统一报告结构、SQLite 历史索引和报告渲染。
 - `desktop/`：Tauri 2 + React/TypeScript 桌面端，通过 UTF-8 JSONL 调用 Python 核心。
 - `pywechat/`：可选的微信 UI 自动发送子模块。
 - AI 分析支持 DeepSeek 与通用 OpenAI Compatible API；MCP 属于后续阶段。
@@ -29,7 +29,7 @@ AI 总结、JSON、HTML 及 300 DPI PNG 长图。项目现已包含第一阶段 
 填写 API Key 和独立输出目录：
 
 ```dotenv
-DEEPSEEK_API_KEY=sk-your-deepseek-api-key
+DEEPSEEK_API_KEY=<API_KEY_PLACEHOLDER>
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
 WECHAT_DATA_API_URL=http://127.0.0.1:10392
@@ -58,7 +58,22 @@ npm run tauri dev
 当前阶段提供源码可运行的桌面闭环，并提供不依赖源码目录的本地 Windows 测试安装包
 构建脚本。测试包默认安装到 `D:\工具\WeChat Chat Summary\program`，允许用户改选
 目录；程序数据和报告目录位于 `program` 之外，升级或卸载测试程序不会删除它们。
-正式签名、自动更新、GitHub Release、历史中心、搜索、热力图和 MCP 尚未完成。
+当前历史数据底座和本地 FTS 已建立，但历史中心页面、搜索界面、热力图、MCP、正式签名、
+自动更新与 GitHub Release 尚未完成，不应将这些后续界面描述为已实现。
+
+桌面端默认按单日生成，并可切换自定义日期区间；成功生成后会记住上次群聊。AI 区域提供
+独立“保存设置”和“测试 API”按钮，生成过程中显示真实阶段、百分比和已用时间。完成后可
+分别打开 PNG 摘要长图、完整 HTML 或报告所在目录。
+
+报告生成后可进入“编辑并屏蔽内容”，按模块逐项勾选热点、讨论、成员、结论、行动、
+问题、风险、引用和资源。屏蔽只在本机读取既有结构化 JSON 并重新渲染，不重新读取群聊、
+不再次调用 AI；结果保存为 `_v2`、`_v3` 等新版本，原报告不被覆盖。屏蔽版 JSON、HTML、
+PNG 和搜索索引不保留被屏蔽条目的标题、成员或总结，只显示所属时间及“已屏蔽，建议在群内查看”。
+“轻松插曲”不再作为报告模块展示，但玩笑/反话识别仍用于阻止其进入正式结论。
+
+桌面端还支持可关闭的每日定时生成，可固定群聊与时间。该功能属于软件内置定时器：只有
+软件保持运行时才会触发，每天最多自动尝试一次，不创建 Windows 任务计划，也不会在软件
+关闭期间后台运行。
 
 ## 运行
 
@@ -99,7 +114,13 @@ PNG 会写入 300 DPI 的 `pHYs` 元数据，不会为了修改 DPI 而重采样
 ```
 
 同日重复生成使用 `_v2`、`_v3` 递增版本，不覆盖旧报告。多日总结使用
-`YYYY-MM-DD_至_YYYY-MM-DD`。报告目录不保存完整原始消息分片。
+`YYYY-MM-DD_至_YYYY-MM-DD`。报告 JSON 使用 `report schema 2.0`，与 HTML、PNG 和
+SQLite 历史索引共用结构；报告目录和历史库均不保存完整原始消息分片。屏蔽记录进入
+`report_redactions` 表，被屏蔽正文不会写入新版本或 FTS 索引。
+
+SQLite 历史库默认位于 `D:\工具\WeChat Chat Summary\data\history.sqlite3`。软件会安全
+索引当前导出根目录中的既有报告 JSON，不修改旧文件。当前仅提供数据底座，历史中心与搜索
+界面属于后续版本。
 
 ## 测试
 

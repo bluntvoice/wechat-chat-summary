@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import concurrent.futures
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .cache_utils import build_stage_fingerprint, load_cached_stage_output, write_stage_output
 from .chunking import chunk_payload
@@ -18,6 +18,7 @@ from .llm import (
     build_reduce_prompts,
     llm_cache_identity,
     structured_stage_max_tokens_for_client,
+    LLMClientProtocol,
 )
 from .models import MessageChunk
 from .report_model import (
@@ -32,6 +33,7 @@ def run_map_stage(
     dry_run: bool,
     client: LLMClientProtocol | None,
     max_workers: int,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """并发执行 map 阶段，生成每个消息片段的结构化分析。"""
     map_dir = ensure_dir(output_dir / "map")
@@ -72,7 +74,11 @@ def run_map_stage(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(analyze_chunk, chunk) for chunk in chunks]
-        results = [future.result() for future in futures]
+        results = []
+        for completed, future in enumerate(concurrent.futures.as_completed(futures), start=1):
+            results.append(future.result())
+            if progress_callback:
+                progress_callback(completed, len(futures))
 
     results.sort(key=lambda item: item.get("time_range", {}).get("start", ""))
     return results
@@ -136,12 +142,20 @@ def run_reduce_stage(
     dry_run: bool,
     client: LLMClientProtocol | None,
     fan_in: int,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """循环执行 reduce，直到剩余结果可直接进入 final。"""
     current = map_results[:]
     round_index = 1
+    total_rounds = 0
+    estimate_count = len(current)
+    while estimate_count > fan_in:
+        estimate_count = (estimate_count + fan_in - 1) // fan_in
+        total_rounds += 1
     while len(current) > fan_in:
         current = reduce_once(current, output_dir, round_index, fan_in, dry_run, client)
+        if progress_callback:
+            progress_callback(round_index, max(1, total_rounds))
         round_index += 1
     return current
 
@@ -155,6 +169,7 @@ def run_final_stage(
     output_dir: Path,
     dry_run: bool,
     client: LLMClientProtocol | None,
+    resources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """基于 reduce bundles 生成并修复最终日报结构。"""
     final_dir = ensure_dir(output_dir / "final")
@@ -166,12 +181,13 @@ def run_final_stage(
         "end_time": end_time,
         "stats": stats,
         "bundles": bundles,
+        "resources": resources or [],
     }
     write_json(input_path, payload)
     system_prompt = ""
     user_prompt = ""
     if not dry_run:
-        system_prompt, user_prompt = build_final_prompts(chat_name, start_time, end_time, stats, bundles)
+        system_prompt, user_prompt = build_final_prompts(chat_name, start_time, end_time, stats, bundles, resources)
     fingerprint = build_stage_fingerprint(
         "final",
         payload,

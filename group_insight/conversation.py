@@ -48,6 +48,8 @@ def classify_message_category(message: StructuredMessage) -> str:
     if message.msg_type == "文本":
         return "text"
     if message.msg_type == "链接/文件":
+        if metadata.get("interaction_kind") in {"redpacket", "direct_redpacket"}:
+            return "redpacket"
         if "拍了拍" in text:
             return "pat"
         if "微信红包" in text:
@@ -56,6 +58,8 @@ def classify_message_category(message: StructuredMessage) -> str:
             return "merged_chat"
         if rich_kind == "link_card":
             return "link_card"
+        if rich_kind == "file_card":
+            return "file_card"
         if "聊天记录" in text:
             return "merged_chat"
         if text.strip() in {"[链接/文件]", "[链接]"}:
@@ -82,6 +86,7 @@ def get_message_category_labels() -> dict[str, str]:
         "merged_chat": "合并聊天记录",
         "bare_link_file": "占位链接/文件",
         "link_card": "链接卡片",
+        "file_card": "文件",
         "other": "其他",
     }
 
@@ -91,7 +96,7 @@ def is_effective_conversation_message(message: StructuredMessage) -> bool:
     if message.sender == "unknown":
         return False
     category = classify_message_category(message)
-    if category in {"link_card", "merged_chat"}:
+    if category in {"link_card", "file_card", "merged_chat"}:
         from .rich_content import has_meaningful_rich_content
         return has_meaningful_rich_content(message)
     return category in {"text", "reply", "emoji", "image", "voice", "video"}
@@ -123,4 +128,5 @@ def compact_prompt_stats(stats: dict[str, Any]) -> dict[str, Any]:
         "effective_breakdown": stats.get("effective_breakdown", []),
         "time_segment_breakdown": stats.get("time_segment_breakdown", []),
         "word_cloud": stats.get("word_cloud", [])[:20],
+        "resource_breakdown": stats.get("resource_breakdown", {}),
     }

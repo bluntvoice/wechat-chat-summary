@@ -14,6 +14,60 @@ from .models import MessageChunk
 from .settings import MAX_REPORT_SECTIONS, SECTION_TOPIC_COVERAGE_THRESHOLD
 
 
+NON_FORMAL_TONES = {"joke", "sarcasm", "casual", "uncertain", "teasing", "夸张", "反话", "玩笑", "调侃", "闲聊"}
+
+
+def filter_serious_items(items: Any, *, content_key: str = "content", threshold: float = 0.72) -> list[Any]:
+    """过滤被模型明确标为玩笑/低置信度的严肃事项，同时兼容旧版字符串结构。"""
+    if not isinstance(items, list):
+        return []
+    filtered: list[Any] = []
+    for item in items:
+        if isinstance(item, str):
+            text = normalize_text(item, max_len=320)
+            if text:
+                filtered.append(text)
+            continue
+        if not isinstance(item, dict):
+            continue
+        tone = str(item.get("tone") or "").strip().lower()
+        if tone in NON_FORMAL_TONES:
+            continue
+        confidence_value = item.get("confidence")
+        try:
+            confidence = float(confidence_value) if confidence_value not in (None, "") else None
+        except (TypeError, ValueError):
+            confidence = None
+        if confidence is not None and confidence < threshold:
+            continue
+        cleaned = dict(item)
+        if content_key in cleaned:
+            cleaned[content_key] = normalize_text(cleaned.get(content_key, ""), max_len=320)
+            if not cleaned[content_key]:
+                continue
+        filtered.append(cleaned)
+    return filtered
+
+
+def normalize_light_moments(items: Any) -> list[dict[str, Any]]:
+    """清洗轻松插曲，避免玩笑丢失后又进入严肃模块。"""
+    if not isinstance(items, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, str):
+            content = normalize_text(item, max_len=320)
+            if content:
+                result.append({"content": content, "tone": "casual"})
+        elif isinstance(item, dict):
+            content = normalize_text(item.get("content", ""), max_len=320)
+            if content:
+                result.append({**item, "content": content, "tone": str(item.get("tone") or "casual")})
+        if len(result) >= 6:
+            break
+    return result
+
+
 def parse_report_time(value: str) -> datetime | None:
     """解析报表 section 中允许的时间字符串。"""
     value = (value or "").strip()
@@ -247,14 +301,17 @@ def repair_final_report(
         "headline": normalize_text(report.get("headline", ""), max_len=120) or f"{chat_name} 群洞察报表",
         "tagline": normalize_text(report.get("tagline", ""), max_len=180) or f"{start_time} - {end_time}",
         "lead_summary": normalize_text(report.get("lead_summary", ""), max_len=1600),
+        "one_line_summary": normalize_text(report.get("one_line_summary", ""), max_len=120),
         "theme_cards": dedupe_theme_cards(report.get("theme_cards", []), limit=4),
         "sections": dedupe_sections(report.get("sections", [])),
         "participant_insights": report.get("participant_insights", [])[:6],
         "quotes": report.get("quotes", [])[:4],
-        "decisions": report.get("decisions", [])[:6],
-        "action_items": report.get("action_items", [])[:6],
+        "decisions": filter_serious_items(report.get("decisions", []), content_key="content")[:6],
+        "action_items": filter_serious_items(report.get("action_items", []), content_key="task")[:6],
         "open_questions": report.get("open_questions", [])[:6],
-        "risk_flags": report.get("risk_flags", [])[:6],
+        "risk_flags": filter_serious_items(report.get("risk_flags", []), content_key="content")[:6],
+        "light_moments": normalize_light_moments(report.get("light_moments", [])),
+        "resource_groups": report.get("resource_groups", []) if isinstance(report.get("resource_groups"), list) else [],
         "mood": report.get("mood", {}) if isinstance(report.get("mood"), dict) else {},
     }
 
@@ -271,6 +328,8 @@ def repair_final_report(
             f"有效对话 {stats.get('effective_message_count', 0)} 条，"
             f"参与成员 {stats.get('participant_count', 0)} 位。"
         )
+    if not repaired["one_line_summary"]:
+        repaired["one_line_summary"] = normalize_text(repaired["lead_summary"], max_len=90)
     if not repaired["theme_cards"]:
         repaired["theme_cards"] = build_theme_cards_from_bundles(bundles) or [
             {
@@ -340,6 +399,7 @@ def fallback_map_analysis(chunk: MessageChunk) -> dict[str, Any]:
         "decisions": [],
         "action_items": [],
         "open_questions": [],
+        "light_moments": [],
         "mood": {
             "label": "活跃",
             "reason": "使用本地 dry-run，未调用外部模型，仅基于消息量做概览。",
@@ -358,6 +418,7 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
     decisions = []
     open_questions = []
     risk_flags = []
+    light_moments = []
     source_refs = []
 
     for item in items:
@@ -371,6 +432,7 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
         decisions.extend(item.get("decisions", []))
         open_questions.extend(item.get("open_questions", []))
         risk_flags.extend(item.get("risk_flags", []))
+        light_moments.extend(item.get("light_moments", []))
 
     summary = items[0].get("summary", "") if items else ""
     return {
@@ -434,6 +496,7 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
             for question in open_questions[:6]
         ],
         "risk_flags": risk_flags[:6],
+        "light_moments": light_moments[:6],
         "mood": {
             "label": "概览",
             "reason": "本地 dry-run 合并结果。",
@@ -508,6 +571,7 @@ def fallback_final_report(
             f"{interaction_summary}"
             "当前为本地 dry-run 结果，已完成导出、分片、汇总和报表渲染链路验证。"
         ),
+        "one_line_summary": f"{stats['participant_count']} 位群友参与，围绕 {len(theme_cards)} 个主要话题展开讨论。",
         "theme_cards": theme_cards,
         "sections": sections[:MAX_REPORT_SECTIONS],
         "participant_insights": [
@@ -522,6 +586,8 @@ def fallback_final_report(
         "action_items": [],
         "open_questions": [],
         "risk_flags": ["当前为 dry-run，未接入外部语义分析。"],
+        "light_moments": [],
+        "resource_groups": [],
         "mood": {
             "label": "活跃",
             "reason": "基于消息量与参与人数的本地判断。",

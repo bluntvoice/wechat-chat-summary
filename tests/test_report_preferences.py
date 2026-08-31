@@ -19,7 +19,8 @@ class ReportPreferenceTests(unittest.TestCase):
             stats={"message_count": 1, "participant_count": 1},
             report={},
         )
-        self.assertEqual(html.count("群聊总结：2026-08-28"), 1)
+        self.assertEqual(html.count("测试群：20260828 总结"), 2)  # title 与首图主标题各一次
+        self.assertEqual(html.count('<span class="eyebrow">群聊拾遗</span>'), 1)
         self.assertNotIn("统计区间：", html)
 
     def test_pat_rankings_are_not_exposed(self):

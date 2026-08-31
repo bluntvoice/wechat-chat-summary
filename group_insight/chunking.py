@@ -222,6 +222,10 @@ def chunk_payload(chunk: MessageChunk) -> dict[str, Any]:
                         "title": message.metadata.get("title", ""),
                         "summary": message.metadata.get("summary", ""),
                         "source": message.metadata.get("source", ""),
+                        "url": message.metadata.get("url", ""),
+                        "file_name": message.metadata.get("file_name", ""),
+                        "file_ext": message.metadata.get("file_ext", ""),
+                        "file_size": message.metadata.get("file_size", 0),
                         "items": message.metadata.get("items", [])[:4],
                     }
                     if message.metadata

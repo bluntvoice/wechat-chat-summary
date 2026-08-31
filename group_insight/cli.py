@@ -14,8 +14,12 @@ from .common import ensure_dir, normalize_text, slugify, write_json
 from .fetching import fetch_structured_messages
 from .llm import DeepSeekClient, LLMClientProtocol, format_balance_delta, format_balance_snapshot
 from .pipeline import run_final_stage, run_map_stage, run_reduce_stage
+from .progress import ProgressReporter
 from .report_paths import allocate_report_paths, build_report_date_label
-from .rendering import build_report_payload, invalidate_cached_outputs_if_needed, render_html_report
+from .rendering import invalidate_cached_outputs_if_needed, render_html_report
+from .report_schema import build_report_document
+from .resources import build_resource_catalog, compact_resources_for_prompt, extract_resources
+from .history_store import HistoryStore
 from .settings import (
     DEFAULT_ANALYZE_CHAT,
     DEFAULT_ANALYZE_END,
@@ -165,6 +169,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-json-repair", action="store_true", help="允许 DeepSeek 返回损坏 JSON 时自动发起一次修复请求。默认关闭，避免掩盖模型输出问题。")
     parser.add_argument("--output-dir", default="", help="输出目录；不传则自动生成。")
     parser.add_argument("--output-root", default="", help="报告导出根目录；按群聊、导出图和报告数据自动归档。")
+    parser.add_argument("--progress-file", default="", help="可选的跨进程进度 JSON 文件路径，供桌面端轮询。")
     parser.add_argument("--dry-run", action="store_true", help="不调用 DeepSeek，只验证导出、切片、reduce 和 HTML 渲染。")
     parser.add_argument("--no-image", action="store_true", help="跳过浏览器渲染 PNG 导出。")
     parser.add_argument("--image-width", type=int, default=DEFAULT_REPORT_IMAGE_WIDTH, help="导出 PNG 时的浏览器视口宽度。")
@@ -193,6 +198,8 @@ def main() -> None:
     """执行日报报表的完整生成、渲染与可选发送流程。"""
 
     args = parse_args()
+    progress = ProgressReporter(args.progress_file)
+    progress.update("preparing", 2, "正在检查生成参数…")
     # 自动时间窗只负责补默认值，不覆盖用户显式传入的 --start / --end。
     if args.auto_time:
         auto_start, auto_end = compute_auto_time_range()
@@ -211,6 +218,7 @@ def main() -> None:
     if not args.dry_run and not api_key:
         raise SystemExit("未提供 DeepSeek API Key。请传 --api-key 或设置环境变量 DEEPSEEK_API_KEY。")
 
+    progress.update("fetching", 7, "正在从 WeChatDataAnalysis 读取群聊消息…")
     ctx, messages = fetch_structured_messages(
         args.chat,
         args.start,
@@ -223,6 +231,7 @@ def main() -> None:
         raise SystemExit("指定时间范围内没有消息。")
 
     # 先做分片与本地统计，再进入 LLM 阶段，便于保存快照和复用中间产物。
+    progress.update("analyzing", 15, "正在整理消息、资源与本地统计…")
     chunks, chunk_plan = build_analysis_chunks(
         messages,
         max_messages=args.chunk_max_messages,
@@ -234,6 +243,11 @@ def main() -> None:
         min_chunk_messages=args.topic_min_chunk_messages,
     )
     stats = build_local_stats(messages)
+    extracted_resources = extract_resources(messages)
+    stats["resource_breakdown"] = {
+        "link": sum(1 for item in extracted_resources if item.get("type") == "link"),
+        "file": sum(1 for item in extracted_resources if item.get("type") == "file"),
+    }
 
     chat_slug = slugify(ctx["display_name"])
     date_label = build_report_date_label(args.start, args.end)
@@ -245,6 +259,7 @@ def main() -> None:
         image_output_path = output_dir / f"{output_stem}.png"
         image_dir = output_dir
         chat_report_dir = output_dir
+        report_version = 1
     else:
         report_paths = allocate_report_paths(
             Path(args.output_root) if args.output_root else DEFAULT_OUTPUT_ROOT,
@@ -257,6 +272,7 @@ def main() -> None:
         image_output_path = report_paths.image_path
         image_dir = report_paths.image_dir
         chat_report_dir = report_paths.chat_dir
+        report_version = report_paths.version
 
     snapshot_dir = ensure_dir(output_dir / "snapshot")
 
@@ -329,20 +345,31 @@ def main() -> None:
         )
 
     # 固定流程按 map -> reduce -> final 逐级汇总。
+    progress.update("map", 20, "正在分片分析群聊内容…", completed=0, total=len(chunks))
     map_results = run_map_stage(
         chunks,
         output_dir=output_dir,
         dry_run=args.dry_run,
         client=client,
         max_workers=effective_max_workers,
+        progress_callback=lambda completed, total: progress.update(
+            "map", 20 + round(40 * completed / max(1, total)),
+            f"正在分析第 {completed}/{total} 个内容片段…", completed=completed, total=total,
+        ),
     )
+    progress.update("reduce", 63, "正在合并各时段主题…")
     reduced_bundles = run_reduce_stage(
         map_results,
         output_dir=output_dir,
         dry_run=args.dry_run,
         client=client,
         fan_in=max(2, args.reduce_fan_in),
+        progress_callback=lambda completed, total: progress.update(
+            "reduce", 63 + round(12 * completed / max(1, total)),
+            f"正在合并主题（{completed}/{total}）…", completed=completed, total=total,
+        ),
     )
+    progress.update("final", 78, "正在生成结构化日报与资源主题…")
     final_report = run_final_stage(
         chat_name=ctx["display_name"],
         start_time=args.start,
@@ -352,39 +379,49 @@ def main() -> None:
         output_dir=output_dir,
         dry_run=args.dry_run,
         client=client,
+        resources=compact_resources_for_prompt(extracted_resources),
     )
     balance_after = None if args.dry_run else capture_balance_snapshot(client, "after")
 
-    payload = build_report_payload(
+    resource_catalog = build_resource_catalog(
+        extracted_resources,
+        final_report.get("resource_groups", []),
+        final_report.get("sections", []) or final_report.get("theme_cards", []),
+    )
+    json_output_path = output_dir / f"{output_stem}.json"
+    html_output_path = output_dir / f"{output_stem}.html"
+    exports = {
+        "json": str(json_output_path.resolve()),
+        "html": str(html_output_path.resolve()),
+        "png": "" if args.no_image else str(image_output_path.resolve()),
+    }
+    progress.update("rendering", 84, "正在生成统一报告数据…")
+    payload = build_report_document(
         ctx=ctx,
         start_time=args.start,
         end_time=args.end,
+        version=report_version,
         stats=stats,
         report=final_report,
+        resources=resource_catalog,
+        exports=exports,
         chunk_count=len(chunks),
         chunk_plan=chunk_plan,
         dry_run=args.dry_run,
         provider=provider,
         model=model,
     )
-    json_output_path = output_dir / f"{output_stem}.json"
     write_json(json_output_path, payload)
 
     # 生成 HTML 和 PNG，最后按需发送到微信会话。
-    html_text = render_html_report(
-        chat_name=ctx["display_name"],
-        chat_id=ctx["username"],
-        start_time=args.start,
-        end_time=args.end,
-        stats=stats,
-        report=final_report,
-    )
-    html_output_path = output_dir / f"{output_stem}.html"
+    progress.update("rendering", 88, "正在排版 HTML 报告…")
+    html_text = render_html_report(payload)
     html_output_path.write_text(html_text, encoding="utf-8")
     image_error = ""
     send_requested, send_targets, send_text = resolve_send_delivery(args)
     send_results: list[tuple[str, str, str]] = []
     if not args.no_image:
+        progress.update("image", 92, "正在导出日报长图…")
         image_error = export_report_image(
             html_output_path,
             image_output_path,
@@ -392,6 +429,9 @@ def main() -> None:
             timeout_ms=max(5000, args.image_timeout_ms),
             dpi=max(1, args.image_dpi),
         )
+    progress.update("history", 97, "正在保存历史索引…")
+    with HistoryStore() as history:
+        history.upsert_report(payload)
     if send_requested:
         if args.no_image:
             send_results = [(target, "failed", "已指定 --no-image，无法发送 PNG。") for target in send_targets]
@@ -490,3 +530,8 @@ def main() -> None:
                 print(f"发送: sent -> {target}")
             else:
                 print(f"发送: failed -> {target or '(none)'} ({detail})")
+    progress.update(
+        "completed", 100, "报告生成完成",
+        json_path=str(json_output_path), html_path=str(html_output_path),
+        png_path=str(image_output_path) if image_output_path.exists() else "",
+    )

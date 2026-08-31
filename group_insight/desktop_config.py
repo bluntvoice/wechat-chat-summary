@@ -27,6 +27,16 @@ def default_settings() -> dict[str, Any]:
         "thinking": False,
         "export_root": str(DEFAULT_OUTPUT_ROOT),
         "image_dpi": 300,
+        "range_mode": "single",
+        "last_chat_id": "",
+        "last_chat_name": "",
+        "schedule_enabled": False,
+        "schedule_time": "22:30",
+        "schedule_chat_id": "",
+        "schedule_chat_name": "",
+        "schedule_last_attempt_date": "",
+        "schedule_last_run_date": "",
+        "schedule_last_status": "",
     }
 
 
@@ -71,6 +81,16 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
         "thinking",
         "export_root",
         "image_dpi",
+        "range_mode",
+        "last_chat_id",
+        "last_chat_name",
+        "schedule_enabled",
+        "schedule_time",
+        "schedule_chat_id",
+        "schedule_chat_name",
+        "schedule_last_attempt_date",
+        "schedule_last_run_date",
+        "schedule_last_status",
     }
     for key in allowed:
         if key in values:

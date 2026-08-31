@@ -47,6 +47,17 @@ class FakeMessageClient:
         }
 
 
+class FakeLinkClient(FakeMessageClient):
+    def iter_messages(self, username, *, start_ts, end_ts, batch_size):
+        yield {
+            "id": "link-1", "localId": 3, "type": 21474836529,
+            "createTime": int(datetime(2026, 8, 28, 10, 0, 0).timestamp()),
+            "senderUsername": "wxid_a", "senderDisplayName": "小甲",
+            "renderType": "link", "content": "链接摘要", "title": "示例资料",
+            "url": "https://example.com/document", "isSent": False,
+        }
+
+
 class FetchingAPITests(unittest.TestCase):
     @patch("group_insight.fetching.WeChatDataAPIClient", FakeMessageClient)
     def test_api_messages_are_normalized_and_sorted(self):
@@ -60,6 +71,13 @@ class FetchingAPITests(unittest.TestCase):
         self.assertEqual(messages[0].sender, "小甲")
         self.assertEqual(messages[0].msg_type, "文本")
         self.assertEqual(get_group_nickname_map("room@chatroom")["wxid_a"], "小甲")
+
+    @patch("group_insight.fetching.WeChatDataAPIClient", FakeLinkClient)
+    def test_high_bit_wechat_type_uses_rendered_link_fields(self):
+        _, messages = fetch_structured_messages("测试群", "2026-08-28", "2026-08-28")
+        self.assertEqual(messages[0].metadata["rich_kind"], "link_card")
+        self.assertEqual(messages[0].metadata["url"], "https://example.com/document")
+        self.assertIn("示例资料", messages[0].text)
 
 
 if __name__ == "__main__":

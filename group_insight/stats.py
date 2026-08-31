@@ -207,7 +207,7 @@ def build_local_stats(messages: list[StructuredMessage]) -> dict[str, Any]:
         ],
         "effective_breakdown": [
             {"type": category_labels[category], "count": category_counts[category]}
-            for category in ["text", "reply", "emoji", "image", "voice", "video", "link_card", "merged_chat"]
+            for category in ["text", "reply", "emoji", "image", "voice", "video", "link_card", "file_card", "merged_chat"]
             if category_counts.get(category, 0)
         ],
         "excluded_breakdown": [
@@ -223,6 +223,10 @@ def build_local_stats(messages: list[StructuredMessage]) -> dict[str, Any]:
         ],
         "time_segment_breakdown": build_time_segment_breakdown(messages),
         "word_cloud": extract_word_cloud_terms(messages),
+        "resource_breakdown": {
+            "link": category_counts.get("link_card", 0),
+            "file": category_counts.get("file_card", 0),
+        },
         "unknown_message_count": sum(1 for message in messages if message.sender == "unknown"),
         "system_message_count": sum(1 for message in messages if message.msg_type == "系统"),
         "first_message_time": messages[0].time if messages else "",
