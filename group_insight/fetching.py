@@ -70,6 +70,101 @@ def resolve_sender_display(
     return username or "unknown"
 
 
+def _contact_fallback_display(
+    username: str,
+    contact_profile: dict[str, Any] | None,
+) -> str:
+    """忽略消息显示名，仅按微信网名、非备注资料名、账号 ID 回退。"""
+
+    username = (username or "").strip()
+    profile = contact_profile or {}
+    remark = str(profile.get("remark") or "").strip()
+    nickname = str(profile.get("nickname") or "").strip()
+    profile_display = str(profile.get("displayName") or "").strip()
+    if nickname and is_resolved_member_display(username, nickname):
+        return nickname
+    if (
+        profile_display
+        and (not remark or profile_display.casefold() != remark.casefold())
+        and is_resolved_member_display(username, profile_display)
+    ):
+        return profile_display
+    return username or "unknown"
+
+
+def find_member_display_collisions(
+    sender_displays: list[tuple[str, str]],
+    *,
+    min_distinct_accounts: int = 2,
+) -> set[str]:
+    """返回共享同一上游显示名的账号 ID。"""
+
+    accounts_by_display: dict[str, set[str]] = {}
+    for raw_username, raw_display_name in sender_displays:
+        username = (raw_username or "").strip()
+        display_name = (raw_display_name or "").strip()
+        if not username or not is_resolved_member_display(username, display_name):
+            continue
+        accounts_by_display.setdefault(display_name.casefold(), set()).add(username)
+
+    collision_keys = {
+        display_key
+        for display_key, usernames in accounts_by_display.items()
+        if len(usernames) >= max(2, int(min_distinct_accounts))
+    }
+    return {
+        username
+        for display_key in collision_keys
+        for username in accounts_by_display[display_key]
+    }
+
+
+def repair_member_display_collisions(
+    messages: list[StructuredMessage],
+    contact_profiles: dict[str, dict[str, Any]],
+    collision_usernames: set[str] | None = None,
+) -> set[str]:
+    """修复上游把同一显示名错误分配给多个群成员的情况。
+
+    用户已确认从两个不同账号共用同一显示名起即视为碰撞。碰撞后不再
+    信任消息接口的 ``senderDisplayName``，改用联系人微信网名；没有可靠
+    联系人资料时显示账号 ID，避免多个成员继续冒用同一个错误名称。
+    """
+
+    if collision_usernames is None:
+        collision_usernames = find_member_display_collisions(
+            [(message.sender_username, message.sender) for message in messages]
+        )
+    if not collision_usernames:
+        return set()
+
+    repaired_names: dict[str, str] = {}
+    for message in messages:
+        username = (message.sender_username or "").strip()
+        if not username or username not in collision_usernames:
+            continue
+        repaired = repaired_names.setdefault(
+            username,
+            _contact_fallback_display(username, contact_profiles.get(username)),
+        )
+        message.sender = repaired
+
+    metadata_name_pairs = (
+        ("reply_to_username", "reply_to_name"),
+        ("pat_from_username", "pat_from_name"),
+        ("pat_to_username", "pat_to_name"),
+        ("redpacket_sender_username", "redpacket_sender_name"),
+        ("redpacket_receiver_username", "redpacket_receiver_name"),
+    )
+    for message in messages:
+        metadata = message.metadata or {}
+        for username_key, name_key in metadata_name_pairs:
+            username = str(metadata.get(username_key, "")).strip()
+            if username in repaired_names:
+                metadata[name_key] = repaired_names[username]
+    return set(repaired_names)
+
+
 def collect_member_aliases_from_messages(messages: list[StructuredMessage]) -> dict[str, str]:
     """从已结构化消息中汇总可展示的成员别名。"""
     aliases: dict[str, str] = {}
@@ -238,7 +333,7 @@ def fetch_structured_messages(
     collected: list[StructuredMessage] = []
     seen_ids: set[str] = set()
     fingerprints: set[tuple[Any, ...]] = set()
-    aliases: dict[str, str] = {}
+    upstream_sender_displays: list[tuple[str, str]] = []
     try:
         contact_profiles = client.list_contact_profiles()
     except (WeChatDataAPIError, AttributeError):
@@ -264,13 +359,13 @@ def fetch_structured_messages(
         text = str(metadata.get("analysis_text") or _analysis_text(row, msg_type))
         text = normalize_text(text or "(无内容)", max_len=MAX_LINE_TEXT_LEN)
         sender_username = str(row.get("senderUsername") or "").strip()
+        upstream_sender_display = str(row.get("senderDisplayName") or "").strip()
+        upstream_sender_displays.append((sender_username, upstream_sender_display))
         sender_display = resolve_sender_display(
             sender_username,
-            str(row.get("senderDisplayName") or "").strip(),
+            upstream_sender_display,
             contact_profiles.get(sender_username),
         )
-        if sender_username and is_resolved_member_display(sender_username, sender_display):
-            aliases[sender_username] = sender_display
         fingerprint = (timestamp, sender_username or sender_display, msg_type, text)
         if fingerprint in fingerprints:
             continue
@@ -301,7 +396,9 @@ def fetch_structured_messages(
             )
         )
 
-    _GROUP_NICKNAME_CACHE[chat.username] = aliases
+    collision_usernames = find_member_display_collisions(upstream_sender_displays)
+    repair_member_display_collisions(collected, contact_profiles, collision_usernames)
+    _GROUP_NICKNAME_CACHE[chat.username] = collect_member_aliases_from_messages(collected)
     collected.sort(key=lambda item: (item.timestamp, item.local_id, item.id))
     ctx = {
         "username": chat.username,
