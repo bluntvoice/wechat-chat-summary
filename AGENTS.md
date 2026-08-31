@@ -51,7 +51,22 @@
 - 修改后至少运行：
   `python -m unittest discover -s tests -v`、`python -m compileall -q group_insight tests`
   和 `git diff --check`。
-- 修改桌面端后还需在 D 盘缓存环境下运行 `npm run build` 与 `cargo check`。
+- 修改桌面端后还需运行 `npm run build` 与 `cargo check`；缓存位置可配置，但不得依赖个人盘符或用户名。
+
+## 版本、构建与发布规则
+
+- `desktop/package.json` 是桌面版本的人工输入源；`package-lock.json`、`tauri.conf.json`、
+  `Cargo.toml` 与 `Cargo.lock` 必须通过 `desktop/scripts/version.mjs` 同步。CI 和打包前必须
+  执行版本一致性检查，冲突时 fail-fast。
+- Windows 安装包必须复用 `desktop/scripts/build-windows-test-package.ps1` 和现有 sidecar
+  架构，不得另建依赖本机绝对路径、API Key、微信数据或 WeChatDataAnalysis 实例的打包链路。
+- 测试安装包只能通过 `build-test.yml` 或脚本的 `Test` 模式生成，不创建 Tag 和 GitHub Release。
+- 正式发布只能人工触发 `release.yml`。全部测试与安装包构建成功后，工作流才允许提交版本文件、
+  推送默认分支与 Tag；Stable 使用 `x.y.z`，Prerelease 使用含后缀的 SemVer 并必须标为 Prerelease。
+- 发布说明必须包含“版本亮点”，并同步写入 `CHANGELOG.md`。正式 Release 前必须复核上游许可、
+  用户可见变化、测试结果、安装包内容和发布通道；不得覆盖既有 Tag。
+- GitHub Actions 构建不得读取或打包 `.env`、`secrets.env`、本地配置、聊天数据、SQLite、
+  用户报告或安装包之外的本地运行时数据。
 
 ## PRD 与开发执行规范
 
@@ -106,5 +121,5 @@
   优先关联到主要话题。不得重新引入独立的“详细讨论脉络”重复模块，也不得对外展示“轻松插曲”。
 - 日报视觉继续参考 `wzj042/wechat-auto-insight` 的米白—浅绿页面渐变、绿—黄头图及
   “圆形序号 + 右侧正文”讨论脉络结构；改变该产品行为前先向用户确认。
-- 本地 Windows 测试安装包已有构建脚本；它不等同于正式签名或 GitHub Release。
-- 后续迭代：历史中心、全文搜索、每日活跃热力图、MCP Server、检查更新与正式发布流程。
+- 本地 Windows 测试安装包和 GitHub Actions 测试/发布工作流已建立；自动化发布不等同于代码签名。
+- 后续迭代：历史中心、全文搜索、每日活跃热力图、MCP Server、检查更新、代码签名与自动更新。

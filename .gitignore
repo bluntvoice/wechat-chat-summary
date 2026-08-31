@@ -4,6 +4,7 @@
 !.env.example
 .venv/
 .dev-cache/
+artifacts/
 
 # Python 缓存
 __pycache__/

@@ -16,10 +16,7 @@ Python 核心。开发模式使用仓库虚拟环境，测试安装包使用 PyI
 开发运行：
 
 ```powershell
-$env:npm_config_cache = "D:\工具\wechat-chat-summary\.dev-cache\npm"
-$env:CARGO_HOME = "D:\工具\wechat-chat-summary\.dev-cache\cargo-home"
-$env:CARGO_TARGET_DIR = "D:\工具\wechat-chat-summary\.dev-cache\cargo-target"
-npm install
+npm ci
 npm run tauri dev
 ```
 
@@ -40,8 +37,10 @@ Release 构建中读取安装目录内的 `engine\group-insight-sidecar.exe`。
 .\scripts\build-windows-test-package.ps1
 ```
 
-默认产物目录为 `D:\工具\WeChat Chat Summary\test-builds`，安装向导默认安装到
-`D:\工具\WeChat Chat Summary\program` 并允许改选其他目录。卸载脚本只移除主程序、
-分析引擎和快捷方式，不删除同级 `data`、`reports` 或用户自定义报告目录。PyInstaller、
-npm 和 Cargo 的构建缓存均写入仓库下 `.dev-cache`（D 盘）。脚本不会自动下载 NSIS；
-找不到已确认的 NSIS 路径时会停止并提示。
+默认产物目录为仓库根目录下 `artifacts\windows`，安装向导默认安装到当前用户的
+`%LOCALAPPDATA%\Programs\WeChat Chat Summary` 并允许改选其他目录。卸载脚本只移除主程序、
+分析引擎和快捷方式，不删除用户自定义报告目录。脚本会从参数、`MAKENSIS_PATH`、PATH 和
+NSIS 标准安装位置查找 `makensis.exe`，找不到时明确停止；不依赖开发者用户名或固定盘符。
+
+GitHub 网页测试构建使用 `.github/workflows/build-test.yml`；正式发布使用
+`.github/workflows/release.yml`。两者复用同一脚本，测试构建不会创建 Tag 或 Release。

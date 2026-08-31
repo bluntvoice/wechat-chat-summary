@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Python, frontend and Rust checks
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: python -m pip install -r requirements.txt
+
+      - name: Run Python tests and compile check
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -m unittest discover -s tests -v
+          python -m compileall -q group_insight tests
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        shell: pwsh
+        run: npm ci
+
+      - name: Check versions and build frontend
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          npm run version:check
+          npm run build
+
+      - name: Check Rust application
+        shell: pwsh
+        run: cargo check --manifest-path desktop/src-tauri/Cargo.toml --locked
+
+      - name: Check patch whitespace
+        shell: pwsh
+        run: git diff --check
