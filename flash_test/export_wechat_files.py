@@ -8,6 +8,7 @@
 
 支持：图片、视频、文件、语音
 """
+import argparse
 import os
 import re
 import shutil
@@ -332,25 +333,26 @@ class WeChatFileExporter:
 
 
 def main():
-    """主函数示例"""
-    # 配置
-    config = {
-        "wechat_id": "wxid_ldxssnix94gz22",  # 替换为你的微信ID
-        "decrypted_dir": r"D:\WeChatData\decrypted",
-        "output_dir": r"D:\WeChatData\exported_files",
-        "chat_name": None,  # None=所有聊天，或指定联系人/群聊名称
-    }
+    """从显式参数运行，避免保存个人微信 ID 或开发机路径。"""
+
+    parser = argparse.ArgumentParser(description="导出解密后的微信文件消息。")
+    parser.add_argument("--wechat-id", required=True, help="需要处理的微信账号 ID。")
+    parser.add_argument("--decrypted-dir", required=True, help="解密后的数据库目录。")
+    parser.add_argument("--output-dir", required=True, help="文件与报告输出目录。")
+    parser.add_argument("--chat-name", default=None, help="可选联系人或群聊名称。")
+    parser.add_argument("--dry-run", action="store_true", help="仅预演，不复制文件。")
+    args = parser.parse_args()
 
     # 创建导出器
     exporter = WeChatFileExporter(
-        wechat_id=config["wechat_id"],
-        decrypted_dir=config["decrypted_dir"],
-        output_dir=config["output_dir"]
+        wechat_id=args.wechat_id,
+        decrypted_dir=args.decrypted_dir,
+        output_dir=args.output_dir,
     )
 
     print("🔍 扫描文件消息...")
     file_messages = exporter.scan_file_messages(
-        chat_name=config["chat_name"]
+        chat_name=args.chat_name
     )
 
     print(f"📦 找到 {len(file_messages)} 个文件消息")
@@ -359,7 +361,7 @@ def main():
         print("\n🔍 查找本地文件...")
         results = exporter.find_and_export_files(
             file_messages,
-            dry_run=False  # 设为 True 预演，不实际复制
+            dry_run=args.dry_run
         )
 
         print("\n📊 生成报告...")

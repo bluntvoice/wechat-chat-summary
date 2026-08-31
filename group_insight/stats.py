@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -255,3 +255,36 @@ def build_local_stats(messages: list[StructuredMessage]) -> dict[str, Any]:
         "first_message_time": messages[0].time if messages else "",
         "last_message_time": messages[-1].time if messages else "",
     }
+
+
+def build_chat_daily_stats(messages: list[StructuredMessage]) -> list[dict[str, Any]]:
+    """按自然日计算可独立于报告保存的基础统计。"""
+
+    from .resources import extract_resources
+
+    grouped: dict[str, list[StructuredMessage]] = defaultdict(list)
+    for message in messages:
+        date = str(message.time or "")[:10]
+        if not date:
+            date = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d")
+        grouped[date].append(message)
+
+    rows: list[dict[str, Any]] = []
+    for date in sorted(grouped):
+        day_messages = grouped[date]
+        stats = build_local_stats(day_messages)
+        resources = extract_resources(day_messages)
+        rows.append(
+            {
+                "date": date,
+                "message_count": stats["message_count"],
+                "effective_message_count": stats["effective_message_count"],
+                "participant_count": stats["participant_count"],
+                "effective_char_count": stats["effective_char_count"],
+                "resource_breakdown": {
+                    "link": sum(1 for item in resources if item.get("type") == "link"),
+                    "file": sum(1 for item in resources if item.get("type") == "file"),
+                },
+            }
+        )
+    return rows

@@ -124,6 +124,11 @@ class ReportSchemaHistoryTests(unittest.TestCase):
                 "lead_summary": "今天讨论项目安排。",
                 "decisions": [{"content": "明天收购月球", "tone": "joke", "confidence": 0.99}],
                 "action_items": [{"task": "认真提交清单", "tone": "formal", "confidence": 0.9}],
+                "open_questions": [
+                    {"question": "明天公司是不是要倒闭了哈哈哈", "tone": "teasing", "confidence": 0.95},
+                    {"question": "正式排期是否确认", "tone": "formal", "confidence": 0.9},
+                    {"question": "旧报告兼容问题"},
+                ],
                 "risk_flags": [{"content": "只是调侃", "tone": "sarcasm", "confidence": 0.8}],
                 "light_moments": [{"content": "收购月球是群友玩笑", "tone": "joke"}],
             },
@@ -133,6 +138,10 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertEqual(report["decisions"], [])
         self.assertEqual(report["risk_flags"], [])
         self.assertEqual(len(report["action_items"]), 1)
+        self.assertEqual(
+            [item["question"] for item in report["open_questions"]],
+            ["正式排期是否确认", "旧报告兼容问题"],
+        )
         self.assertEqual(len(report["light_moments"]), 1)
 
     def test_report_document_is_saved_to_sqlite_without_raw_messages(self):

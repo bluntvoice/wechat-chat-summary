@@ -51,7 +51,7 @@ from .settings import (
     WECHAT_DATA_API_URL,
     WECHAT_DATA_SOURCE,
 )
-from .stats import build_local_stats
+from .stats import build_chat_daily_stats, build_local_stats
 from .transport import (
     compute_auto_time_range,
     export_report_image,
@@ -170,6 +170,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="", help="输出目录；不传则自动生成。")
     parser.add_argument("--output-root", default="", help="报告导出根目录；按群聊、导出图和报告数据自动归档。")
     parser.add_argument("--progress-file", default="", help="可选的跨进程进度 JSON 文件路径，供桌面端轮询。")
+    parser.add_argument("--result-file", default="", help="可选的结构化生成结果 JSON 文件路径，供桌面端读取。")
     parser.add_argument("--dry-run", action="store_true", help="不调用 DeepSeek，只验证导出、切片、reduce 和 HTML 渲染。")
     parser.add_argument("--no-image", action="store_true", help="跳过浏览器渲染 PNG 导出。")
     parser.add_argument("--image-width", type=int, default=DEFAULT_REPORT_IMAGE_WIDTH, help="导出 PNG 时的浏览器视口宽度。")
@@ -243,6 +244,7 @@ def main() -> None:
         min_chunk_messages=args.topic_min_chunk_messages,
     )
     stats = build_local_stats(messages)
+    daily_stats = build_chat_daily_stats(messages)
     extracted_resources = extract_resources(messages)
     stats["resource_breakdown"] = {
         "link": sum(1 for item in extracted_resources if item.get("type") == "link"),
@@ -261,8 +263,11 @@ def main() -> None:
         chat_report_dir = output_dir
         report_version = 1
     else:
+        output_root = Path(args.output_root).expanduser() if args.output_root else DEFAULT_OUTPUT_ROOT
+        if output_root is None:
+            raise SystemExit("未配置报告导出目录。请传 --output-root 或设置 GROUP_INSIGHT_OUTPUT_ROOT。")
         report_paths = allocate_report_paths(
-            Path(args.output_root) if args.output_root else DEFAULT_OUTPUT_ROOT,
+            output_root,
             ctx["display_name"],
             args.start,
             args.end,
@@ -431,7 +436,7 @@ def main() -> None:
         )
     progress.update("history", 97, "正在保存历史索引…")
     with HistoryStore() as history:
-        history.upsert_report(payload)
+        history.upsert_report(payload, daily_stats=daily_stats)
     if send_requested:
         if args.no_image:
             send_results = [(target, "failed", "已指定 --no-image，无法发送 PNG。") for target in send_targets]
@@ -535,3 +540,21 @@ def main() -> None:
         json_path=str(json_output_path), html_path=str(html_output_path),
         png_path=str(image_output_path) if image_output_path.exists() else "",
     )
+    if args.result_file:
+        result_path = Path(args.result_file).expanduser()
+        ensure_dir(result_path.parent)
+        write_json(
+            result_path,
+            {
+                "completed": True,
+                "protocol_version": 1,
+                "version": report_version,
+                "chat_dir": str(chat_report_dir.resolve()),
+                "data_dir": str(output_dir.resolve()),
+                "image_dir": str(image_dir.resolve()),
+                "json_path": str(json_output_path.resolve()),
+                "html_path": str(html_output_path.resolve()),
+                "png_path": str(image_output_path.resolve()) if image_output_path.exists() else "",
+                "png_error": image_error,
+            },
+        )

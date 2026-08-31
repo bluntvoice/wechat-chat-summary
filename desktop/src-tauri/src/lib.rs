@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -77,7 +78,11 @@ fn bridge_program() -> Result<BridgeProgram, String> {
     })
 }
 
-fn run_bridge(command_name: String, payload: Value) -> Result<Value, String> {
+fn run_bridge(
+    command_name: String,
+    payload: Value,
+    app_local_data_dir: PathBuf,
+) -> Result<Value, String> {
     let bridge = bridge_program()?;
     let request_id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -92,6 +97,7 @@ fn run_bridge(command_name: String, payload: Value) -> Result<Value, String> {
         .current_dir(&bridge.working_dir)
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
+        .env("WECHAT_CHAT_SUMMARY_APP_LOCAL_DATA_DIR", app_local_data_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -120,8 +126,18 @@ fn run_bridge(command_name: String, payload: Value) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn bridge_call(command: String, payload: Value) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || run_bridge(command, payload))
+async fn bridge_call(
+    app: tauri::AppHandle,
+    command: String,
+    payload: Value,
+) -> Result<Value, String> {
+    let app_local_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("无法定位 Windows 用户数据目录: {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_bridge(command, payload, app_local_data_dir)
+    })
         .await
         .map_err(|error| error.to_string())?
 }

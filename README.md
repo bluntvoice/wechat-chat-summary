@@ -34,14 +34,16 @@ DEEPSEEK_API_KEY=<API_KEY_PLACEHOLDER>
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
 WECHAT_DATA_API_URL=http://127.0.0.1:10392
-GROUP_INSIGHT_OUTPUT_ROOT=D:\WeChatData\群聊总结
+GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 ```
 
 `.env` 仅供本机使用，已被 Git 忽略。输出目录应与源码和软件安装目录分离。
 
-桌面端配置默认保存在 `D:\工具\WeChat Chat Summary\data`：普通设置写入
-`config.json`，API Key 写入本机私有的 `secrets.env`。软件升级只能替换未来的
-`program` 目录，不得覆盖 `data` 或用户选择的报告目录。
+桌面端的软件自身数据目录由 Tauri 使用 Windows 标准 App Local Data API 确定，通常位于
+`%LOCALAPPDATA%\com.bluntvoice.wechat-chat-summary`；普通设置、API Key、SQLite 和任务进度
+分别保存在其中。报告目录始终独立：新用户默认为空，首次生成前必须在界面选择，选择后继续沿用。
+若旧版 `D:\工具\WeChat Chat Summary\data` 存在且新目录尚未使用，软件会校验后复制配置、
+密钥和历史库，保留旧目录作为回退；新目录已有文件时不会覆盖。
 
 ## 桌面端开发运行
 
@@ -126,9 +128,11 @@ PNG 会写入 300 DPI 的 `pHYs` 元数据，不会为了修改 DPI 而重采样
 SQLite 历史索引共用结构；报告目录和历史库均不保存完整原始消息分片。屏蔽记录进入
 `report_redactions` 表，被屏蔽正文不会写入新版本或 FTS 索引。
 
-SQLite 历史库默认位于 `D:\工具\WeChat Chat Summary\data\history.sqlite3`。软件会安全
-索引当前导出根目录中的既有报告 JSON，不修改旧文件。当前仅提供数据底座，历史中心与搜索
-界面属于后续版本。
+SQLite 历史库位于上述 Windows 用户数据目录的 `history.sqlite3`。数据库使用独立于
+Report Schema 2.1 的 schema migration 版本；群聊每日统计按 `chat + date` 独立保存，不要求
+当天已经生成报告。历史搜索底层采用 FTS5，并在 FTS 无法命中的中文子词场景使用本地子串回退，
+可检索群聊、成员、话题、行动事项、资源标题、文件名和 URL。当前仅提供基础层，历史中心、
+搜索页面和热力图页面属于后续版本。
 
 ## 测试
 

@@ -428,7 +428,9 @@ def repair_final_report(
         "quotes": report.get("quotes", [])[:4],
         "decisions": filter_serious_items(report.get("decisions", []), content_key="content")[:6],
         "action_items": filter_serious_items(report.get("action_items", []), content_key="task")[:6],
-        "open_questions": report.get("open_questions", [])[:6],
+        "open_questions": filter_serious_items(
+            report.get("open_questions", []), content_key="question"
+        )[:6],
         "risk_flags": filter_serious_items(report.get("risk_flags", []), content_key="content")[:6],
         "light_moments": normalize_light_moments(report.get("light_moments", [])),
         "resource_groups": report.get("resource_groups", []) if isinstance(report.get("resource_groups"), list) else [],
@@ -620,8 +622,18 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
             for action in action_items[:6]
         ],
         "open_questions": [
-            {"question": question.get("question", ""), "source_refs": source_refs}
+            {
+                "question": question.get("question", ""),
+                "source_refs": source_refs,
+                **({"tone": question.get("tone")} if question.get("tone") not in (None, "") else {}),
+                **(
+                    {"confidence": question.get("confidence")}
+                    if question.get("confidence") not in (None, "")
+                    else {}
+                ),
+            }
             for question in open_questions[:6]
+            if isinstance(question, dict)
         ],
         "risk_flags": risk_flags[:6],
         "light_moments": light_moments[:6],

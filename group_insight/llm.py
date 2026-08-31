@@ -361,7 +361,7 @@ MAP_SCHEMA_EXAMPLE = {
             "confidence": 0.9,
         }
     ],
-    "open_questions": [{"question": "未解决的问题", "evidence_ids": ["m_xxx"]}],
+    "open_questions": [{"question": "未解决的问题", "evidence_ids": ["m_xxx"], "tone": "formal", "confidence": 0.88}],
     "risk_flags": [{"content": "需关注的风险", "evidence_ids": ["m_xxx"], "tone": "formal", "confidence": 0.85}],
     "light_moments": [{"content": "群友间的玩笑或调侃", "evidence_ids": ["m_xxx"], "tone": "joke"}],
     "mood": {
@@ -414,7 +414,7 @@ REDUCE_SCHEMA_EXAMPLE = {
             "confidence": 0.9,
         }
     ],
-    "open_questions": [{"question": "未决问题", "source_refs": ["shard-001"]}],
+    "open_questions": [{"question": "未决问题", "source_refs": ["shard-001"], "tone": "formal", "confidence": 0.88}],
     "risk_flags": [{"content": "潜在风险或争议点", "source_refs": ["shard-001"], "tone": "formal", "confidence": 0.85}],
     "light_moments": [{"content": "轻松插曲", "source_refs": ["shard-001"], "tone": "joke"}],
     "mood": {"label": "整体氛围", "reason": "原因", "source_refs": ["shard-001"]},
@@ -464,7 +464,7 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
     "action_items": [
         {"owner": "[[user:wxid_xxx]] 或留空", "task": "[[user:wxid_xxx]] 相关行动项", "deadline": "时间或留空", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.9}
     ],
-    "open_questions": [{"question": "未解决的问题", "topic_id": "topic-sushi-queue"}],
+    "open_questions": [{"question": "未解决的问题", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.88}],
     "risk_flags": [{"content": "需要继续观察的风险或争议", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.85}],
     "light_moments": [{"content": "明确的玩笑、调侃或轻松插曲", "tone": "joke"}],
     "resource_groups": [
@@ -494,8 +494,8 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 11. highlight_sections 表示“话题簇”而不是机械时间切段；如果同一时间窗口里存在多个不同话题，可以拆成多个 sections，时间范围允许重叠。
 12. 不要只写最显眼的主线，持续时间较短但消息量可观、内容明确的次级话题也要覆盖，避免遗漏例如运动分享、生活分享、工具讨论这类支线。
 13. 输入里会提供 member_directory；提到具体成员时，请统一使用对应的 `[[user:sender_id]]` 占位符，不要直接输出昵称。
-14. 必须区分正式结论、暂时讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 decisions/action_items/risk_flags。
-15. decisions/action_items 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时，降低确定性或放入 light_moments。
+14. 必须区分正式结论、暂时讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 decisions/action_items/open_questions/risk_flags。
+15. decisions/action_items/open_questions 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时，降低确定性或放入 light_moments。
 16. 为同一语义话题生成稳定、简短的 topic_key；同一时间片内再次出现的同一话题不要拆成多个 key。
 
 输出 json schema 示例：
@@ -528,7 +528,7 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 10. 不要求每个 shard/bundle 都形成一个 section；普通闲聊或无独立信息量的片段可以不进入主要话题。
 11. 判断是否合并的核心是讨论对象、问题和语义是否属于同一件事，而不是时间是否连续。
 12. 如果输入里出现 `[[user:sender_id]]` 占位符，输出时保留该占位符，不要改写成昵称。
-13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成正式结论、行动项或风险。
+13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成正式结论、行动项、开放问题或风险。
 
 输出 json schema 示例：
 {json.dumps(REDUCE_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -571,8 +571,8 @@ def build_final_prompts(
 12. 不要因为时间不连续拆分同一话题，也不要为了减少数量合并无关话题。
 13. 如果输入里的 bundles 使用 `[[user:sender_id]]` 占位符，最终输出请保留这些占位符，不要改写成昵称。
 14. one_line_summary 必须精炼自然，概括当天真正有区分度的内容，避免机械复述消息数，建议不超过 60 个汉字。
-15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、行动项或风险；light_moments 仅用于内部过滤，不作为对外报告模块。
-16. decisions/action_items/risk_flags 采用高判定门槛。结构化对象若提供 tone/confidence，应如实保留；不得把 casual/joke/sarcasm/uncertain 升级为 formal。
+15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、行动项、开放问题或风险；light_moments 仅用于内部过滤，不作为对外报告模块。
+16. decisions/action_items/open_questions/risk_flags 采用高判定门槛。结构化对象必须提供 tone/confidence，并如实保留；不得把 casual/joke/sarcasm/teasing/uncertain 升级为 formal。
 17. resource_groups 只能引用资源清单中真实存在的 resource_id；优先通过 topic_id 关联到 sections，相同主题的链接和文件必须放在同一组，不能可靠归类时使用“其他 / 未归类”。
 18. ai_observations 回答“从今天这些聊天中可以观察到什么”，不得重复话题摘要，不得推测成员性格、关系或真实意图。
 19. 结论、行动、问题、风险和引用应尽量填写 topic_id；无法可靠关联时留空，不得强行归类。
@@ -624,6 +624,7 @@ def build_direct_final_prompts(
 10. 输出必须是合法 JSON 对象，不要添加 markdown 或解释。
 11. JSON 字段：headline, tagline, lead_summary, theme_cards, sections, participant_insights, quotes, decisions, action_items, open_questions, risk_flags, mood。
 12. sections 字段：title, start_time, end_time, summary, bullets, takeaway。
+13. decisions/action_items/open_questions/risk_flags 必须提供 tone 与 confidence；玩笑、调侃、反话、随口夸张或低置信度内容不得进入这些严肃模块。
 """.strip()
     user_prompt = f"""
 请为群聊“{chat_name}”生成最终结构化报表 json。
@@ -702,6 +703,7 @@ def build_topic_section_prompts(
 7. decisions/action_items/open_questions/risk_flags 只有在确实没有明确事项、问题或风险时才返回空数组，不要为省略而置空。
 8. 提到成员时保留 `[[user:sender_id]]` 占位符。
 9. 输出 JSON 字段：topic_id, section, participant_insights, quotes, decisions, action_items, open_questions, risk_flags。
+10. decisions/action_items/open_questions/risk_flags 必须提供 tone 与 confidence；玩笑、调侃、反话和低置信度内容不得进入严肃模块。
 """.strip()
     user_prompt = f"""
 请为群聊“{chat_name}”的这个 topic 生成一个详细 section。
