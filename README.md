@@ -45,22 +45,21 @@ GROUP_INSIGHT_OUTPUT_ROOT=D:\WeChatData\群聊总结
 
 ## 桌面端开发运行
 
-依赖目录和缓存均可固定在 D 盘源码目录：
+安装依赖后从 `desktop` 目录启动；npm、Cargo 等工具使用各自的标准缓存，也可由开发者
+通过环境变量改到任意有足够空间的目录：
 
 ```powershell
 cd desktop
-$env:npm_config_cache = "D:\工具\wechat-chat-summary\.dev-cache\npm"
-$env:CARGO_HOME = "D:\工具\wechat-chat-summary\.dev-cache\cargo-home"
-$env:CARGO_TARGET_DIR = "D:\工具\wechat-chat-summary\.dev-cache\cargo-target"
-npm install
+npm ci
 npm run tauri dev
 ```
 
 当前阶段提供源码可运行的桌面闭环，并提供不依赖源码目录的本地 Windows 测试安装包
-构建脚本。测试包默认安装到 `D:\工具\WeChat Chat Summary\program`，允许用户改选
-目录；程序数据和报告目录位于 `program` 之外，升级或卸载测试程序不会删除它们。
+构建脚本。安装向导默认使用当前 Windows 用户的本地应用程序目录，并允许改选目录；
+程序数据和报告目录独立管理，升级或卸载测试程序不会删除它们。
 当前历史数据底座和本地 FTS 已建立，但历史中心页面、搜索界面、热力图、MCP、正式签名、
-自动更新与 GitHub Release 尚未完成，不应将这些后续界面描述为已实现。
+自动更新尚未完成。GitHub Actions 已可生成测试安装包和执行人工确认的正式 Release，
+但仓库尚未因此自动产生任何新 Release，不应将后续业务界面描述为已实现。
 
 桌面端默认按单日生成，并可切换自定义日期区间；成功生成后会记住上次群聊。AI 区域提供
 独立“保存设置”和“测试 API”按钮；DeepSeek 模型通过 Flash / Pro 下拉框明确选择，测试成功
@@ -142,12 +141,42 @@ cd src-tauri
 cargo check
 ```
 
+## GitHub Actions 构建与发布
+
+仓库提供三个 Windows 工作流：`CI` 只做轻量检查；`Build Windows test installer` 生成
+测试安装包但不创建 Tag 或 Release；`Release Windows installer` 在测试、构建全部成功后，
+同步版本、更新 CHANGELOG、推送 Tag 并创建 GitHub Release。版本以
+`desktop/package.json` 为唯一人工输入源，其余版本文件由脚本同步并在 CI 中校验。
+
+在 GitHub 网页生成测试安装包：
+
+1. 打开仓库的 **Actions** 页面，选择 **Build Windows test installer**；
+2. 点击 **Run workflow**，选择要构建的分支并确认；
+3. 任务成功后，在该次运行页面底部 **Artifacts** 下载
+   `wechat-chat-summary-v<版本>-windows-test`；压缩包内含安装程序及 `.sha256` 文件。
+
+发布 Prerelease 或 Stable：
+
+1. 打开 **Actions → Release Windows installer → Run workflow**，必须从默认分支运行；
+2. `version` 不要填写 `v`：正式版如 `0.3.0`，预发布版如 `0.3.0-beta.1`，且必须高于当前版本；
+3. `channel` 选择 `prerelease` 或 `stable`；
+4. `release_notes` 填写本次真实的版本亮点正文；工作流会自动添加 `## 版本亮点` 标题，
+   并把同一份内容写入 CHANGELOG 和 GitHub Release；
+5. 勾选真实发布确认；若距上一 Tag 不足 24 小时，还需单独勾选 24 小时内发布确认；
+6. 成功后到仓库 **Releases** 下载安装程序和 SHA-256 校验文件。Prerelease 会明确标记为
+   预发布，不会作为正式 Latest；Stable 会标记为 Latest。
+
+Release 仅在测试和安装包构建通过后提交版本文件。任何步骤失败都不会创建 GitHub Release；
+可打开该次 Actions 运行，展开带红色失败标记的步骤查看完整日志。若失败发生在版本提交和
+Tag 已成功推送之后、Release 创建之前，需要先检查仓库 Tag/Release 状态再重试，禁止覆盖既有 Tag。
+
 ## 隐私
 
 - 只处理本人合法持有或已获授权的数据。
 - `.env`、真实消息快照、密钥和报告不得提交到 Git。
 - 本地 API 默认只连接 `127.0.0.1`，不要无必要开放到局域网。
 - 发布前应检查默认群名、发送目标和绝对路径，避免暴露个人信息。
+- 正式 Release 前必须复核依赖、子模块与上游代码的许可证/授权边界。
 
 ## 授权状态
 

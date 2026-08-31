@@ -12,12 +12,21 @@ Unicode true
   !error "OUTPUT_FILE is required"
 !endif
 !ifndef VERSION
-  !define VERSION "0.2.2"
+  !error "VERSION is required"
+!endif
+!ifndef FILE_VERSION
+  !error "FILE_VERSION is required"
+!endif
+!ifndef PRODUCT_NAME
+  !error "PRODUCT_NAME is required"
+!endif
+!ifndef FILE_DESCRIPTION
+  !error "FILE_DESCRIPTION is required"
 !endif
 
-Name "微信群聊总结（测试版）"
+Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
-InstallDir "D:\工具\WeChat Chat Summary\program"
+InstallDir "$LOCALAPPDATA\Programs\WeChat Chat Summary"
 InstallDirRegKey HKCU "Software\bluntvoice\WeChatChatSummary" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -25,9 +34,9 @@ SetCompressorDictSize 64
 ShowInstDetails show
 ShowUninstDetails show
 
-VIProductVersion "${VERSION}.0"
+VIProductVersion "${FILE_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductName" "微信群聊总结"
-VIAddVersionKey /LANG=2052 "FileDescription" "微信群聊总结 Windows 测试安装包"
+VIAddVersionKey /LANG=2052 "FileDescription" "${FILE_DESCRIPTION}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "CompanyName" "bluntvoice"
@@ -57,7 +66,7 @@ Section "主程序" SEC_MAIN
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\卸载微信群聊总结.exe"
   WriteRegStr HKCU "Software\bluntvoice\WeChatChatSummary" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "DisplayName" "微信群聊总结（测试版）"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "Publisher" "bluntvoice"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "InstallLocation" "$INSTDIR"
