@@ -98,7 +98,20 @@ def _test_ai(settings: dict[str, Any]) -> dict[str, Any]:
         max_tokens=32,
         temperature=0,
     )
-    return {"connected": True, "provider": provider, "model": client.model, "response": result}
+    response_model = str(getattr(client, "last_response_model", "") or "").strip()
+    model_verified = bool(response_model) and response_model.casefold() == client.model.casefold()
+    if response_model and not model_verified:
+        raise RuntimeError(
+            f"API 实际响应模型为 {response_model}，与已选择的 {client.model} 不一致。"
+        )
+    return {
+        "connected": True,
+        "provider": provider,
+        "model": client.model,
+        "response_model": response_model,
+        "model_verified": model_verified,
+        "response": result,
+    }
 
 
 def build_report_entrypoint(*, frozen: bool | None = None) -> list[str]:

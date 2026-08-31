@@ -106,12 +106,17 @@ $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 内存中参与分析，不会写入报告目录。PNG 默认写入 300 DPI 元数据，可通过
 `--image-dpi` 调整。
 
-v0.2.0 使用统一 `report schema 2.0`：PNG 只截取适合分享的摘要模块，HTML 保留完整讨论
-脉络、行动事项、风险和资源清单，JSON 与 SQLite 历史索引保存同一套结构。链接卡片、普通
+v0.2.1 使用向后兼容的统一 `report schema 2.1`：PNG 与 HTML 呈现相同的完整信息，按
+“今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 → 今日活跃情况 → 报告结尾”组织；
+同一语义话题可合并多个不连续时间区间，结论、行动、问题、风险、引用和资源嵌入对应话题。
+无法可靠关联的补充信息进入 AI 今日观察，未归类资源保留为其他资源；JSON 与 SQLite 历史索引
+保存同一套结构。链接卡片、普通
 URL 与文件元数据会先确定性提取，再由 AI 按当日主题归类；模型遗漏或不可靠归类会本地回退
-到相近主题或“其他 / 未归类”。
+到相近主题或“其他 / 未归类”。红包消息、疑似红包领取页和红包素材链接在提取阶段过滤。
+成员显示名按群昵称、微信网名、账号 ID 的顺序解析，并排除本机联系人备注；群关键词会合并
+重复短语，并移除与高频长词重复的二字切片。
 
-桌面端生成后的人工屏蔽由 `redaction.py` 在本机完成：它读取既有 schema 2.0 JSON，将选中
+桌面端生成后的人工屏蔽由 `redaction.py` 在本机完成：它读取既有 schema 2.x JSON，将选中
 条目替换为只含所属时间和屏蔽提示的占位对象，再通过同一渲染器生成递增新版本。这个流程
 不读取聊天、不调用 AI，被屏蔽正文不会进入新版本 JSON、HTML、PNG、SQLite 模块内容或 FTS。
 “轻松插曲”已从对外报告结构和渲染中移除，内部 tone 分类仍用于严肃结论过滤。
@@ -119,7 +124,7 @@ URL 与文件元数据会先确定性提取，再由 AI 按当日主题归类；
 桌面端可通过 `--progress-file <path>` 读取原子写入的阶段进度 JSON。历史库默认位于软件
 数据目录的 `history.sqlite3`，只保存报告结构、统计、资源与文件路径，不复制完整聊天正文。
 
-v0.2.0 桌面端的“定时生成当日报告”使用软件内置定时器，可随时关闭；软件关闭时不执行，
+v0.2.1 桌面端的“定时生成当日报告”使用软件内置定时器，可随时关闭；软件关闭时不执行，
 并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划注册模块相互独立。
 
 ## RPA 发送前预热
@@ -271,12 +276,12 @@ python -m pip install -U typing-extensions
 - `group_insight/llm.py`：LLM 协议、DeepSeek 客户端、余额快照和 prompt 构造。
 - `group_insight/pipeline.py`：固定 `map/reduce/final` 分析流水线。
 - `group_insight/report_model.py`：最终日报结构修复、去重和 fallback 生成。
-- `group_insight/report_schema.py`：统一 report schema 2.0 与旧报告只读适配。
+- `group_insight/report_schema.py`：统一 report schema 2.1 与 2.0/旧报告只读适配。
 - `group_insight/resources.py`：URL、链接卡片、文件资源提取与主题归类。
 - `group_insight/redaction.py`：报告条目枚举、无正文屏蔽占位和新版本文档生成。
 - `group_insight/history_store.py`：SQLite 历史底座、模块表、日统计和 FTS 索引。
 - `group_insight/progress.py`：跨进程阶段进度文件。
-- `group_insight/rendering.py`：移动端 HTML 与 PNG 摘要长图渲染。
+- `group_insight/rendering.py`：信息量一致的移动端 HTML 与 PNG 完整长图渲染；视觉参考上游渐变背景和圆形序号讨论脉络。
 - `group_insight/transport.py`：PNG 导出和 RPA 发送。
 - `group_insight/report_paths.py`：报告目录分层、日期标签和历史版本分配。
 - `group_insight/desktop_bridge.py`：桌面端 JSONL 桥接命令。

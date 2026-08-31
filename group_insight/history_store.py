@@ -143,11 +143,15 @@ class HistoryStore:
             ("one_line_summary", content.get("one_line_summary", "")),
             ("lead_summary", content.get("lead_summary", "")),
             ("mood", content.get("mood", {})),
+            ("conclusion", content.get("conclusion", "")),
         ]
         for key, value in singular:
             if value:
                 rows.append((key, 0, key, value))
-        for key in ("themes", "topics", "members", "quotes", "decisions", "action_items", "open_questions", "risk_flags"):
+        for key in (
+            "themes", "topics", "ai_observations", "members", "quotes", "decisions",
+            "action_items", "open_questions", "risk_flags",
+        ):
             for index, item in enumerate(content.get(key, []) or []):
                 title = str(item.get("title") or item.get("name") or key) if isinstance(item, dict) else key
                 rows.append((key, index, title, item))

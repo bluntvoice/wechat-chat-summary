@@ -12,6 +12,12 @@ from .common import extract_topic_tokens, normalize_text, topic_similarity
 from .models import StructuredMessage
 
 URL_RE = re.compile(r"https?://[^\s<>\]\[\"']+", re.IGNORECASE)
+REDPACKET_URL_MARKERS = (
+    "/mmpayhb/",
+    "wxhb_personalreceive",
+    "/hongbao/",
+    "sendid=",
+)
 
 
 def _clean_url(value: str) -> str:
@@ -28,6 +34,22 @@ def _clean_url(value: str) -> str:
 def _resource_id(message: StructuredMessage, kind: str, identity: str) -> str:
     seed = f"{message.chat_id}|{message.id}|{kind}|{identity}"
     return "res_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def is_probable_redpacket_url(value: str) -> bool:
+    """识别微信红包领取页及红包素材链接，避免当作普通资源整理。"""
+
+    url = _clean_url(value)
+    if not url:
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.netloc.casefold().split(":", 1)[0]
+    haystack = f"{parsed.path}?{parsed.query}".casefold()
+    if host == "wxapp.tenpay.com" and any(marker in haystack for marker in REDPACKET_URL_MARKERS):
+        return True
+    if host == "wx.gtimg.com" and "/hongbao/" in haystack:
+        return True
+    return False
 
 
 def _context_summary(messages: list[StructuredMessage], index: int) -> str:
@@ -60,9 +82,14 @@ def extract_resources(messages: list[StructuredMessage]) -> list[dict[str, Any]]
         rich_kind = str(metadata.get("rich_kind") or "")
         context = _context_summary(messages, index)
 
+        if str(metadata.get("interaction_kind") or "") in {"redpacket", "direct_redpacket"}:
+            continue
+
         if rich_kind in {"link_card", "file_card"}:
             kind = "file" if rich_kind == "file_card" else "link"
             url = _clean_url(str(metadata.get("url") or ""))
+            if is_probable_redpacket_url(url):
+                continue
             title = normalize_text(metadata.get("title", ""), max_len=180)
             file_name = normalize_text(metadata.get("file_name", "") or title, max_len=180)
             identity = url or file_name or message.id
@@ -90,7 +117,7 @@ def extract_resources(messages: list[StructuredMessage]) -> list[dict[str, Any]]
         rich_url = _clean_url(str(metadata.get("url") or ""))
         for raw_url in URL_RE.findall(message.text or ""):
             url = _clean_url(raw_url)
-            if not url or url == rich_url:
+            if not url or url == rich_url or is_probable_redpacket_url(url):
                 continue
             key = ("link", url.casefold())
             if key in seen:

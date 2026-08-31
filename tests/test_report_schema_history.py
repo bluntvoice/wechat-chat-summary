@@ -4,14 +4,17 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from group_insight.history_store import HistoryStore
+from group_insight.llm import build_final_prompts
 from group_insight.models import StructuredMessage
-from group_insight.report_model import repair_final_report
-from group_insight.report_schema import build_report_document
+from group_insight.report_model import dedupe_sections, repair_final_report
+from group_insight.report_schema import build_report_document, upgrade_legacy_report
 from group_insight.redaction import REDACTION_NOTICE, list_redaction_targets, redact_report_document
 from group_insight.rendering import render_html_report
 from group_insight.resources import build_resource_catalog, extract_resources
+from group_insight.stats import extract_word_cloud_terms
 
 
 def message(message_id: str, text: str, metadata=None) -> StructuredMessage:
@@ -32,6 +35,88 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         catalog = build_resource_catalog(resources, [{"topic": "项目资料", "resource_ids": [item["id"] for item in resources]}], [])
         self.assertEqual(catalog["count"], 2)
         self.assertEqual({item["type"] for item in catalog["groups"][0]["items"]}, {"link", "file"})
+
+    def test_redpacket_links_are_not_extracted_as_resources(self):
+        messages = [
+            message("m1", "https://wxapp.tenpay.com/mmpayhb/wxhb_personalreceive?sendid=123"),
+            message("m2", "https://wx.gtimg.com/hongbao/1800/hb.png"),
+            message("m3", "资料 https://example.com/report"),
+        ]
+        resources = extract_resources(messages)
+        self.assertEqual([item["url"] for item in resources], ["https://example.com/report"])
+
+    @patch("group_insight.stats.jieba", None)
+    def test_word_cloud_deduplicates_long_phrases_and_fragments(self):
+        messages = [message(f"m{index}", "祝雯律案源滚滚") for index in range(12)]
+        terms = extract_word_cloud_terms(messages)
+        words = {item["word"] for item in terms}
+        self.assertIn("祝雯律案源滚滚", words)
+        self.assertTrue({"祝雯", "雯律", "律案", "案源", "源滚"}.isdisjoint(words))
+
+    def test_rendering_deduplicates_members_after_alias_resolution(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-08-31 00:00:00", end_time="2026-08-31 23:59:59", version=1,
+            stats={
+                "message_count": 2, "effective_char_count": 10, "participant_count": 1,
+                "top_speakers": [
+                    {"rank": 1, "name": "发言第一", "message_count": 12},
+                    {"rank": 2, "name": "发言第二", "message_count": 6},
+                ],
+                "member_aliases": [
+                    {"sender_id": "wxid_a", "sender_name": "同一群昵称"},
+                    {"sender_id": "wxid_b", "sender_name": "同一群昵称"},
+                ],
+            },
+            report={
+                "one_line_summary": "摘要", "theme_cards": [], "sections": [],
+                "participant_insights": [
+                    {"name": "[[user:wxid_a]]", "insight": "第一条观察"},
+                    {"name": "[[user:wxid_b]]", "insight": "第二条观察"},
+                ],
+            },
+            resources={"count": 0, "groups": []},
+            exports={"json": "a.json", "html": "a.html", "png": "a.png"},
+            provider="deepseek", model="deepseek-v4-flash", dry_run=False,
+            chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        self.assertEqual(html.count("<strong>同一群昵称</strong>"), 1)
+        self.assertIn("第一条观察", html)
+        self.assertNotIn("第二条观察", html)
+        self.assertIn(".member-list li{display:flex;align-items:center", html)
+        self.assertIn(".rank{display:inline-flex;align-items:center;justify-content:center", html)
+        self.assertIn("background:#dff0df", html)
+        self.assertIn("<h2>今日活跃情况</h2>", html)
+        self.assertIn("<h3>发言排行</h3>", html)
+        self.assertIn("<strong>发言第一</strong>", html)
+        self.assertIn("<span class=\"speaker-count\">12 条</span>", html)
+
+    def test_png_export_keeps_the_same_complete_modules_as_html(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-08-31 00:00:00", end_time="2026-08-31 23:59:59", version=1,
+            stats={"message_count": 2, "effective_char_count": 10, "participant_count": 1},
+            report={
+                "one_line_summary": "摘要", "theme_cards": [],
+                "sections": [{"title": "完整讨论", "summary": "PNG 也必须保留这段讨论脉络"}],
+                "quotes": [{
+                    "speaker": "小甲", "time": "2026-08-31 09:30",
+                    "quote": "PNG 也必须保留引用原话", "why_it_matters": "这是原话保留原因",
+                }],
+            },
+            resources={"count": 0, "groups": []},
+            exports={"json": "a.json", "html": "a.html", "png": "a.png"},
+            provider="deepseek", model="deepseek-v4-flash", dry_run=False,
+            chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        self.assertIn("PNG 也必须保留这段讨论脉络", html)
+        self.assertIn("PNG 也必须保留引用原话", html)
+        self.assertIn("这是原话保留原因", html)
+        self.assertNotIn("body.export-png .html-detail", html)
+        self.assertNotIn("resource-group:nth-of-type", html)
+        self.assertNotIn("new URLSearchParams", html)
 
     def test_jokes_do_not_become_serious_items(self):
         report = repair_final_report(
@@ -70,7 +155,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
                 report_id = store.upsert_report(document)
                 self.assertEqual(store.summarized_chat_ids(), ["room@chatroom"])
                 row = store.connection.execute("SELECT schema_version, json_path FROM reports WHERE report_id=?", (report_id,)).fetchone()
-                self.assertEqual(row["schema_version"], "2.0")
+                self.assertEqual(row["schema_version"], "2.1")
                 self.assertEqual(row["json_path"], "a.json")
             self.assertNotIn("完整原始聊天", path.read_bytes().decode("utf-8", errors="ignore"))
 
@@ -83,6 +168,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
                 "one_line_summary": "当日摘要。",
                 "theme_cards": [{"title": "敏感热点", "summary": "热点总结正文"}],
                 "sections": [{"title": "敏感话题", "summary": "不能进入屏蔽版", "start_time": "09:00", "end_time": "09:30"}],
+                "ai_observations": [{"title": "敏感观察", "content": "不能进入观察屏蔽版"}],
                 "participant_insights": [{"name": "小甲", "insight": "参与人员观察"}],
                 "light_moments": [{"content": "不会进入对外报告"}],
             },
@@ -95,11 +181,12 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         )
         target_ids = {item["id"] for item in list_redaction_targets(document)}
         self.assertIn("topics:0", target_ids)
+        self.assertIn("ai_observations:0", target_ids)
         self.assertIn("resources:0:0", target_ids)
         self.assertNotIn("light_moments", document["content"])
         redacted = redact_report_document(
             document,
-            ["topics:0", "members:0", "resources:0:0"],
+            ["topics:0", "ai_observations:0", "members:0", "resources:0:0"],
             version=2,
             exports={"json": "b.json", "html": "b.html", "png": "b.png"},
         )
@@ -108,6 +195,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertNotIn("私密链接", serialized)
         self.assertNotIn("小乙", serialized)
         self.assertNotIn("参与人员观察", serialized)
+        self.assertNotIn("不能进入观察屏蔽版", serialized)
         self.assertNotIn("小甲", serialized)
         self.assertIn(REDACTION_NOTICE, serialized)
         self.assertEqual(redacted["metadata"]["version"], 2)
@@ -122,7 +210,103 @@ class ReportSchemaHistoryTests(unittest.TestCase):
                 count = store.connection.execute(
                     "SELECT COUNT(*) FROM report_redactions WHERE report_id=?", (report_id,)
                 ).fetchone()[0]
-                self.assertEqual(count, 3)
+                self.assertEqual(count, 4)
+
+    def test_cross_time_sections_with_same_topic_id_are_merged(self):
+        topics = dedupe_sections(
+            [
+                {
+                    "id": "topic-project",
+                    "title": "项目安排",
+                    "time_ranges": [{"start": "2026-08-31 09:00", "end": "2026-08-31 09:30"}],
+                    "discussion_flow": "上午提出项目排期。",
+                    "key_points": ["先确认清单"],
+                },
+                {
+                    "id": "topic-project",
+                    "title": "项目安排",
+                    "time_ranges": [{"start": "2026-08-31 16:00", "end": "2026-08-31 16:20"}],
+                    "discussion_flow": "下午补充了交付顺序。",
+                    "turning_points": ["交付顺序调整"],
+                    "result": {"status": "concluded", "summary": "先完成清单，再分批交付。"},
+                },
+            ]
+        )
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(len(topics[0]["time_ranges"]), 2)
+        self.assertIn("上午提出项目排期", topics[0]["discussion_flow"])
+        self.assertIn("下午补充了交付顺序", topics[0]["discussion_flow"])
+        self.assertEqual(topics[0]["result"]["status"], "concluded")
+
+    def test_report_uses_content_first_order_and_embeds_related_details(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-08-31 00:00:00", end_time="2026-08-31 23:59:59", version=1,
+            stats={
+                "message_count": 8, "effective_char_count": 120, "participant_count": 2,
+                "top_speakers": [{"name": "小甲", "message_count": 5}],
+                "word_cloud": [{"word": "排期", "count": 5}],
+                "time_segment_breakdown": [{"label": "上午", "count": 5}],
+            },
+            report={
+                "one_line_summary": "今天确认项目排期。",
+                "theme_cards": [{"title": "排期", "summary": "项目进入交付安排阶段。"}],
+                "sections": [{
+                    "id": "topic-project", "title": "项目排期",
+                    "time_ranges": [{"start": "09:00", "end": "09:30"}, {"start": "16:00", "end": "16:20"}],
+                    "discussion_flow": "先提出清单，再补充交付顺序。",
+                    "key_points": ["先确认清单"],
+                    "turning_points": ["下午调整顺序"],
+                    "result": {"status": "concluded", "summary": "分批交付。"},
+                }],
+                "ai_observations": [{"title": "讨论特点", "content": "讨论由问题确认逐步转向执行安排。"}],
+                "quotes": [{"topic_id": "topic-project", "speaker": "小甲", "quote": "先把清单定下来。"}],
+                "action_items": [{"topic_id": "topic-project", "task": "整理最终清单", "tone": "formal", "confidence": 0.9}],
+                "conclusion": "项目安排已进入执行阶段。",
+            },
+            resources={
+                "count": 1,
+                "groups": [{
+                    "topic_id": "topic-project", "topic": "项目排期", "summary": "相关资料",
+                    "items": [{"id": "r1", "type": "link", "title": "项目清单", "url": "https://example.com/list"}],
+                }],
+            },
+            exports={"json": "a.json", "html": "a.html", "png": "a.png"},
+            provider="deepseek", model="deepseek-v4-flash", dry_run=False, chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        labels = ["今日速览", "今日主要话题", "AI 今日观察", "今日活跃情况", "报告结尾"]
+        positions = [html.index(label) for label in labels]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("先提出清单，再补充交付顺序。", html)
+        self.assertIn("先把清单定下来。", html)
+        self.assertIn("整理最终清单", html)
+        self.assertIn("项目清单", html)
+        self.assertNotIn("详细讨论脉络", html)
+        self.assertNotIn("今日有趣内容", html)
+        self.assertNotIn("最早消息", html)
+        self.assertNotIn("最晚消息", html)
+
+    def test_schema_20_document_remains_readable_without_reinterpretation(self):
+        payload = {
+            "schema_version": "2.0",
+            "metadata": {"chat": {"id": "room", "name": "旧报告"}, "period": {"report_date": "2026-08-30"}},
+            "stats": {},
+            "content": {"headline": "旧报告", "one_line_summary": "旧摘要", "themes": [], "topics": []},
+        }
+        self.assertIs(upgrade_legacy_report(payload), payload)
+        self.assertIn("旧摘要", render_html_report(payload))
+
+    def test_final_prompt_requires_semantic_topics_and_internal_only_light_moments(self):
+        system_prompt, _ = build_final_prompts(
+            "测试群", "2026-08-31 00:00:00", "2026-08-31 23:59:59", {}, [], []
+        )
+        self.assertIn("同一话题上午出现、下午继续时必须合并", system_prompt)
+        self.assertIn("time_ranges", system_prompt)
+        self.assertIn("discussion_flow", system_prompt)
+        self.assertIn("light_moments 仅用于内部过滤", system_prompt)
+        self.assertIn("ai_observations", system_prompt)
+        self.assertIn("topic_id", system_prompt)
 
 
 if __name__ == "__main__":

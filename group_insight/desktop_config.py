@@ -11,6 +11,27 @@ from .settings import DEFAULT_API_URL, DEFAULT_DEEPSEEK_MODEL, DEFAULT_OUTPUT_RO
 
 
 DEFAULT_DESKTOP_DATA_DIR = Path(r"D:\工具\WeChat Chat Summary\data")
+DEEPSEEK_TEXT_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
+LEGACY_DEEPSEEK_MODELS = {
+    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-reasoner": "deepseek-v4-flash",
+}
+
+
+def normalize_desktop_model(provider: str, model: str) -> str:
+    """规范化桌面端模型，并阻止 DeepSeek 非法模型名静默保存。"""
+
+    normalized_provider = (provider or "deepseek").strip().lower()
+    normalized_model = (model or "").strip().lower()
+    if normalized_provider != "deepseek":
+        if not normalized_model:
+            raise ValueError("模型名称不能为空。")
+        return normalized_model
+    normalized_model = LEGACY_DEEPSEEK_MODELS.get(normalized_model, normalized_model)
+    if normalized_model not in DEEPSEEK_TEXT_MODELS:
+        choices = "、".join(sorted(DEEPSEEK_TEXT_MODELS))
+        raise ValueError(f"DeepSeek 模型必须选择：{choices}")
+    return normalized_model
 
 
 def desktop_data_dir() -> Path:
@@ -95,6 +116,10 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
     for key in allowed:
         if key in values:
             current[key] = values[key]
+    current["provider"] = str(current.get("provider") or "deepseek").strip().lower()
+    current["model"] = normalize_desktop_model(
+        current["provider"], str(current.get("model") or "")
+    )
     public = {key: current[key] for key in allowed if key in current}
     temporary = _config_path().with_suffix(".json.tmp")
     temporary.write_text(json.dumps(public, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -126,10 +126,33 @@ def extract_word_cloud_terms(messages: list[StructuredMessage], top_n: int = 40)
             if re.fullmatch(r"([\u4e00-\u9fff])\1{1,}", token):
                 continue
             counter[token] += 1
+    # 合并“恭喜恭喜”这类整词重复，并在长词频次接近时移除其二字切片。
+    # 这主要修复无 jieba 环境下 extract_topic_tokens 同时产生整句和全部
+    # 二字片段，导致词云看起来像重复关键词的问题。
+    normalized_counter: Counter[str] = Counter()
+    for word, count in counter.items():
+        canonical = word
+        if len(word) % 2 == 0:
+            half = word[: len(word) // 2]
+            if len(half) >= 2 and half * 2 == word:
+                canonical = half
+        normalized_counter[canonical] += count
+
+    candidates = normalized_counter.most_common(max(top_n * 5, top_n))
+    dominated: set[str] = set()
+    for short_word, short_count in candidates:
+        for long_word, long_count in candidates:
+            if len(long_word) <= len(short_word) or len(long_word) < 4:
+                continue
+            if short_word in long_word and long_count >= short_count * 0.7:
+                dominated.add(short_word)
+                break
+
     return [
         {"word": word, "count": count}
-        for word, count in counter.most_common(top_n)
-    ]
+        for word, count in candidates
+        if word not in dominated
+    ][:top_n]
 
 
 def build_local_stats(messages: list[StructuredMessage]) -> dict[str, Any]:

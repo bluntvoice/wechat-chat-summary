@@ -21,6 +21,9 @@ class FakeMessageClient:
             source="native",
         )
 
+    def list_contact_profiles(self):
+        return {}
+
     def iter_messages(self, username, *, start_ts, end_ts, batch_size):
         base = int(datetime(2026, 8, 28, 9, 0, 0).timestamp())
         yield {
@@ -58,6 +61,27 @@ class FakeLinkClient(FakeMessageClient):
         }
 
 
+class FakeMemberNameClient(FakeMessageClient):
+    def list_contact_profiles(self):
+        return {
+            "wxid_remarked": {"nickname": "微信网名", "remark": "我的私人备注", "displayName": "我的私人备注"},
+            "wxid_group": {"nickname": "微信网名二", "remark": "另一条私人备注", "displayName": "另一条私人备注"},
+        }
+
+    def iter_messages(self, username, *, start_ts, end_ts, batch_size):
+        base = int(datetime(2026, 8, 28, 9, 0, 0).timestamp())
+        yield {
+            "id": "remarked", "localId": 1, "type": 1, "createTime": base,
+            "senderUsername": "wxid_remarked", "senderDisplayName": "我的私人备注",
+            "renderType": "text", "content": "第一条", "isSent": False,
+        }
+        yield {
+            "id": "group", "localId": 2, "type": 1, "createTime": base + 1,
+            "senderUsername": "wxid_group", "senderDisplayName": "群内昵称",
+            "renderType": "text", "content": "第二条", "isSent": False,
+        }
+
+
 class FetchingAPITests(unittest.TestCase):
     @patch("group_insight.fetching.WeChatDataAPIClient", FakeMessageClient)
     def test_api_messages_are_normalized_and_sorted(self):
@@ -78,6 +102,12 @@ class FetchingAPITests(unittest.TestCase):
         self.assertEqual(messages[0].metadata["rich_kind"], "link_card")
         self.assertEqual(messages[0].metadata["url"], "https://example.com/document")
         self.assertIn("示例资料", messages[0].text)
+
+    @patch("group_insight.fetching.WeChatDataAPIClient", FakeMemberNameClient)
+    def test_member_name_prefers_group_nickname_then_wechat_nickname_without_remark(self):
+        _, messages = fetch_structured_messages("测试群", "2026-08-28", "2026-08-28")
+        self.assertEqual([message.sender for message in messages], ["微信网名", "群内昵称"])
+        self.assertNotIn("我的私人备注", get_group_nickname_map("room@chatroom").values())
 
 
 if __name__ == "__main__":

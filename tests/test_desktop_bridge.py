@@ -7,13 +7,46 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from group_insight.desktop_bridge import _redact_report, build_report_entrypoint, normalize_chat_completions_url
+from group_insight.desktop_bridge import _redact_report, _test_ai, build_report_entrypoint, normalize_chat_completions_url
 from group_insight.history_store import HistoryStore as ActualHistoryStore
 from group_insight.report_paths import allocate_report_paths
 from group_insight.report_schema import build_report_document
 
 
 class DesktopBridgeTests(unittest.TestCase):
+    def test_ai_connection_reports_actual_response_model(self) -> None:
+        class FakeClient:
+            model = "deepseek-v4-flash"
+            last_response_model = "deepseek-v4-flash"
+
+            def chat_json(self, *_args, **_kwargs):
+                return {"ok": True}
+
+        with patch("group_insight.desktop_bridge.DeepSeekClient", return_value=FakeClient()):
+            result = _test_ai({
+                "api_key": "test-key", "provider": "deepseek",
+                "api_url": "https://api.deepseek.com", "model": "deepseek-v4-flash",
+                "thinking": False,
+            })
+        self.assertTrue(result["model_verified"])
+        self.assertEqual(result["response_model"], "deepseek-v4-flash")
+
+    def test_ai_connection_rejects_unexpected_response_model(self) -> None:
+        class FakeClient:
+            model = "deepseek-v4-flash"
+            last_response_model = "deepseek-v4-pro"
+
+            def chat_json(self, *_args, **_kwargs):
+                return {"ok": True}
+
+        with patch("group_insight.desktop_bridge.DeepSeekClient", return_value=FakeClient()):
+            with self.assertRaisesRegex(RuntimeError, "实际响应模型"):
+                _test_ai({
+                    "api_key": "test-key", "provider": "deepseek",
+                    "api_url": "https://api.deepseek.com", "model": "deepseek-v4-flash",
+                    "thinking": False,
+                })
+
     def test_development_report_entrypoint_uses_module(self) -> None:
         self.assertEqual(
             build_report_entrypoint(frozen=False),

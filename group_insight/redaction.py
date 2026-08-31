@@ -12,8 +12,9 @@ from .report_schema import make_report_id
 
 REDACTION_NOTICE = "已屏蔽，建议在群内查看"
 REDACTABLE_MODULES = {
-    "themes": "今日热点",
-    "topics": "详细讨论脉络",
+    "themes": "今日速览",
+    "topics": "今日主要话题",
+    "ai_observations": "AI 今日观察",
     "members": "活跃成员",
     "quotes": "引用原话",
     "decisions": "明确结论",
@@ -30,7 +31,10 @@ def _preview(item: Any) -> str:
         return ""
     if item.get("redacted"):
         return REDACTION_NOTICE
-    for key in ("title", "name", "content", "task", "question", "summary", "text", "insight", "topic"):
+    for key in (
+        "title", "name", "content", "task", "question", "discussion_flow",
+        "summary", "quote", "text", "insight", "topic",
+    ):
         value = str(item.get(key) or "").strip()
         if value:
             return value[:100]

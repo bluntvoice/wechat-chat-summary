@@ -5,10 +5,16 @@ import unittest
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from group_insight.desktop_config import load_desktop_settings, save_desktop_settings
+from group_insight.desktop_config import load_desktop_settings, normalize_desktop_model, save_desktop_settings
 
 
 class DesktopConfigTests(unittest.TestCase):
+    def test_deepseek_model_is_normalized_and_invalid_values_are_rejected(self):
+        self.assertEqual(normalize_desktop_model("deepseek", " DeepSeek-V4-Flash "), "deepseek-v4-flash")
+        self.assertEqual(normalize_desktop_model("deepseek", "deepseek-chat"), "deepseek-v4-flash")
+        with self.assertRaises(ValueError):
+            normalize_desktop_model("deepseek", "deepseek-v4-flahs")
+
     def test_schedule_can_be_enabled_and_disabled(self):
         with TemporaryDirectory() as temp_dir, patch.dict(
             os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}

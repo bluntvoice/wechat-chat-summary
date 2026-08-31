@@ -1,4 +1,4 @@
-"""统一的群聊报告 schema v2 与旧报告读取适配。"""
+"""统一的群聊报告 schema 2.x 与旧报告读取适配。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from typing import Any
 
 from .common import normalize_text
 
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "2.1"
+COMPATIBLE_SCHEMA_VERSIONS = {"2.0", SCHEMA_VERSION}
 
 
 def make_report_id(chat_id: str, start_time: str, end_time: str, version: int) -> str:
@@ -81,6 +82,7 @@ def build_report_document(
             "lead_summary": normalize_text(report.get("lead_summary", ""), max_len=1600),
             "themes": report.get("theme_cards", []),
             "topics": topics,
+            "ai_observations": report.get("ai_observations", []),
             "members": report.get("participant_insights", []) or stats.get("top_speakers", []),
             "quotes": report.get("quotes", []),
             "decisions": report.get("decisions", []),
@@ -88,6 +90,7 @@ def build_report_document(
             "open_questions": report.get("open_questions", []),
             "risk_flags": report.get("risk_flags", []),
             "mood": report.get("mood", {}),
+            "conclusion": normalize_text(report.get("conclusion", ""), max_len=240),
             "resources": resources,
         },
     }
@@ -103,7 +106,7 @@ def _legacy_version(path: Path | None) -> int:
 def upgrade_legacy_report(payload: dict[str, Any], source_path: Path | None = None) -> dict[str, Any]:
     """把 v0.1 JSON 适配为内存中的 schema v2，不覆盖原文件。"""
 
-    if str(payload.get("schema_version") or "") == SCHEMA_VERSION:
+    if str(payload.get("schema_version") or "") in COMPATIBLE_SCHEMA_VERSIONS:
         return payload
     metadata = payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}
     stats = payload.get("stats", {}) if isinstance(payload.get("stats"), dict) else {}

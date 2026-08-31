@@ -132,7 +132,6 @@ def export_report_image_with_playwright(
                 )
                 page.goto(html_path.resolve().as_uri(), wait_until="load", timeout=timeout_ms)
                 page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                page.evaluate("document.body.classList.add('export-png')")
                 page.evaluate(
                     """() => {
                         if (document.fonts && document.fonts.ready) {
@@ -173,7 +172,7 @@ def export_report_image_with_chrome_cli(
                 "--hide-scrollbars",
                 f"--window-size={viewport_width},1600",
                 f"--screenshot={str(image_path)}",
-                html_path.resolve().as_uri() + "?export=png",
+                html_path.resolve().as_uri(),
             ],
             check=True,
             stdout=DEVNULL,

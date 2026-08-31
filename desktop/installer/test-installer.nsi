@@ -12,7 +12,7 @@ Unicode true
   !error "OUTPUT_FILE is required"
 !endif
 !ifndef VERSION
-  !define VERSION "0.2.0"
+  !define VERSION "0.2.1"
 !endif
 
 Name "微信群聊总结（测试版）"

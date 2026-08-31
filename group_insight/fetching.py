@@ -15,7 +15,7 @@ from .settings import (
     WECHAT_DATA_API_URL,
     WECHAT_DATA_SOURCE,
 )
-from .wechat_data_api import WeChatDataAPIClient
+from .wechat_data_api import WeChatDataAPIClient, WeChatDataAPIError
 
 _GROUP_NICKNAME_CACHE: dict[str, dict[str, str]] = {}
 
@@ -34,6 +34,40 @@ def is_resolved_member_display(username: str, display_name: str) -> bool:
     if display_name.startswith(("wxid_", "gh_")) or display_name.endswith("@chatroom"):
         return False
     return True
+
+
+def resolve_sender_display(
+    username: str,
+    sender_display: str,
+    contact_profile: dict[str, Any] | None,
+) -> str:
+    """按群昵称、微信网名、账号 ID 的顺序选择名称，并排除个人备注。"""
+
+    username = (username or "").strip()
+    sender_display = (sender_display or "").strip()
+    profile = contact_profile or {}
+    remark = str(profile.get("remark") or "").strip()
+    nickname = str(profile.get("nickname") or "").strip()
+    profile_display = str(profile.get("displayName") or "").strip()
+
+    # WeChatDataAnalysis 的 senderDisplayName 优先给群昵称；没有群昵称时可能
+    # 回落到用户自己的联系人备注。只有与 remark 相同的值才明确排除。
+    if (
+        sender_display
+        and sender_display != "我"
+        and (not remark or sender_display.casefold() != remark.casefold())
+        and is_resolved_member_display(username, sender_display)
+    ):
+        return sender_display
+    if nickname and is_resolved_member_display(username, nickname):
+        return nickname
+    if (
+        profile_display
+        and (not remark or profile_display.casefold() != remark.casefold())
+        and is_resolved_member_display(username, profile_display)
+    ):
+        return profile_display
+    return username or "unknown"
 
 
 def collect_member_aliases_from_messages(messages: list[StructuredMessage]) -> dict[str, str]:
@@ -205,6 +239,11 @@ def fetch_structured_messages(
     seen_ids: set[str] = set()
     fingerprints: set[tuple[Any, ...]] = set()
     aliases: dict[str, str] = {}
+    try:
+        contact_profiles = client.list_contact_profiles()
+    except (WeChatDataAPIError, AttributeError):
+        # 兼容旧版 WeChatDataAnalysis：资料接口失败时继续使用消息显示名。
+        contact_profiles = {}
 
     for row in client.iter_messages(
         chat.username,
@@ -225,10 +264,11 @@ def fetch_structured_messages(
         text = str(metadata.get("analysis_text") or _analysis_text(row, msg_type))
         text = normalize_text(text or "(无内容)", max_len=MAX_LINE_TEXT_LEN)
         sender_username = str(row.get("senderUsername") or "").strip()
-        sender_display = str(row.get("senderDisplayName") or "").strip()
-        if not sender_display and bool(row.get("isSent")):
-            sender_display = "我"
-        sender_display = sender_display or sender_username or "unknown"
+        sender_display = resolve_sender_display(
+            sender_username,
+            str(row.get("senderDisplayName") or "").strip(),
+            contact_profiles.get(sender_username),
+        )
         if sender_username and is_resolved_member_display(sender_username, sender_display):
             aliases[sender_username] = sender_display
         fingerprint = (timestamp, sender_username or sender_display, msg_type, text)

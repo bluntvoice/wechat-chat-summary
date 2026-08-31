@@ -65,6 +65,7 @@ class DeepSeekClient(LLMClientProtocol):
         self.allow_json_repair = allow_json_repair
         self.thinking_enabled = bool(thinking_enabled)
         self.reasoning_effort = reasoning_effort
+        self.last_response_model = ""
 
     def chat_json(
         self,
@@ -141,6 +142,7 @@ class DeepSeekClient(LLMClientProtocol):
                 raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {detail[:1000]}") from exc
             raise
         parsed = json.loads(raw)
+        self.last_response_model = str(parsed.get("model") or "").strip()
         return (
             parsed.get("choices", [{}])[0]
             .get("message", {})
@@ -322,11 +324,12 @@ MAP_SCHEMA_EXAMPLE = {
     ],
     "highlight_sections": [
         {
+            "topic_key": "稳定的话题标识，例如 sushi-queue",
             "title": "一个可单独成段的话题簇标题",
             "start_time": "2026-04-08 09:12",
             "end_time": "2026-04-08 09:35",
-            "summary": "这个话题簇发生了什么。",
-            "bullets": ["关键点1", "关键点2"],
+            "summary": "这个话题如何被提起、展开以及当前结果。",
+            "bullets": ["观点或信息补充1", "讨论转折或结果2"],
             "evidence_ids": ["m_xxx", "m_yyy"],
         }
     ],
@@ -377,11 +380,14 @@ REDUCE_SCHEMA_EXAMPLE = {
     ],
     "highlight_sections": [
         {
+            "topic_key": "跨片段保持一致的话题标识",
             "title": "重要话题簇",
-            "start_time": "2026-04-08 09:12",
-            "end_time": "2026-04-08 10:30",
-            "summary": "合并后的话题总结",
-            "bullets": ["关键点1", "关键点2"],
+            "time_ranges": [
+                {"start": "2026-04-08 09:12", "end": "2026-04-08 10:30"},
+                {"start": "2026-04-08 15:10", "end": "2026-04-08 15:35"},
+            ],
+            "summary": "跨片段合并后的讨论脉络",
+            "bullets": ["观点或补充1", "转折或结果2"],
             "source_refs": ["shard-001", "shard-002"],
         }
     ],
@@ -425,13 +431,22 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
     ],
     "sections": [
         {
+            "id": "topic-sushi-queue",
             "title": "话题簇标题",
             "start_time": "2026-04-08 09:12",
             "end_time": "2026-04-08 10:30",
-            "summary": "这个话题簇的核心结论",
-            "bullets": ["要点1", "要点2"],
-            "takeaway": "一句点评或收束",
+            "time_ranges": [
+                {"start": "2026-04-08 09:12", "end": "2026-04-08 10:30"},
+                {"start": "2026-04-08 15:10", "end": "2026-04-08 15:35"},
+            ],
+            "discussion_flow": "讨论如何被提起、如何展开、出现了什么补充或转折，以及最终进展。",
+            "key_points": ["有信息量的观点或事实补充", "存在的不同意见"],
+            "turning_points": ["新信息出现后，讨论重点发生的变化"],
+            "result": {"status": "concluded/pending/no_conclusion", "summary": "实际结果；没有结论时明确说明"},
         }
+    ],
+    "ai_observations": [
+        {"title": "整体氛围", "content": "克制、基于证据的观察", "kind": "mood"}
     ],
     "participant_insights": [
         {"name": "[[user:wxid_xxx]]", "insight": "[[user:wxid_xxx]] 的关键作用或状态"}
@@ -442,19 +457,21 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
             "time": "2026-04-08 09:23",
             "quote": "一句可放进报告的原话",
             "why_it_matters": "为什么重要",
+            "topic_id": "topic-sushi-queue",
         }
     ],
-    "decisions": [{"content": "已明确的结论", "tone": "formal", "confidence": 0.9}],
+    "decisions": [{"content": "已明确的结论", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.9}],
     "action_items": [
-        {"owner": "[[user:wxid_xxx]] 或留空", "task": "[[user:wxid_xxx]] 相关行动项", "deadline": "时间或留空", "tone": "formal", "confidence": 0.9}
+        {"owner": "[[user:wxid_xxx]] 或留空", "task": "[[user:wxid_xxx]] 相关行动项", "deadline": "时间或留空", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.9}
     ],
-    "open_questions": ["未解决的问题"],
-    "risk_flags": [{"content": "需要继续观察的风险或争议", "tone": "formal", "confidence": 0.85}],
+    "open_questions": [{"question": "未解决的问题", "topic_id": "topic-sushi-queue"}],
+    "risk_flags": [{"content": "需要继续观察的风险或争议", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.85}],
     "light_moments": [{"content": "明确的玩笑、调侃或轻松插曲", "tone": "joke"}],
     "resource_groups": [
-        {"topic": "与 theme_cards 尽量一致的主题", "summary": "该组资源用途", "resource_ids": ["res_xxx"]}
+        {"topic_id": "topic-sushi-queue", "topic": "与 sections 一致的主题", "summary": "该组资源用途", "resource_ids": ["res_xxx"]}
     ],
     "mood": {"label": "整体氛围", "reason": "判断依据"},
+    "conclusion": "一句简短自然的报告结语",
 }
 
 
@@ -469,16 +486,17 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 3. evidence_ids 必须引用输入消息中的 id。
 4. 主题和亮点要偏“可直接上报表”的表达，不要写成学术论文。
 5. 允许保留轻度口语化，但不能夸张、不能编造。
-6. 严格控制输出长度，宁可少写，不要写长段落。
+6. 控制片段输出长度，但要保留话题缘起、观点变化和阶段结果所需的信息。
 7. theme_cards 最多 3 条，highlight_sections 最多 4 条，participant_notes 最多 4 条。
 8. quotes 最多 2 条，decisions/action_items/open_questions 各最多 3 条。
 9. action_items/open_questions/risk_flags 只有在确实没有明确事项、问题或风险时才返回空数组，不要为省略而置空。
-10. 每个 highlight_sections.bullets 最多 2 条。
+10. 每个 highlight_sections.bullets 最多 3 条。
 11. highlight_sections 表示“话题簇”而不是机械时间切段；如果同一时间窗口里存在多个不同话题，可以拆成多个 sections，时间范围允许重叠。
 12. 不要只写最显眼的主线，持续时间较短但消息量可观、内容明确的次级话题也要覆盖，避免遗漏例如运动分享、生活分享、工具讨论这类支线。
 13. 输入里会提供 member_directory；提到具体成员时，请统一使用对应的 `[[user:sender_id]]` 占位符，不要直接输出昵称。
 14. 必须区分正式结论、暂时讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 decisions/action_items/risk_flags。
 15. decisions/action_items 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时，降低确定性或放入 light_moments。
+16. 为同一语义话题生成稳定、简短的 topic_key；同一时间片内再次出现的同一话题不要拆成多个 key。
 
 输出 json schema 示例：
 {json.dumps(MAP_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -500,15 +518,15 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 要求：
 1. 只整合输入中的已有信息，不要引入外部信息。
 2. 去重同类主题、同类结论和重复行动项。
-3. highlight_sections 应按“话题簇”整理，不要机械按时间线硬切；如果多个话题的主要活跃区间重叠，允许时间范围重叠。
+3. highlight_sections 应按“话题簇”整理，不要机械按时间线硬切；跨 shard 再次出现的同一话题必须合并，并用 time_ranges 保留多个讨论区间。
 4. source_refs 必须引用输入里的 shard_id 或 bundle_id。
 5. risk_flags 至少覆盖明显争议、风险、未落地事项；没有则返回空数组。
-6. 严格控制输出长度，宁可少写，不要写长段落。
+6. 控制输出长度，但不要删掉理解讨论发展过程所需的缘起、观点、补充、转折或结果。
 7. theme_cards 最多 4 条，highlight_sections 最多 6 条，participant_notes 最多 6 条。
 8. quotes 最多 3 条，decisions/action_items/open_questions 各最多 4 条。
 9. 合并时检查是否遗漏持续但相对次级的话题，不要只保留最热主线。
-10. 如果输入覆盖多个明显不同的活跃区间，highlight_sections 至少为每个输入 shard/bundle 保留一个非重复的话题 section，除非其内容与其他输入完全重复。
-11. 不要让结果出现长时间空洞；如果 source_refs 对应的输入在某一时间段内明显活跃，合并结果应覆盖该时段。
+10. 不要求每个 shard/bundle 都形成一个 section；普通闲聊或无独立信息量的片段可以不进入主要话题。
+11. 判断是否合并的核心是讨论对象、问题和语义是否属于同一件事，而不是时间是否连续。
 12. 如果输入里出现 `[[user:sender_id]]` 占位符，输出时保留该占位符，不要改写成昵称。
 13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成正式结论、行动项或风险。
 
@@ -540,22 +558,26 @@ def build_final_prompts(
 
 要求：
 1. 只基于输入，不得补充不存在的数字。
-2. 主题卡片应短、清晰、适合视觉卡片展示。
-3. sections 是报告主体，表示“话题簇”而不是机械时间段；数量控制在 6-12 段。
+2. theme_cards 是“今日速览”，动态生成约 3-5 条短卡片；不强制凑足，不展开完整讨论过程。
+3. sections 是“今日主要话题”，表示语义话题而不是机械时间段；数量根据当天内容动态决定，不设最低数量。
 4. 报表语言要像运营洞察报告，不要写成泛泛总结。
 5. action_items/open_questions/risk_flags 只有在确实没有明确事项、问题或风险时才返回空数组，不要为省略而置空。
-6. 严格控制输出长度，宁可少写，不要把每条细节都展开。
-7. theme_cards 最多 4 条，participant_insights 最多 6 条，quotes 最多 4 条。
-8. sections 每段 bullets 最多 2 条。
+6. 主要话题需要有足够信息解释讨论如何发展，但不要堆积聊天记录。
+7. theme_cards 最多 5 条，participant_insights 最多 6 条，quotes 最多 4 条。
+8. 每个 section 使用 discussion_flow 自然叙述缘起、展开、观点、补充、转折与结果；key_points 和 turning_points 只在确有内容时填写。
 9. 如果多个话题的主要活跃时间交叠，允许不同 sections 的 start_time / end_time 重叠，不要为了避免重叠而把不同主题强行糅合成一段。
-10. 请覆盖当日所有明显成型的话题，不要遗漏持续时间较短但消息量可观的讨论，例如下午的运动分享、生活分享、工具讨论等。
-11. 如果输入 bundles 覆盖多个明显不同的活跃区间，sections 至少为每个 bundle/shard 保留一个非重复 section，除非两个输入本质上是同一话题。
-12. 不要生成大段时间空洞；若输入在某个中段时窗存在明显活跃讨论，最终 sections 应覆盖该时段。
+10. 覆盖当日所有明显成型且有信息量的话题；普通闲聊不必为了覆盖时间线而进入 sections。
+11. 同一话题上午出现、下午继续时必须合并为一个 section，并用 time_ranges 记录多个区间。
+12. 不要因为时间不连续拆分同一话题，也不要为了减少数量合并无关话题。
 13. 如果输入里的 bundles 使用 `[[user:sender_id]]` 占位符，最终输出请保留这些占位符，不要改写成昵称。
 14. one_line_summary 必须精炼自然，概括当天真正有区分度的内容，避免机械复述消息数，建议不超过 60 个汉字。
-15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、行动项或风险；不确定时弱化措辞并放入 light_moments。
+15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、行动项或风险；light_moments 仅用于内部过滤，不作为对外报告模块。
 16. decisions/action_items/risk_flags 采用高判定门槛。结构化对象若提供 tone/confidence，应如实保留；不得把 casual/joke/sarcasm/uncertain 升级为 formal。
-17. resource_groups 只能引用资源清单中真实存在的 resource_id；相同主题的链接和文件必须放在同一组，主题名尽量与 theme_cards/sections 一致，不能可靠归类时使用“其他 / 未归类”。
+17. resource_groups 只能引用资源清单中真实存在的 resource_id；优先通过 topic_id 关联到 sections，相同主题的链接和文件必须放在同一组，不能可靠归类时使用“其他 / 未归类”。
+18. ai_observations 回答“从今天这些聊天中可以观察到什么”，不得重复话题摘要，不得推测成员性格、关系或真实意图。
+19. 结论、行动、问题、风险和引用应尽量填写 topic_id；无法可靠关联时留空，不得强行归类。
+20. result 只有在聊天中存在明确结论、共识、决定或安排时才能标为 concluded；否则使用 pending 或 no_conclusion，并保守说明。
+21. conclusion 是简短结语，不复述整份报告，不包含虚构事实。
 
 最终 json schema 示例：
 {json.dumps(FINAL_REPORT_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}

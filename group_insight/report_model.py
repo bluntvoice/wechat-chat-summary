@@ -1,6 +1,6 @@
 """最终日报结构的修复、去重和本地 fallback 生成。
 
-LLM 输出进入渲染前会在这里被规范化，避免缺字段、重复主题、时间线覆盖不足或
+LLM 输出进入渲染前会在这里被规范化，避免缺字段、重复主题或
 dry-run 无模型时无法生成报表。
 """
 from __future__ import annotations
@@ -109,37 +109,153 @@ def dedupe_theme_cards(cards: list[dict[str, Any]], limit: int = 4) -> list[dict
     return deduped
 
 
-def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """清洗、排序并去重报表主体 section。"""
-    seen: set[tuple[str, str, str]] = set()
-    deduped: list[dict[str, Any]] = []
-    for section in sorted(sections, key=section_sort_key):
-        title = normalize_text(section.get("title", ""), max_len=140)
-        start_time = (section.get("start_time", "") or "").strip()
-        end_time = (section.get("end_time", "") or "").strip()
-        summary = normalize_text(section.get("summary", ""), max_len=700)
-        bullets = [
-            normalize_text(item, max_len=320)
-            for item in section.get("bullets", [])
-            if normalize_text(item, max_len=320)
-        ][:4]
-        takeaway = normalize_text(section.get("takeaway", ""), max_len=320)
-        if not title and not summary:
+def _normalized_text_list(items: Any, *, limit: int = 6, max_len: int = 320) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = normalize_text(item, max_len=max_len)
+        key = text.casefold()
+        if not text or key in seen:
             continue
-        key = (title.lower(), start_time, end_time)
+        seen.add(key)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _normalized_time_ranges(section: dict[str, Any]) -> list[dict[str, str]]:
+    ranges: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    source_ranges = section.get("time_ranges", []) if isinstance(section.get("time_ranges"), list) else []
+    if not source_ranges and (section.get("start_time") or section.get("end_time")):
+        source_ranges = [{"start": section.get("start_time", ""), "end": section.get("end_time", "")}]
+    for item in source_ranges:
+        if not isinstance(item, dict):
+            continue
+        start = str(item.get("start") or item.get("start_time") or "").strip()
+        end = str(item.get("end") or item.get("end_time") or start).strip()
+        if not start and not end:
+            continue
+        key = (start, end)
         if key in seen:
             continue
         seen.add(key)
-        deduped.append(
-            {
-                "title": title or "讨论片段",
-                "start_time": start_time,
-                "end_time": end_time,
-                "summary": summary,
-                "bullets": bullets,
-                "takeaway": takeaway,
-            }
+        ranges.append({"start": start, "end": end})
+    return sorted(ranges, key=lambda item: (item["start"], item["end"]))
+
+
+def _normalized_topic_result(value: Any, takeaway: Any = "") -> dict[str, str]:
+    if isinstance(value, dict):
+        status = str(value.get("status") or "").strip().lower()
+        summary = normalize_text(value.get("summary", ""), max_len=320)
+    else:
+        status = ""
+        summary = normalize_text(value, max_len=320)
+    if not summary:
+        summary = normalize_text(takeaway, max_len=320)
+    allowed = {"concluded", "pending", "no_conclusion"}
+    if status not in allowed:
+        status = "pending" if summary else "no_conclusion"
+    if status == "no_conclusion" and not summary:
+        summary = "未形成明确结论。"
+    return {"status": status, "summary": summary}
+
+
+def normalize_ai_observations(items: Any, mood: Any) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    source = items if isinstance(items, list) else []
+    for item in source:
+        if isinstance(item, str):
+            content = normalize_text(item, max_len=420)
+            if content:
+                result.append({"title": "今日观察", "content": content, "kind": "observation"})
+        elif isinstance(item, dict):
+            content = normalize_text(item.get("content", ""), max_len=420)
+            if not content:
+                continue
+            result.append(
+                {
+                    "title": normalize_text(item.get("title", ""), max_len=80) or "今日观察",
+                    "content": content,
+                    "kind": normalize_text(item.get("kind", ""), max_len=40) or "observation",
+                }
+            )
+        if len(result) >= 4:
+            break
+    if not result and isinstance(mood, dict):
+        label = normalize_text(mood.get("label", ""), max_len=60)
+        reason = normalize_text(mood.get("reason", ""), max_len=420)
+        if label or reason:
+            result.append({"title": label or "整体氛围", "content": reason or label, "kind": "mood"})
+    return result
+
+
+def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """清洗并按语义话题标识合并 section，不再按连续时间片强制拆分。"""
+    indexes: dict[str, int] = {}
+    deduped: list[dict[str, Any]] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        title = normalize_text(section.get("title", ""), max_len=140)
+        topic_id = normalize_text(section.get("id", "") or section.get("topic_key", ""), max_len=80)
+        discussion_flow = normalize_text(
+            section.get("discussion_flow", "") or section.get("summary", ""), max_len=1800
         )
+        key_points = _normalized_text_list(
+            section.get("key_points", []) or section.get("bullets", []), limit=6
+        )
+        turning_points = _normalized_text_list(section.get("turning_points", []), limit=4)
+        result = _normalized_topic_result(section.get("result"), section.get("takeaway", ""))
+        time_ranges = _normalized_time_ranges(section)
+        if not title and not discussion_flow:
+            continue
+        merge_key = (topic_id or title).casefold()
+        item = {
+            "id": topic_id or f"topic-{len(deduped) + 1}",
+            "title": title or "主要话题",
+            "start_time": time_ranges[0]["start"] if time_ranges else str(section.get("start_time") or ""),
+            "end_time": time_ranges[-1]["end"] if time_ranges else str(section.get("end_time") or ""),
+            "time_ranges": time_ranges,
+            "discussion_flow": discussion_flow,
+            "key_points": key_points,
+            "turning_points": turning_points,
+            "result": result,
+            # 保留旧读取器所需字段；新渲染器优先读取上面的结构化字段。
+            "summary": discussion_flow,
+            "bullets": key_points,
+            "takeaway": result.get("summary", ""),
+        }
+        if merge_key not in indexes:
+            indexes[merge_key] = len(deduped)
+            deduped.append(item)
+            continue
+        existing = deduped[indexes[merge_key]]
+        existing["time_ranges"] = _normalized_time_ranges(
+            {"time_ranges": [*existing.get("time_ranges", []), *time_ranges]}
+        )
+        if existing["time_ranges"]:
+            existing["start_time"] = existing["time_ranges"][0]["start"]
+            existing["end_time"] = existing["time_ranges"][-1]["end"]
+        if discussion_flow and discussion_flow not in existing["discussion_flow"]:
+            existing["discussion_flow"] = normalize_text(
+                f"{existing['discussion_flow']} {discussion_flow}", max_len=1800
+            )
+            existing["summary"] = existing["discussion_flow"]
+        existing["key_points"] = _normalized_text_list(
+            [*existing.get("key_points", []), *key_points], limit=6
+        )
+        existing["bullets"] = existing["key_points"]
+        existing["turning_points"] = _normalized_text_list(
+            [*existing.get("turning_points", []), *turning_points], limit=4
+        )
+        rank = {"no_conclusion": 0, "pending": 1, "concluded": 2}
+        if rank.get(result["status"], 0) > rank.get(existing["result"]["status"], 0):
+            existing["result"] = result
+            existing["takeaway"] = result.get("summary", "")
     return deduped
 
 
@@ -168,12 +284,15 @@ def build_report_sections_from_bundles(bundles: list[dict[str, Any]]) -> list[di
         for section in bundle.get("highlight_sections", []):
             sections.append(
                 {
+                    "id": section.get("id") or section.get("topic_key", ""),
                     "title": section.get("title", "讨论片段"),
                     "start_time": section.get("start_time", ""),
                     "end_time": section.get("end_time", ""),
-                    "summary": section.get("summary", ""),
-                    "bullets": section.get("bullets", [])[:2],
-                    "takeaway": normalize_text(section.get("summary", ""), max_len=120),
+                    "time_ranges": section.get("time_ranges", []),
+                    "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
+                    "key_points": section.get("key_points", []) or section.get("bullets", [])[:3],
+                    "turning_points": section.get("turning_points", []),
+                    "result": section.get("result", {}),
                 }
             )
     return select_timeline_sections(dedupe_sections(sections), limit=MAX_REPORT_SECTIONS)
@@ -302,8 +421,9 @@ def repair_final_report(
         "tagline": normalize_text(report.get("tagline", ""), max_len=180) or f"{start_time} - {end_time}",
         "lead_summary": normalize_text(report.get("lead_summary", ""), max_len=1600),
         "one_line_summary": normalize_text(report.get("one_line_summary", ""), max_len=120),
-        "theme_cards": dedupe_theme_cards(report.get("theme_cards", []), limit=4),
+        "theme_cards": dedupe_theme_cards(report.get("theme_cards", []), limit=5),
         "sections": dedupe_sections(report.get("sections", [])),
+        "ai_observations": normalize_ai_observations(report.get("ai_observations", []), report.get("mood", {})),
         "participant_insights": report.get("participant_insights", [])[:6],
         "quotes": report.get("quotes", [])[:4],
         "decisions": filter_serious_items(report.get("decisions", []), content_key="content")[:6],
@@ -313,11 +433,12 @@ def repair_final_report(
         "light_moments": normalize_light_moments(report.get("light_moments", [])),
         "resource_groups": report.get("resource_groups", []) if isinstance(report.get("resource_groups"), list) else [],
         "mood": report.get("mood", {}) if isinstance(report.get("mood"), dict) else {},
+        "conclusion": normalize_text(report.get("conclusion", ""), max_len=240),
     }
 
     bundle_sections = build_report_sections_from_bundles(bundles)
-    if final_sections_need_repair(repaired["sections"], bundle_sections):
-        repaired["sections"] = merge_repaired_sections(repaired["sections"], bundle_sections)
+    if not repaired["sections"] and bundle_sections:
+        repaired["sections"] = bundle_sections
         bundle_theme_cards = build_theme_cards_from_bundles(bundles)
         if bundle_theme_cards:
             repaired["theme_cards"] = bundle_theme_cards
@@ -340,6 +461,8 @@ def repair_final_report(
                 ),
             }
         ]
+    if not repaired["conclusion"]:
+        repaired["conclusion"] = "以上为本次群聊日报整理。"
     return repaired
 
 
@@ -367,6 +490,7 @@ def fallback_map_analysis(chunk: MessageChunk) -> dict[str, Any]:
         ],
         "highlight_sections": [
             {
+                "topic_key": f"shard-{chunk.id}",
                 "title": highlight_title,
                 "start_time": chunk.start_time,
                 "end_time": chunk.end_time,
@@ -448,9 +572,13 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
         ],
         "highlight_sections": [
             {
+                "topic_key": section.get("topic_key") or section.get("id", ""),
                 "title": section.get("title", "讨论片段"),
                 "start_time": section.get("start_time", ""),
                 "end_time": section.get("end_time", ""),
+                "time_ranges": section.get("time_ranges", []) or [
+                    {"start": section.get("start_time", ""), "end": section.get("end_time", "")}
+                ],
                 "summary": section.get("summary", ""),
                 "bullets": section.get("bullets", [])[:3],
                 "source_refs": source_refs,
@@ -518,12 +646,18 @@ def fallback_final_report(
         for section in bundle.get("highlight_sections", [])[:8]:
             sections.append(
                 {
+                    "id": section.get("id") or section.get("topic_key", ""),
                     "title": section.get("title", "讨论片段"),
                     "start_time": section.get("start_time", ""),
                     "end_time": section.get("end_time", ""),
-                    "summary": section.get("summary", ""),
-                    "bullets": section.get("bullets", [])[:3],
-                    "takeaway": "本地 dry-run 输出，建议接入 DeepSeek 获取更强语义总结。",
+                    "time_ranges": section.get("time_ranges", []),
+                    "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
+                    "key_points": section.get("key_points", []) or section.get("bullets", [])[:3],
+                    "turning_points": section.get("turning_points", []),
+                    "result": {
+                        "status": "pending",
+                        "summary": "本地 dry-run 输出，建议接入 AI 获取更强语义总结。",
+                    },
                 }
             )
     sections.sort(key=lambda item: (item["start_time"], item["end_time"]))
@@ -574,6 +708,13 @@ def fallback_final_report(
         "one_line_summary": f"{stats['participant_count']} 位群友参与，围绕 {len(theme_cards)} 个主要话题展开讨论。",
         "theme_cards": theme_cards,
         "sections": sections[:MAX_REPORT_SECTIONS],
+        "ai_observations": [
+            {
+                "title": "生成说明",
+                "content": "当前为本地 dry-run，仅验证数据、统计与渲染链路，未进行外部语义分析。",
+                "kind": "system",
+            }
+        ],
         "participant_insights": [
             {
                 "name": speaker["name"],
@@ -592,4 +733,5 @@ def fallback_final_report(
             "label": "活跃",
             "reason": "基于消息量与参与人数的本地判断。",
         },
+        "conclusion": "以上为本次群聊日报整理。",
     }

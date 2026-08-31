@@ -119,7 +119,7 @@ function App() {
       if (apiKey.trim()) payload.api_key = apiKey.trim();
       const saved = await bridge<Settings>("save_settings", { settings: payload });
       setSettings((current) => ({ ...current, ...saved })); setApiKey("");
-      if (showNotice) setMessage("AI 与导出设置已保存到本机软件数据目录。");
+      if (showNotice) setMessage(`AI 与导出设置已保存；当前模型：${saved.model}。`);
     } catch (error) {
       if (!showNotice) throw error;
       setMessage(`设置保存失败：${error instanceof Error ? error.message : String(error)}`);
@@ -149,7 +149,11 @@ function App() {
 
   async function testAi() {
     setAiState("testing"); setMessage("正在测试 AI API，仅发送最小测试内容…");
-    try { await bridge("test_ai", { settings: statusSettings() }); setAiState("ready"); setMessage("AI API 连接成功。"); }
+    try {
+      const data = await bridge<{ model: string; response_model: string; model_verified: boolean }>("test_ai", { settings: statusSettings() });
+      setAiState("ready");
+      setMessage(data.response_model ? `AI API 连接成功，实际响应模型：${data.response_model}。` : `AI API 连接成功，请求模型：${data.model}。`);
+    }
     catch (error) { setAiState("error"); setMessage(error instanceof Error ? error.message : String(error)); }
   }
 
@@ -298,7 +302,7 @@ function App() {
         </section>
         <section className="panel ai-panel">
           <div className="panel-heading"><div><span className="step-tag">03</span><h2>配置 AI 分析</h2></div><div className="heading-actions"><button className="button secondary" onClick={() => saveSettings()} disabled={busy}>保存设置</button><button className="button secondary" onClick={testAi} disabled={aiState === "testing" || busy}>{aiState === "testing" ? "测试中…" : "测试 API"}</button></div></div>
-          <div className="field-grid"><label><span>服务类型</span><select value={settings.provider} onChange={(e) => setSettings({ ...settings, provider: e.target.value as Settings["provider"] })}><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible</option></select></label><label><span>模型</span><input value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} /></label><label className="wide"><span>API URL</span><input value={settings.api_url} onChange={(e) => setSettings({ ...settings, api_url: e.target.value })} /></label><label className="wide"><span>API Key {settings.api_key_configured && !apiKey ? <em>本机已保存</em> : null}</span><input type="password" autoComplete="off" placeholder={settings.api_key_configured ? "留空则继续使用已保存的 Key" : "输入 API Key"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></label></div>
+          <div className="field-grid"><label><span>服务类型</span><select value={settings.provider} onChange={(e) => { const provider = e.target.value as Settings["provider"]; setSettings({ ...settings, provider, model: provider === "deepseek" ? "deepseek-v4-flash" : settings.model }); }}><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible</option></select></label><label><span>模型</span>{settings.provider === "deepseek" ? <select value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })}><option value="deepseek-v4-flash">DeepSeek V4 Flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro</option></select> : <input value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} />}</label><label className="wide"><span>API URL</span><input value={settings.api_url} onChange={(e) => setSettings({ ...settings, api_url: e.target.value })} /></label><label className="wide"><span>API Key {settings.api_key_configured && !apiKey ? <em>本机已保存</em> : null}</span><input type="password" autoComplete="off" placeholder={settings.api_key_configured ? "留空则继续使用已保存的 Key" : "输入 API Key"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></label></div>
           <p className="privacy-copy">聊天文本仅在生成时发送给你配置的 AI 服务商；Key 只保存在本机软件数据目录。</p>
         </section>
         <section className="panel output-panel">

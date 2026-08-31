@@ -118,6 +118,44 @@ class WeChatDataAPIClient:
             },
         )
 
+    def get_contact_profile(self, username: str) -> dict[str, Any]:
+        """读取联系人原始资料，供显示名去除个人备注时使用。"""
+
+        payload = self._request(
+            "/api/chat/contacts/profile",
+            {
+                "account": self.account,
+                "source": self.source,
+                "username": username,
+            },
+        )
+        contact = payload.get("contact")
+        return contact if isinstance(contact, dict) else {}
+
+    def list_contact_profiles(self) -> dict[str, dict[str, Any]]:
+        """一次读取本机联系人资料，避免按群成员逐个请求造成明显等待。"""
+
+        payload = self._request(
+            "/api/chat/contacts",
+            {
+                "account": self.account,
+                "source": self.source,
+                "include_friends": "true",
+                "include_groups": "false",
+                "include_officials": "false",
+                "include_former_friends": "true",
+                "include_blocked": "true",
+            },
+        )
+        profiles: dict[str, dict[str, Any]] = {}
+        for item in payload.get("contacts", []):
+            if not isinstance(item, dict):
+                continue
+            username = str(item.get("username") or "").strip()
+            if username:
+                profiles[username] = item
+        return profiles
+
     def resolve_chat(self, chat_ref: str) -> ChatReference:
         """按群名或 username 精确解析会话；唯一部分匹配仅作为显式兜底。"""
 
