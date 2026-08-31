@@ -21,7 +21,7 @@ THINKING=false
 THINKING_LEVEL=high
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
 WECHAT_DATA_API_URL=http://127.0.0.1:10392
-GROUP_INSIGHT_OUTPUT_ROOT=D:\WeChatData\群聊总结
+GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 ```
 
 `.env` 是本机私有文件，不要提交。当前文档口径只支持仓库根目录 `.env` 作为本地配置入口；已经存在于系统环境变量里的同名 Key 不会被覆盖。
@@ -122,8 +122,10 @@ ID。群关键词会合并重复短语，并移除与高频长词重复的二字
 不读取聊天、不调用 AI，被屏蔽正文不会进入新版本 JSON、HTML、PNG、SQLite 模块内容或 FTS。
 “轻松插曲”已从对外报告结构和渲染中移除，内部 tone 分类仍用于严肃结论过滤。
 
-桌面端可通过 `--progress-file <path>` 读取原子写入的阶段进度 JSON。历史库默认位于软件
-数据目录的 `history.sqlite3`，只保存报告结构、统计、资源与文件路径，不复制完整聊天正文。
+桌面端可通过 `--progress-file <path>` 读取原子写入的阶段进度 JSON，并通过
+`--result-file <path>` 读取版本化的结构化生成结果，不依赖 CLI 中文日志。历史库默认位于
+Tauri 解析的 Windows 用户数据目录，只保存报告结构、独立每日统计、资源与文件路径，不复制
+完整聊天正文。SQLite database schema version 与 Report Schema 2.1 分开维护。
 
 v0.2.1 桌面端的“定时生成当日报告”使用软件内置定时器，可随时关闭；软件关闭时不执行，
 并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划注册模块相互独立。

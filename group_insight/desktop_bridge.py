@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .desktop_config import desktop_data_dir, load_desktop_settings, save_desktop_settings
+from .desktop_config import ensure_desktop_data_dir, load_desktop_settings, save_desktop_settings
 from .history_store import HistoryStore
 from .progress import read_progress
 from .llm import DeepSeekClient
@@ -136,10 +136,13 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
     export_root = Path(str(payload.get("export_root") or settings.get("export_root"))).expanduser()
     export_root.mkdir(parents=True, exist_ok=True)
     job_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("job_id") or "current"))[:80] or "current"
-    progress_path = desktop_data_dir() / "jobs" / f"{job_id}.json"
+    jobs_dir = ensure_desktop_data_dir() / "jobs"
+    progress_path = jobs_dir / f"{job_id}.json"
+    result_path = jobs_dir / f"{job_id}.result.json"
     progress_path.parent.mkdir(parents=True, exist_ok=True)
-    if progress_path.exists():
-        progress_path.unlink()
+    for stale_path in (progress_path, result_path):
+        if stale_path.exists():
+            stale_path.unlink()
 
     command = [
         *build_report_entrypoint(),
@@ -164,6 +167,8 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
         "--no-send-after-run",
         "--progress-file",
         str(progress_path),
+        "--result-file",
+        str(result_path),
     ]
     if bool(settings.get("thinking", False)) and provider == "deepseek":
         command.append("--thinking")
@@ -193,24 +198,19 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
         tail = "\n".join(output.splitlines()[-20:])
         raise RuntimeError(tail or f"分析进程退出码: {completed.returncode}")
 
-    result: dict[str, Any] = {"completed": True, "log": "\n".join(output.splitlines()[-30:])}
-    labels = {
-        "群聊报告目录: ": "chat_dir",
-        "报告数据目录: ": "data_dir",
-        "PNG目录: ": "image_dir",
-        "JSON: ": "json_path",
-        "HTML: ": "html_path",
-        "PNG: ": "png_path",
-    }
-    for line in output.splitlines():
-        for prefix, key in labels.items():
-            if not line.startswith(prefix):
-                continue
-            value = line[len(prefix) :].strip()
-            if key == "png_path" and (value.startswith("failed (") or value.startswith("skipped")):
-                result["png_error"] = value
-            else:
-                result[key] = value
+    if not result_path.is_file():
+        raise RuntimeError("分析进程未返回结构化结果文件。")
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"结构化生成结果无法读取: {exc}") from exc
+    if (
+        not isinstance(result, dict)
+        or result.get("protocol_version") != 1
+        or result.get("completed") is not True
+    ):
+        raise RuntimeError("结构化生成结果协议版本无效。")
+    result["log"] = "\n".join(output.splitlines()[-30:])
     required_outputs = ["json_path", "html_path", "png_path"]
     missing_outputs = [
         key
@@ -231,7 +231,12 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
 def _state_with_history() -> dict[str, Any]:
     settings = load_desktop_settings(include_secret=False)
     with HistoryStore() as history:
-        import_result = history.import_export_root(Path(str(settings.get("export_root") or "")))
+        export_root = str(settings.get("export_root") or "").strip()
+        import_result = (
+            history.import_export_root(Path(export_root))
+            if export_root
+            else {"scanned": 0, "imported": 0, "skipped": 0, "failed": 0}
+        )
         summarized_chat_ids = history.summarized_chat_ids()
         settings["summarized_chat_ids"] = summarized_chat_ids
         settings["history_import"] = import_result
@@ -276,7 +281,10 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
     metadata = document.get("metadata", {})
     chat = metadata.get("chat", {})
     period = metadata.get("period", {})
-    output_root = Path(str(settings.get("export_root") or "")).expanduser()
+    configured_output_root = str(settings.get("export_root") or "").strip()
+    if not configured_output_root:
+        raise ValueError("请先选择独立的报告根目录。")
+    output_root = Path(configured_output_root).expanduser()
     paths = allocate_report_paths(
         output_root,
         str(chat.get("name") or "群聊"),
@@ -348,7 +356,7 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _generate(settings, payload)
     if command == "get_progress":
         job_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("job_id") or "current"))[:80] or "current"
-        return read_progress(desktop_data_dir() / "jobs" / f"{job_id}.json")
+        return read_progress(ensure_desktop_data_dir() / "jobs" / f"{job_id}.json")
     if command == "get_redaction_targets":
         return _get_redaction_targets(payload)
     if command == "redact_report":

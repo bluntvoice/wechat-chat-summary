@@ -25,12 +25,13 @@
 
 ## 配置与隐私
 
-- CLI 读取仓库根目录 `.env`；桌面端普通设置默认写入
-  `D:\工具\WeChat Chat Summary\data\config.json`，Key 写入同目录 `secrets.env`。
+- CLI 读取仓库根目录 `.env`；桌面端普通设置、Key、SQLite 与任务进度必须使用 Tauri 解析的
+  Windows App Local Data 目录，不得新增个人盘符或用户名硬编码。
 - 不得提交 `.env`、令牌、消息快照、桌面私有配置或报告。
 - 数据源配置：`WECHAT_DATA_API_URL`、`WECHAT_DATA_ACCOUNT`、
   `WECHAT_DATA_SOURCE`。
-- 独立输出根目录：`GROUP_INSIGHT_OUTPUT_ROOT`。
+- CLI 独立输出根目录：`GROUP_INSIGHT_OUTPUT_ROOT`；未配置时必须 fail-fast。桌面端新用户导出
+  目录默认为空，首次生成前要求选择并保存，不得回退到源码、安装目录或开发机路径。
 - 默认输出不得放在源码仓库或 `WeChatDataAnalysis` 安装目录中。
 - 未来安装器/升级器只允许替换软件根目录的 `program`；不得删除或覆盖 `data`、
   软件根目录下用户选择的 `reports`，或任何其他用户自定义报告目录。
@@ -38,6 +39,7 @@
   分析数据按 `<群聊>\报告数据\YYYY-MM-DD报告数据` 保存。
 - 同日重复生成必须使用 `_v2`、`_v3` 递增版本，不得覆盖旧文件。
 - map 原始消息输入不得写入报告目录；统计和派生分析结果允许保存。
+- 旧固定数据目录只允许执行“校验复制且保留源目录”的兼容迁移；目标已有配置时不得覆盖。
 
 ## 开发规则
 
@@ -67,6 +69,19 @@
   用户可见变化、测试结果、安装包内容和发布通道；不得覆盖既有 Tag。
 - GitHub Actions 构建不得读取或打包 `.env`、`secrets.env`、本地配置、聊天数据、SQLite、
   用户报告或安装包之外的本地运行时数据。
+
+## 历史基础与桌面桥接规则
+
+- SQLite 结构升级必须追加显式 migration；每步在事务内幂等执行，成功后才更新
+  `PRAGMA user_version`，失败不得静默吞掉或删除历史数据。Database Schema Version 与
+  Report Schema 2.1 是两个概念。
+- 群聊每日统计以 `chat_id + date` 独立保存，可在没有报告的日期存在；报告可以写入或引用统计，
+  统计不得依赖非空 `report_id`。不得为填满热力图主动扫描全年聊天。
+- 中文历史搜索基础采用 SQLite FTS5 + 本地子串回退；不得仅因 FTS 表存在就宣称中文子词可靠，
+  必须覆盖群名、成员、话题、行动、文件、资源、URL 和中英混合测试。
+- CLI 可保留人类可读日志，但桌面端生成结果必须读取版本化结构化协议，不得解析中文 stdout 标签。
+- `open_questions` 与 decisions/action_items/risk_flags 使用相同的 tone/confidence 严肃性过滤；
+  旧报告缺少这些字段时继续读取，引用原话不因玩笑语气被统一删除。
 
 ## PRD 与开发执行规范
 

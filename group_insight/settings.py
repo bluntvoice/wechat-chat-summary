@@ -67,8 +67,9 @@ DEFAULT_SEND_AFTER_RUN = False
 DEFAULT_SEND_TARGET_CHATS: list[str] = []
 # 默认附带文本；留空时使用脚本自动生成的摘要。
 DEFAULT_SEND_MESSAGE = datetime.now().strftime("%m-%d") + "日报已发送"
-# 报告应保存在源码目录之外；本地使用时请通过 .env 显式配置。
-DEFAULT_OUTPUT_ROOT = Path(r"D:\WeChatData\群聊总结")
+# 报告目录必须由桌面用户选择，或由 CLI 通过参数 / 环境变量显式配置。
+# 不再为正式行为提供开发机磁盘路径兜底。
+DEFAULT_OUTPUT_ROOT: Path | None = None
 WECHAT_DATA_API_URL = "http://127.0.0.1:10392"
 WECHAT_DATA_ACCOUNT = ""
 WECHAT_DATA_SOURCE = ""
@@ -153,9 +154,8 @@ def load_local_env() -> None:
 load_local_env()
 
 # 本地数据源和导出目录允许由仓库根目录 .env 或进程环境覆盖。
-DEFAULT_OUTPUT_ROOT = Path(
-    os.environ.get("GROUP_INSIGHT_OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT))
-).expanduser()
+_configured_output_root = os.environ.get("GROUP_INSIGHT_OUTPUT_ROOT", "").strip()
+DEFAULT_OUTPUT_ROOT = Path(_configured_output_root).expanduser() if _configured_output_root else None
 WECHAT_DATA_API_URL = os.environ.get("WECHAT_DATA_API_URL", WECHAT_DATA_API_URL).rstrip("/")
 WECHAT_DATA_ACCOUNT = os.environ.get("WECHAT_DATA_ACCOUNT", "").strip()
 WECHAT_DATA_SOURCE = os.environ.get("WECHAT_DATA_SOURCE", "").strip()

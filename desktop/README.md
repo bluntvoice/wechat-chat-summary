@@ -13,6 +13,10 @@ Python 核心。开发模式使用仓库虚拟环境，测试安装包使用 PyI
 - 生成 JSON、HTML 和 300 DPI PNG；
 - 打开图片、报告数据目录和群聊报告目录。
 
+软件自身的配置、密钥、SQLite 与任务进度由 Tauri 定位到 Windows 标准 App Local Data
+目录，报告导出目录与其严格分离。新用户未选择报告目录时不会预填开发机路径，首次生成会
+明确要求先选择目录。旧版固定数据目录只在新目录尚未使用时执行一次校验复制，且保留原目录。
+
 开发运行：
 
 ```powershell
@@ -29,7 +33,12 @@ cargo check
 ```
 
 当前 Rust 桥接在开发模式下优先使用仓库 `.venv\Scripts\python.exe`。正式安装包需在
-Release 构建中读取安装目录内的 `engine\group-insight-sidecar.exe`。
+Release 构建中读取安装目录内的 `engine\group-insight-sidecar.exe`。桌面端与报告子进程通过
+专用 JSON 结果文件传递输出路径，不解析 CLI 的中文人类日志；每次请求启动一个 Python 进程的
+生命周期本轮保持不变。
+
+前端现有生成页已按职责放入 `pages/GeneratePage.tsx`，类型、桥接服务、生成状态 hook 和人工
+屏蔽组件分别位于 `types/`、`services/`、`hooks/` 与 `components/`。本轮未新增历史、热力图或 MCP 页面。
 
 本地测试安装包（不创建 Tag / GitHub Release）：
 

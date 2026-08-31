@@ -11,6 +11,7 @@
 - 无法获取领取状态
 - 只能确定发送者和接收者（专属红包）
 """
+import argparse
 import os
 import re
 import sqlite3
@@ -327,29 +328,29 @@ class WeChatRedPacketAnalyzer:
 
 
 def main():
-    """主函数示例"""
-    # 配置
-    config = {
-        "decrypted_dir": r"D:\WeChatData\decrypted",
-        "chat_name": None,  # None=所有聊天，或指定群聊名称
-        "output_file": r"D:\WeChatData\redpacket_report.json",
-    }
+    """从显式参数运行，避免依赖开发机路径。"""
+
+    parser = argparse.ArgumentParser(description="分析解密后的微信红包消息。")
+    parser.add_argument("--decrypted-dir", required=True, help="解密后的数据库目录。")
+    parser.add_argument("--output-file", required=True, help="红包报告 JSON 输出路径。")
+    parser.add_argument("--chat-name", default=None, help="可选群聊名称；留空分析全部聊天。")
+    args = parser.parse_args()
 
     # 创建分析器
     analyzer = WeChatRedPacketAnalyzer(
-        decrypted_dir=config["decrypted_dir"]
+        decrypted_dir=args.decrypted_dir
     )
 
     print("🔍 分析红包信息...")
     analysis = analyzer.analyze(
-        chat_name=config["chat_name"]
+        chat_name=args.chat_name
     )
 
     print(f"📦 找到 {analysis['total']} 个红包")
 
     if analysis["total"] > 0:
         print("\n📊 生成报告...")
-        analyzer.generate_report(analysis, config["output_file"])
+        analyzer.generate_report(analysis, args.output_file)
 
     print("\n✅ 完成！")
 
