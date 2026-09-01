@@ -7,10 +7,11 @@ import type {
   HistoryReport,
   HistoryReportDetail,
   HistorySearchHit,
+  HistoryNavigationTarget,
   Paginated,
 } from "../types/desktop";
 
-type HistoryPageProps = { active: boolean };
+type HistoryPageProps = { active: boolean; target?: HistoryNavigationTarget | null };
 
 const MODULE_OPTIONS = [
   ["all", "全部"],
@@ -108,7 +109,7 @@ function ModuleCard({ module }: { module: HistoryModule }) {
   </article>;
 }
 
-export default function HistoryPage({ active }: HistoryPageProps) {
+export default function HistoryPage({ active, target }: HistoryPageProps) {
   const [chats, setChats] = useState<HistoryChat[]>([]);
   const [chatQuery, setChatQuery] = useState("");
   const [selectedChatId, setSelectedChatId] = useState("");
@@ -154,6 +155,17 @@ export default function HistoryPage({ active }: HistoryPageProps) {
   useEffect(() => {
     if (active) void refreshHistory(true);
   }, [active]);
+
+  useEffect(() => {
+    if (!active || !target) return;
+    setSelectedChatId(target.chatId);
+    setStartDate(target.date);
+    setEndDate(target.date);
+    setKeyword("");
+    setModuleFilter("all");
+    setDetailModule("all");
+    setSelectedReportId(target.reportId);
+  }, [active, target?.requestId]);
 
   useEffect(() => {
     if (!active || !selectedChatId) {

@@ -3,11 +3,13 @@ from __future__ import annotations
 import sys
 import json
 import unittest
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from group_insight.desktop_bridge import (
+    _ensure_daily_stats,
     _list_chats,
     _redact_report,
     _refresh_history_state,
@@ -16,6 +18,7 @@ from group_insight.desktop_bridge import (
     handle,
     normalize_chat_completions_url,
 )
+from group_insight.models import StructuredMessage
 from group_insight.history_store import HistoryStore as ActualHistoryStore
 from group_insight.report_paths import allocate_report_paths
 from group_insight.report_schema import build_report_document
@@ -23,6 +26,43 @@ from tests.test_history_center import history_document
 
 
 class DesktopBridgeTests(unittest.TestCase):
+    def test_heatmap_daily_stats_never_construct_an_ai_client(self) -> None:
+        from group_insight.wechat_data_api import ChatReference
+
+        class FakeAPI:
+            def resolve_chat(self, _chat_id):
+                return ChatReference(
+                    username="room@chatroom",
+                    display_name="统计群",
+                    is_group=True,
+                    account="account-a",
+                    source="native",
+                )
+
+        timestamp = int(datetime(2026, 8, 31, 12, 0, 0).timestamp())
+        messages = [StructuredMessage(
+            id="message-1", local_id=1, timestamp=timestamp,
+            time="2026-08-31 12:00:00", sender_username="wxid_a", sender="甲",
+            text="本地统计", msg_type="文本", chat_id="room@chatroom", chat_name="统计群",
+            table_name="test", metadata={},
+        )]
+        with TemporaryDirectory() as temp_dir:
+            with (
+                patch("group_insight.desktop_bridge._client", return_value=FakeAPI()),
+                patch("group_insight.desktop_bridge.fetch_structured_messages", return_value=(
+                    {"username": "room@chatroom", "display_name": "统计群"}, messages,
+                )),
+                patch("group_insight.desktop_bridge.HistoryStore", side_effect=lambda: ActualHistoryStore(Path(temp_dir) / "history.sqlite3")),
+                patch("group_insight.desktop_bridge.DeepSeekClient") as ai_client,
+            ):
+                result = _ensure_daily_stats(
+                    {"wechat_api_url": "http://127.0.0.1:10392"},
+                    {"chat_id": "room@chatroom", "start_date": "2026-08-31", "end_date": "2026-08-31"},
+                )
+        self.assertFalse(ai_client.called)
+        self.assertFalse(result["ai_called"])
+        self.assertEqual(result["days"][0]["message_count"], 1)
+
     def test_ai_connection_reports_actual_response_model(self) -> None:
         class FakeClient:
             model = "deepseek-v4-flash"

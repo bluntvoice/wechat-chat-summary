@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -482,6 +482,40 @@ class HistoryStore:
             )
             self._write_chat_daily_stats(self.connection, chat_id, date, stats, timestamp)
 
+    def upsert_chat_daily_stats_many(
+        self,
+        *,
+        chat_id: str,
+        chat_name: str,
+        rows: list[dict[str, Any]],
+        calculated_at: str | None = None,
+    ) -> None:
+        """在一个事务中保存多天聚合结果，不持久化原始消息。"""
+
+        if not rows:
+            return
+        timestamp = calculated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO chats(chat_id, display_name, first_seen_at, last_seen_at, last_report_at)
+                   VALUES(?, ?, ?, ?, '')
+                   ON CONFLICT(chat_id) DO UPDATE SET
+                     display_name=excluded.display_name,
+                     last_seen_at=excluded.last_seen_at""",
+                (chat_id, chat_name, timestamp, timestamp),
+            )
+            for row in rows:
+                row_date = str(row.get("date") or "").strip()
+                if not row_date:
+                    raise ValueError("日统计记录缺少 date。")
+                self._write_chat_daily_stats(
+                    self.connection,
+                    chat_id,
+                    row_date,
+                    row,
+                    str(row.get("calculated_at") or timestamp),
+                )
+
     def get_chat_daily_stats(
         self,
         chat_id: str,
@@ -502,6 +536,56 @@ class HistoryStore:
             parameters,
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_report_links_by_date(
+        self,
+        chat_id: str,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, dict[str, Any]]:
+        """把与日期相交的最新版报告映射到热力图日期。"""
+
+        rows = self.connection.execute(
+            """WITH ranked AS (
+                   SELECT r.*,
+                          ROW_NUMBER() OVER (
+                            PARTITION BY r.chat_id, r.period_start, r.period_end
+                            ORDER BY r.version DESC, r.generated_at DESC, r.report_id DESC
+                          ) AS version_rank
+                   FROM reports AS r
+                   WHERE r.chat_id=?
+                     AND substr(r.period_end, 1, 10) >= ?
+                     AND substr(r.period_start, 1, 10) <= ?
+               )
+               SELECT report_id, report_date, period_start, period_end, version,
+                      generated_at, headline, one_line_summary
+               FROM ranked
+               WHERE version_rank=1
+               ORDER BY generated_at DESC, version DESC, report_id DESC""",
+            (chat_id, start_date, end_date),
+        ).fetchall()
+        links: dict[str, dict[str, Any]] = {}
+        requested_start = date.fromisoformat(start_date)
+        requested_end = date.fromisoformat(end_date)
+        for row in rows:
+            report_start = max(requested_start, date.fromisoformat(str(row["period_start"])[:10]))
+            report_end = min(requested_end, date.fromisoformat(str(row["period_end"])[:10]))
+            cursor = report_start
+            while cursor <= report_end:
+                key = cursor.isoformat()
+                links.setdefault(
+                    key,
+                    {
+                        "report_id": str(row["report_id"]),
+                        "report_date": str(row["report_date"]),
+                        "version": int(row["version"]),
+                        "headline": str(row["headline"]),
+                        "one_line_summary": str(row["one_line_summary"]),
+                    },
+                )
+                cursor += timedelta(days=1)
+        return links
 
     def upsert_report(
         self,
