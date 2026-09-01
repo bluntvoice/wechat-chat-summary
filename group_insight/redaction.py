@@ -22,6 +22,13 @@ REDACTABLE_MODULES = {
     "open_questions": "开放问题",
     "risk_flags": "风险提示",
 }
+TOPIC_DETAIL_MODULES = {
+    "outcome": "讨论落点",
+    "action_items": "行动事项",
+    "open_questions": "开放问题",
+    "risk_flags": "风险提示",
+    "quotes": "相关原话",
+}
 
 
 def _preview(item: Any) -> str:
@@ -94,6 +101,26 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
                     "redacted": bool(isinstance(item, dict) and item.get("redacted")),
                 }
             )
+            if module_key != "topics" or not isinstance(item, dict) or item.get("redacted"):
+                continue
+            for detail_key, detail_label in TOPIC_DETAIL_MODULES.items():
+                detail = item.get(detail_key)
+                detail_items = detail if isinstance(detail, list) else ([detail] if isinstance(detail, dict) else [])
+                for detail_index, detail_item in enumerate(detail_items):
+                    if not isinstance(detail_item, dict):
+                        continue
+                    suffix = f":{detail_key}" if not isinstance(detail, list) else f":{detail_key}:{detail_index}"
+                    detail_id = str(detail_item.get("redaction_id") or f"topics:{index}{suffix}")
+                    targets.append(
+                        {
+                            "id": detail_id,
+                            "module_key": f"topics.{detail_key}",
+                            "module_label": detail_label,
+                            "preview": _preview(detail_item),
+                            "time_label": _time_label(detail_item, document) if detail_item.get("time") else _time_label(item, document),
+                            "redacted": bool(detail_item.get("redacted")),
+                        }
+                    )
 
     resources = content.get("resources", {}) if isinstance(content.get("resources"), dict) else {}
     for group_index, group in enumerate(resources.get("groups", []) or []):
@@ -223,6 +250,19 @@ def redact_report_document(
                 item_index = int(parts[2])
                 original = groups[group_index].get("items", [])[item_index]
                 groups[group_index]["items"][item_index] = _stub(target_id, target["time_label"], original_id=str(original.get("id") or ""))
+        elif parts[0] == "topics" and len(parts) >= 3:
+            topic_index = int(parts[1])
+            detail_key = parts[2]
+            topic = content["topics"][topic_index]
+            if len(parts) == 3:
+                original = topic.get(detail_key, {})
+                original_id = str(original.get("id") or "") if isinstance(original, dict) else ""
+                topic[detail_key] = _stub(target_id, target["time_label"], original_id=original_id)
+            else:
+                detail_index = int(parts[3])
+                original = topic.get(detail_key, [])[detail_index]
+                original_id = str(original.get("id") or "") if isinstance(original, dict) else ""
+                topic[detail_key][detail_index] = _stub(target_id, target["time_label"], original_id=original_id)
         else:
             module_key, index_text = parts[0], parts[1]
             original = content[module_key][int(index_text)]

@@ -250,7 +250,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             + items_html + '</article>'
         )
 
-    serious_specs = (
+    legacy_serious_specs = (
         ("明确结论", content.get("decisions", []) or [], ("content",)),
         ("行动事项", content.get("action_items", []) or [], ("task",)),
         ("开放问题", content.get("open_questions", []) or [], ("question", "content")),
@@ -266,23 +266,30 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
                 f'<div class="section-body">{_redacted_html(topic)}</div></article>'
             )
         flow = topic.get("discussion_flow") or topic.get("summary") or ""
-        points = topic.get("key_points") or topic.get("bullets") or []
-        turns = topic.get("turning_points") or []
-        result = topic.get("result") if isinstance(topic.get("result"), dict) else {}
-        result_text = result.get("summary") or topic.get("takeaway") or ""
-        status = str(result.get("status") or ("pending" if result_text else "no_conclusion"))
-        if status == "no_conclusion" and not result_text:
-            result_text = "未形成明确结论。"
-        status_labels = {"concluded": "已形成结论", "pending": "仍在讨论", "no_conclusion": "暂无结论"}
-        extras = []
-        for label, items, keys in serious_specs:
+        outcome = topic.get("outcome") if isinstance(topic.get("outcome"), dict) else {}
+        legacy_result = topic.get("result") if isinstance(topic.get("result"), dict) else {}
+        outcome_text = outcome.get("content") or legacy_result.get("summary") or topic.get("takeaway") or ""
+        legacy_status = str(legacy_result.get("status") or "")
+        if legacy_status in {"pending", "no_conclusion"}:
+            outcome_text = ""
+        extras = [
+            render_simple_items("行动事项", topic.get("action_items", []) or [], "task"),
+            render_simple_items("开放问题", topic.get("open_questions", []) or [], "question", "content"),
+            render_simple_items("风险提示", topic.get("risk_flags", []) or [], "content"),
+        ]
+        for label, items, keys in legacy_serious_specs:
             related = [item for item in items if belongs_to(item, topic)]
             used_item_ids.update(id(item) for item in related)
             extras.append(render_simple_items(label, related, *keys))
-        related_quotes = [item for item in quotes if belongs_to(item, topic)]
+        related_quotes = [*(topic.get("quotes", []) or []), *[item for item in quotes if belongs_to(item, topic)]]
         used_item_ids.update(id(item) for item in related_quotes)
-        quote_html = "".join(render_quote(item) for item in related_quotes)
-        related_groups = [group for group in groups if belongs_to(group, topic)]
+        quote_html = "".join(render_quote(item) for item in related_quotes[:2])
+        linked_resource_ids = {str(value) for value in topic.get("resource_ids", []) or []}
+        related_groups = [
+            group for group in groups
+            if belongs_to(group, topic)
+            or any(str(item.get("id") or "") in linked_resource_ids for item in group.get("items", []) if isinstance(item, dict))
+        ]
         used_item_ids.update(id(item) for item in related_groups)
         resource_html = "".join(render_resource_group(group) for group in related_groups)
         return (
@@ -290,9 +297,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             + time_ranges_html(topic)
             + f'<h3>{resolved(topic.get("title", "主要话题"))}</h3>'
             + (f'<p class="discussion-flow">{resolved(flow)}</p>' if flow else "")
-            + (f'<div class="topic-extra"><h4>关键观点</h4><ul>{"".join(f"<li>{resolved(item)}</li>" for item in points if item)}</ul></div>' if points else "")
-            + (f'<div class="topic-extra turning"><h4>讨论转折</h4><ul>{"".join(f"<li>{resolved(item)}</li>" for item in turns if item)}</ul></div>' if turns else "")
-            + (f'<div class="topic-result {status}"><span>{_esc(status_labels.get(status, "讨论结果"))}</span><p>{resolved(result_text)}</p></div>' if result_text or status == "no_conclusion" else "")
+            + (_redacted_html(outcome) if _is_redacted(outcome) else (f'<div class="topic-result concluded"><span>讨论落点</span><p>{resolved(outcome_text)}</p></div>' if outcome_text else ""))
             + "".join(extras)
             + (f'<div class="topic-extra"><h4>相关原话</h4>{quote_html}</div>' if quote_html else "")
             + (f'<div class="topic-extra resources-in-topic"><h4>相关资源</h4>{resource_html}</div>' if resource_html else "")
@@ -320,7 +325,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
         if _is_redacted(item) or _text(item, "content", "summary")
     )
     supplemental = []
-    for label, items, keys in serious_specs:
+    for label, items, keys in legacy_serious_specs:
         unassigned = [item for item in items if id(item) not in used_item_ids]
         supplemental.append(render_simple_items(label, unassigned, *keys))
     unassigned_quotes = [item for item in quotes if id(item) not in used_item_ids]
@@ -386,7 +391,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
 .metrics{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}} .metric{{background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.65);border-radius:8px;padding:10px;min-width:0}} .metric span{{display:block;font-size:10px;color:var(--muted)}} .metric strong{{font-size:20px;margin-right:2px}} .metric small{{font-size:10px}}
 .card{{background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:10px;padding:14px 12px;box-shadow:var(--shadow)}} .card>h2{{font-size:17px;margin:0 0 10px;font-weight:900}} h3{{font-size:16px;margin:0 0 5px}} h4{{font-size:13px;margin:0 0 5px}} p{{margin:0;font-size:14px;color:#526159}}
 .brief-grid{{display:grid;gap:8px}} .brief-card{{padding:12px;border-radius:8px;background:linear-gradient(180deg,#fffdf5,#fff7fb);border:1px solid rgba(225,106,151,.15)}} .brief-card h3{{font-size:16px;color:#e16a97}} .brief-card p{{font-size:14px}}
-.main-topic{{display:grid;grid-template-columns:32px 1fr;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}} .main-topic:last-child{{border-bottom:0;padding-bottom:0}} .section-index{{width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-top:1px}} .section-body{{min-width:0}} .time-chips{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px}} .time-chips span{{padding:2px 7px;border-radius:99px;background:#edf7ed;color:var(--green-dark);font-size:10px;font-weight:700}} .discussion-flow{{line-height:1.78;font-size:15px}} .topic-extra{{margin-top:10px;padding:9px 10px;border-radius:8px;background:#f8fbf6}} .topic-extra.turning{{background:#fff9e8}} .topic-extra ul{{margin:0;padding-left:18px;font-size:13px;color:#526159;line-height:1.72}} .topic-result{{display:flex;gap:8px;align-items:flex-start;margin-top:10px;padding:9px 10px;border-radius:8px;background:#edf7fb}} .topic-result span{{flex:0 0 auto;padding:2px 7px;border-radius:99px;background:#d8edf4;font-size:10px;color:#477587}} .topic-result p{{font-size:13px}} .topic-result.concluded{{background:#edf8ee}} .topic-result.no_conclusion{{background:#f4f4f1}}
+.main-topic{{display:grid;grid-template-columns:32px 1fr;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}} .main-topic:last-child{{border-bottom:0;padding-bottom:0}} .section-index{{width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-top:1px}} .section-body{{min-width:0}} .time-chips{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px}} .time-chips span{{padding:2px 7px;border-radius:99px;background:#edf7ed;color:var(--green-dark);font-size:10px;font-weight:700}} .discussion-flow{{line-height:1.72;font-size:14px}} .topic-extra{{margin-top:8px;padding:8px 9px;border-radius:8px;background:#f8fbf6}} .topic-extra ul{{margin:0;padding-left:18px;font-size:12px;color:#526159;line-height:1.65}} .topic-result{{display:flex;gap:7px;align-items:flex-start;margin-top:8px;padding:7px 9px;border-left:3px solid #78b889;border-radius:6px;background:#f2f9f2}} .topic-result span{{flex:0 0 auto;padding:1px 6px;border-radius:99px;background:#dff0df;font-size:10px;color:#477557}} .topic-result p{{font-size:12px}}
 .observation{{padding:12px 13px;border-radius:11px;background:#f5faf2;margin-top:8px}} .observation:first-of-type{{margin-top:0}} .observation:nth-child(2n){{background:#fff9e8}} .supplement{{background:#f7f5fb}}
 .member-list{{list-style:none;padding:0;margin:0;display:grid;gap:6px}} .member-list li{{display:flex;align-items:center;gap:10px;padding:9px 10px;background:#f7fbf5;border-radius:10px}} .rank{{display:inline-flex;align-items:center;justify-content:center;flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:#dff0df;color:#3f8757;font:700 12px ui-monospace}} .member-list strong{{font-size:13px}} .member-list p{{font-size:12px}}
 .activity-block{{padding:12px 0;border-top:1px dashed #dfe8da}} .activity-block:first-of-type{{border-top:0;padding-top:0}} .speaker-list{{list-style:none;padding:0;margin:0;display:grid;gap:6px}} .speaker-row{{display:grid;grid-template-columns:28px minmax(90px,.8fr) 1fr 48px;align-items:center;gap:9px;padding:8px 10px;background:#f7fbf5;border-radius:10px}} .speaker-row strong{{font-size:12px;overflow-wrap:anywhere}} .speaker-row i{{height:8px;border-radius:8px;background:#e7efe2;overflow:hidden}} .speaker-row i b{{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,#8bd092,#5eae79)}} .speaker-count{{font-size:11px;color:var(--muted);text-align:right;white-space:nowrap}}

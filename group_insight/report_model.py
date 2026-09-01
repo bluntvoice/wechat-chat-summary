@@ -15,6 +15,16 @@ from .settings import MAX_REPORT_SECTIONS, SECTION_TOPIC_COVERAGE_THRESHOLD
 
 
 NON_FORMAL_TONES = {"joke", "sarcasm", "casual", "uncertain", "teasing", "夸张", "反话", "玩笑", "调侃", "闲聊"}
+EMPTY_OUTCOME_TEXTS = {
+    "暂无结论",
+    "暂无结论。",
+    "未形成明确结论",
+    "未形成明确结论。",
+    "讨论停留在观点交流",
+    "讨论停留在观点交流。",
+    "仍在讨论",
+    "仍在讨论。",
+}
 
 
 def filter_serious_items(items: Any, *, content_key: str = "content", threshold: float = 0.72) -> list[Any]:
@@ -147,21 +157,87 @@ def _normalized_time_ranges(section: dict[str, Any]) -> list[dict[str, str]]:
     return sorted(ranges, key=lambda item: (item["start"], item["end"]))
 
 
-def _normalized_topic_result(value: Any, takeaway: Any = "") -> dict[str, str]:
+def _normalized_topic_outcome(value: Any, takeaway: Any = "") -> dict[str, Any] | None:
+    """仅保留有明确内容和足够可信度的讨论落点。"""
+
     if isinstance(value, dict):
         status = str(value.get("status") or "").strip().lower()
-        summary = normalize_text(value.get("summary", ""), max_len=320)
+        content = normalize_text(value.get("content", "") or value.get("summary", ""), max_len=240)
+        candidate = {**value, "content": content}
     else:
         status = ""
-        summary = normalize_text(value, max_len=320)
-    if not summary:
-        summary = normalize_text(takeaway, max_len=320)
-    allowed = {"concluded", "pending", "no_conclusion"}
-    if status not in allowed:
-        status = "pending" if summary else "no_conclusion"
-    if status == "no_conclusion" and not summary:
-        summary = "未形成明确结论。"
-    return {"status": status, "summary": summary}
+        content = normalize_text(value, max_len=240)
+        candidate = {"content": content}
+    if not content:
+        content = normalize_text(takeaway, max_len=240)
+        candidate["content"] = content
+    if status and status != "concluded":
+        return None
+    if not content or content in EMPTY_OUTCOME_TEXTS:
+        return None
+    filtered = filter_serious_items([candidate], content_key="content")
+    return filtered[0] if filtered and isinstance(filtered[0], dict) else None
+
+
+def _merge_serious_items(
+    *sources: Any,
+    content_key: str,
+    limit: int,
+) -> list[Any]:
+    """合并并去重话题内的严肃可选项。"""
+
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for source in sources:
+        for item in filter_serious_items(source, content_key=content_key):
+            text = item if isinstance(item, str) else item.get(content_key, "")
+            key = normalize_text(str(text or ""), max_len=320).casefold()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
+def _merge_quotes(*sources: Any, limit: int = 2) -> list[dict[str, Any]]:
+    """话题原话默认从严控制，按原文去重。"""
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in sources:
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            quote = normalize_text(item.get("quote", "") or item.get("content", ""), max_len=240)
+            key = quote.casefold()
+            if not quote or key in seen:
+                continue
+            seen.add(key)
+            result.append({**item, "quote": quote})
+            if len(result) >= limit:
+                return result
+    return result
+
+
+def _merge_resource_ids(*sources: Any, limit: int = 24) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for source in sources:
+        if not isinstance(source, list):
+            continue
+        for value in source:
+            resource_id = str(value or "").strip()
+            if not resource_id or resource_id in seen:
+                continue
+            seen.add(resource_id)
+            result.append(resource_id)
+            if len(result) >= limit:
+                return result
+    return result
 
 
 def normalize_ai_observations(items: Any, mood: Any) -> list[dict[str, Any]]:
@@ -203,13 +279,12 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         title = normalize_text(section.get("title", ""), max_len=140)
         topic_id = normalize_text(section.get("id", "") or section.get("topic_key", ""), max_len=80)
         discussion_flow = normalize_text(
-            section.get("discussion_flow", "") or section.get("summary", ""), max_len=1800
+            section.get("discussion_flow", "") or section.get("summary", ""), max_len=360
         )
-        key_points = _normalized_text_list(
-            section.get("key_points", []) or section.get("bullets", []), limit=6
+        outcome = _normalized_topic_outcome(
+            section.get("outcome") if section.get("outcome") not in (None, "") else section.get("result"),
+            section.get("takeaway", ""),
         )
-        turning_points = _normalized_text_list(section.get("turning_points", []), limit=4)
-        result = _normalized_topic_result(section.get("result"), section.get("takeaway", ""))
         time_ranges = _normalized_time_ranges(section)
         if not title and not discussion_flow:
             continue
@@ -221,13 +296,18 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "end_time": time_ranges[-1]["end"] if time_ranges else str(section.get("end_time") or ""),
             "time_ranges": time_ranges,
             "discussion_flow": discussion_flow,
-            "key_points": key_points,
-            "turning_points": turning_points,
-            "result": result,
-            # 保留旧读取器所需字段；新渲染器优先读取上面的结构化字段。
-            "summary": discussion_flow,
-            "bullets": key_points,
-            "takeaway": result.get("summary", ""),
+            "outcome": outcome,
+            "action_items": _merge_serious_items(
+                section.get("action_items", []), content_key="task", limit=4
+            ),
+            "open_questions": _merge_serious_items(
+                section.get("open_questions", []), content_key="question", limit=2
+            ),
+            "risk_flags": _merge_serious_items(
+                section.get("risk_flags", []), content_key="content", limit=3
+            ),
+            "quotes": _merge_quotes(section.get("quotes", []), limit=2),
+            "resource_ids": _merge_resource_ids(section.get("resource_ids", [])),
         }
         if merge_key not in indexes:
             indexes[merge_key] = len(deduped)
@@ -242,20 +322,23 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             existing["end_time"] = existing["time_ranges"][-1]["end"]
         if discussion_flow and discussion_flow not in existing["discussion_flow"]:
             existing["discussion_flow"] = normalize_text(
-                f"{existing['discussion_flow']} {discussion_flow}", max_len=1800
+                f"{existing['discussion_flow']} {discussion_flow}", max_len=360
             )
-            existing["summary"] = existing["discussion_flow"]
-        existing["key_points"] = _normalized_text_list(
-            [*existing.get("key_points", []), *key_points], limit=6
+        if not existing.get("outcome") and outcome:
+            existing["outcome"] = outcome
+        existing["action_items"] = _merge_serious_items(
+            existing.get("action_items", []), item.get("action_items", []), content_key="task", limit=4
         )
-        existing["bullets"] = existing["key_points"]
-        existing["turning_points"] = _normalized_text_list(
-            [*existing.get("turning_points", []), *turning_points], limit=4
+        existing["open_questions"] = _merge_serious_items(
+            existing.get("open_questions", []), item.get("open_questions", []), content_key="question", limit=2
         )
-        rank = {"no_conclusion": 0, "pending": 1, "concluded": 2}
-        if rank.get(result["status"], 0) > rank.get(existing["result"]["status"], 0):
-            existing["result"] = result
-            existing["takeaway"] = result.get("summary", "")
+        existing["risk_flags"] = _merge_serious_items(
+            existing.get("risk_flags", []), item.get("risk_flags", []), content_key="content", limit=3
+        )
+        existing["quotes"] = _merge_quotes(existing.get("quotes", []), item.get("quotes", []), limit=2)
+        existing["resource_ids"] = _merge_resource_ids(
+            existing.get("resource_ids", []), item.get("resource_ids", [])
+        )
     return deduped
 
 
@@ -290,9 +373,12 @@ def build_report_sections_from_bundles(bundles: list[dict[str, Any]]) -> list[di
                     "end_time": section.get("end_time", ""),
                     "time_ranges": section.get("time_ranges", []),
                     "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
-                    "key_points": section.get("key_points", []) or section.get("bullets", [])[:3],
-                    "turning_points": section.get("turning_points", []),
-                    "result": section.get("result", {}),
+                    "outcome": section.get("outcome") or section.get("result"),
+                    "action_items": section.get("action_items", []),
+                    "open_questions": section.get("open_questions", []),
+                    "risk_flags": section.get("risk_flags", []),
+                    "quotes": section.get("quotes", []),
+                    "resource_ids": section.get("resource_ids", []),
                 }
             )
     return select_timeline_sections(dedupe_sections(sections), limit=MAX_REPORT_SECTIONS)
@@ -303,12 +389,14 @@ def section_topic_tokens(section: dict[str, Any]) -> set[str]:
     """抽取 section 文本中的主题 token，用于覆盖度判断。"""
     parts = [
         normalize_text(section.get("title", ""), max_len=120),
-        normalize_text(section.get("summary", ""), max_len=240),
-        normalize_text(section.get("takeaway", ""), max_len=160),
+        normalize_text(section.get("discussion_flow", "") or section.get("summary", ""), max_len=240),
+        normalize_text(
+            (section.get("outcome") or {}).get("content", "")
+            if isinstance(section.get("outcome"), dict)
+            else section.get("takeaway", ""),
+            max_len=160,
+        ),
     ]
-    bullets = section.get("bullets", [])
-    for bullet in bullets[:3]:
-        parts.append(normalize_text(bullet, max_len=120))
 
     tokens: set[str] = set()
     for part in parts:
@@ -416,24 +504,55 @@ def repair_final_report(
     bundles: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """规范化最终报表结构，并修复缺字段或覆盖不足的问题。"""
+    sections = dedupe_sections(report.get("sections", []))
+    sections_by_id = {str(item.get("id") or ""): item for item in sections}
+
+    # 兼容模型偶尔返回的 2.1 顶层模块，并在写入新报告前收进 topic。
+    legacy_specs = (
+        ("action_items", "task", 4),
+        ("open_questions", "question", 2),
+        ("risk_flags", "content", 3),
+    )
+    for key, content_key, limit in legacy_specs:
+        for legacy_item in report.get(key, []) if isinstance(report.get(key), list) else []:
+            if not isinstance(legacy_item, dict):
+                continue
+            target = sections_by_id.get(str(legacy_item.get("topic_id") or ""))
+            if target is not None:
+                target[key] = _merge_serious_items(
+                    target.get(key, []), [legacy_item], content_key=content_key, limit=limit
+                )
+    for legacy_item in report.get("quotes", []) if isinstance(report.get("quotes"), list) else []:
+        if not isinstance(legacy_item, dict):
+            continue
+        target = sections_by_id.get(str(legacy_item.get("topic_id") or ""))
+        if target is not None:
+            target["quotes"] = _merge_quotes(target.get("quotes", []), [legacy_item], limit=2)
+    for legacy_item in report.get("decisions", []) if isinstance(report.get("decisions"), list) else []:
+        if not isinstance(legacy_item, dict):
+            continue
+        target = sections_by_id.get(str(legacy_item.get("topic_id") or ""))
+        if target is not None and not target.get("outcome"):
+            target["outcome"] = _normalized_topic_outcome(legacy_item)
+    for group in report.get("resource_groups", []) if isinstance(report.get("resource_groups"), list) else []:
+        if not isinstance(group, dict):
+            continue
+        target = sections_by_id.get(str(group.get("topic_id") or ""))
+        if target is not None:
+            target["resource_ids"] = _merge_resource_ids(
+                target.get("resource_ids", []), group.get("resource_ids", [])
+            )
+
     repaired = {
         "headline": normalize_text(report.get("headline", ""), max_len=120) or f"{chat_name} 群洞察报表",
         "tagline": normalize_text(report.get("tagline", ""), max_len=180) or f"{start_time} - {end_time}",
         "lead_summary": normalize_text(report.get("lead_summary", ""), max_len=1600),
         "one_line_summary": normalize_text(report.get("one_line_summary", ""), max_len=120),
         "theme_cards": dedupe_theme_cards(report.get("theme_cards", []), limit=5),
-        "sections": dedupe_sections(report.get("sections", [])),
+        "sections": sections,
         "ai_observations": normalize_ai_observations(report.get("ai_observations", []), report.get("mood", {})),
         "participant_insights": report.get("participant_insights", [])[:6],
-        "quotes": report.get("quotes", [])[:4],
-        "decisions": filter_serious_items(report.get("decisions", []), content_key="content")[:6],
-        "action_items": filter_serious_items(report.get("action_items", []), content_key="task")[:6],
-        "open_questions": filter_serious_items(
-            report.get("open_questions", []), content_key="question"
-        )[:6],
-        "risk_flags": filter_serious_items(report.get("risk_flags", []), content_key="content")[:6],
         "light_moments": normalize_light_moments(report.get("light_moments", [])),
-        "resource_groups": report.get("resource_groups", []) if isinstance(report.get("resource_groups"), list) else [],
         "mood": report.get("mood", {}) if isinstance(report.get("mood"), dict) else {},
         "conclusion": normalize_text(report.get("conclusion", ""), max_len=240),
     }
@@ -496,11 +615,13 @@ def fallback_map_analysis(chunk: MessageChunk) -> dict[str, Any]:
                 "title": highlight_title,
                 "start_time": chunk.start_time,
                 "end_time": chunk.end_time,
-                "summary": f"主要发言者为 {'、'.join(top_names) if top_names else '未知成员'}。",
-                "bullets": [
-                    f"消息量 {chunk.message_count} 条",
-                    f"涉及 {len(speaker_counts)} 位发言者",
-                ],
+                "discussion_flow": f"主要发言者为 {'、'.join(top_names) if top_names else '未知成员'}，本片段包含 {chunk.message_count} 条消息。",
+                "outcome": None,
+                "action_items": [],
+                "open_questions": [],
+                "risk_flags": [],
+                "quotes": [],
+                "resource_ids": [],
                 "evidence_ids": top_line_ids,
             }
         ],
@@ -540,10 +661,6 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
     highlight_sections = []
     participant_notes = []
     quotes = []
-    action_items = []
-    decisions = []
-    open_questions = []
-    risk_flags = []
     light_moments = []
     source_refs = []
 
@@ -554,10 +671,6 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
         highlight_sections.extend(item.get("highlight_sections", [])[:2])
         participant_notes.extend(item.get("participant_notes", [])[:2])
         quotes.extend(item.get("quotes", [])[:2])
-        action_items.extend(item.get("action_items", []))
-        decisions.extend(item.get("decisions", []))
-        open_questions.extend(item.get("open_questions", []))
-        risk_flags.extend(item.get("risk_flags", []))
         light_moments.extend(item.get("light_moments", []))
 
     summary = items[0].get("summary", "") if items else ""
@@ -581,8 +694,13 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
                 "time_ranges": section.get("time_ranges", []) or [
                     {"start": section.get("start_time", ""), "end": section.get("end_time", "")}
                 ],
-                "summary": section.get("summary", ""),
-                "bullets": section.get("bullets", [])[:3],
+                "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
+                "outcome": section.get("outcome"),
+                "action_items": section.get("action_items", []),
+                "open_questions": section.get("open_questions", []),
+                "risk_flags": section.get("risk_flags", []),
+                "quotes": section.get("quotes", []),
+                "resource_ids": section.get("resource_ids", []),
                 "source_refs": source_refs,
             }
             for section in highlight_sections[:6]
@@ -604,38 +722,6 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
             }
             for quote in quotes[:6]
         ],
-        "decisions": [
-            {
-                "content": decision.get("content", ""),
-                "source_refs": source_refs,
-            }
-            for decision in decisions[:6]
-        ],
-        "action_items": [
-            {
-                "owner": action.get("owner", ""),
-                "task": action.get("task", ""),
-                "deadline": action.get("deadline", ""),
-                "status_hint": action.get("status_hint", ""),
-                "source_refs": source_refs,
-            }
-            for action in action_items[:6]
-        ],
-        "open_questions": [
-            {
-                "question": question.get("question", ""),
-                "source_refs": source_refs,
-                **({"tone": question.get("tone")} if question.get("tone") not in (None, "") else {}),
-                **(
-                    {"confidence": question.get("confidence")}
-                    if question.get("confidence") not in (None, "")
-                    else {}
-                ),
-            }
-            for question in open_questions[:6]
-            if isinstance(question, dict)
-        ],
-        "risk_flags": risk_flags[:6],
         "light_moments": light_moments[:6],
         "mood": {
             "label": "概览",
@@ -664,12 +750,12 @@ def fallback_final_report(
                     "end_time": section.get("end_time", ""),
                     "time_ranges": section.get("time_ranges", []),
                     "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
-                    "key_points": section.get("key_points", []) or section.get("bullets", [])[:3],
-                    "turning_points": section.get("turning_points", []),
-                    "result": {
-                        "status": "pending",
-                        "summary": "本地 dry-run 输出，建议接入 AI 获取更强语义总结。",
-                    },
+                    "outcome": section.get("outcome"),
+                    "action_items": section.get("action_items", []),
+                    "open_questions": section.get("open_questions", []),
+                    "risk_flags": section.get("risk_flags", []),
+                    "quotes": section.get("quotes", []),
+                    "resource_ids": section.get("resource_ids", []),
                 }
             )
     sections.sort(key=lambda item: (item["start_time"], item["end_time"]))
@@ -734,13 +820,7 @@ def fallback_final_report(
             }
             for speaker in stats["top_speakers"][:5]
         ],
-        "quotes": [],
-        "decisions": [],
-        "action_items": [],
-        "open_questions": [],
-        "risk_flags": ["当前为 dry-run，未接入外部语义分析。"],
         "light_moments": [],
-        "resource_groups": [],
         "mood": {
             "label": "活跃",
             "reason": "基于消息量与参与人数的本地判断。",

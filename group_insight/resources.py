@@ -172,13 +172,28 @@ def _local_topic(item: dict[str, Any], topics: list[dict[str, Any]]) -> tuple[st
     best_score = 0.0
     for index, topic in enumerate(topics, start=1):
         title = normalize_text(topic.get("title", ""), max_len=60)
-        summary = normalize_text(topic.get("summary", ""), max_len=160)
+        summary = normalize_text(topic.get("discussion_flow", "") or topic.get("summary", ""), max_len=220)
         score = topic_similarity(item_tokens, extract_topic_tokens(f"{title} {summary}"))
         if score > best_score:
             best_title = title
             best_key = str(topic.get("id") or f"topic-{index}")
             best_score = score
-    return (best_key, best_title) if best_title and best_score >= 0.08 else ("other", "其他 / 未归类")
+    return (best_key, best_title) if best_title and best_score >= 0.18 else ("other", "其他 / 未归类")
+
+
+def _matches_topic(item: dict[str, Any], topic: dict[str, Any]) -> bool:
+    """用资源标题与短上下文复核模型关联，宁可未归类也不串错话题。"""
+
+    item_tokens = extract_topic_tokens(
+        " ".join(str(item.get(key) or "") for key in ("title", "source", "context_summary"))
+    )
+    topic_tokens = extract_topic_tokens(
+        " ".join(
+            str(topic.get(key) or "")
+            for key in ("title", "discussion_flow", "summary")
+        )
+    )
+    return bool(item_tokens and topic_tokens and topic_similarity(item_tokens, topic_tokens) >= 0.18)
 
 
 def build_resource_catalog(
@@ -189,20 +204,43 @@ def build_resource_catalog(
     """校验模型归类并为遗漏资源提供本地主题兜底。"""
 
     by_id = {str(item.get("id")): dict(item) for item in resources if item.get("id")}
+    topic_by_id = {
+        str(topic.get("id") or topic.get("topic_key") or f"topic-{index}"): topic
+        for index, topic in enumerate(topics, start=1)
+        if isinstance(topic, dict)
+    }
+    proposed_groups = list(ai_groups or [])
+    if not proposed_groups:
+        proposed_groups = [
+            {
+                "topic_id": topic_id,
+                "topic": topic.get("title", ""),
+                "resource_ids": topic.get("resource_ids", []),
+            }
+            for topic_id, topic in topic_by_id.items()
+            if isinstance(topic.get("resource_ids"), list) and topic.get("resource_ids")
+        ]
+
     assignments: dict[str, tuple[str, str, str]] = {}
-    for index, group in enumerate(ai_groups or [], start=1):
+    for group in proposed_groups:
         title = normalize_text(group.get("topic", ""), max_len=60)
         if not title:
             continue
-        group_key = (
-            "other"
-            if title in {"其他", "未归类", "其他 / 未归类"}
-            else normalize_text(group.get("topic_id", ""), max_len=80) or f"ai-{index}"
-        )
+        requested_key = normalize_text(group.get("topic_id", ""), max_len=80)
+        is_other = title in {"其他", "未归类", "其他 / 未归类"} or requested_key == "other"
+        if not is_other and requested_key not in topic_by_id:
+            continue
+        group_key = "other" if is_other else requested_key
+        if group_key in topic_by_id:
+            title = normalize_text(topic_by_id[group_key].get("title", ""), max_len=60) or title
         summary = normalize_text(group.get("summary", ""), max_len=180)
         for resource_id in group.get("resource_ids", []):
             resource_id = str(resource_id)
-            if resource_id in by_id and resource_id not in assignments:
+            if (
+                resource_id in by_id
+                and resource_id not in assignments
+                and (group_key == "other" or _matches_topic(by_id[resource_id], topic_by_id[group_key]))
+            ):
                 assignments[resource_id] = (group_key, title, summary)
 
     grouped: "OrderedDict[str, dict[str, Any]]" = OrderedDict()

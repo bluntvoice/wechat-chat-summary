@@ -10,8 +10,8 @@ from typing import Any
 
 from .common import normalize_text
 
-SCHEMA_VERSION = "2.1"
-COMPATIBLE_SCHEMA_VERSIONS = {"2.0", SCHEMA_VERSION}
+SCHEMA_VERSION = "2.2"
+COMPATIBLE_SCHEMA_VERSIONS = {"2.0", "2.1", SCHEMA_VERSION}
 
 
 def make_report_id(chat_id: str, start_time: str, end_time: str, version: int) -> str:
@@ -28,6 +28,41 @@ def _one_line(report: dict[str, Any], chat_name: str) -> str:
     if value:
         return value
     return f"{chat_name} 今日讨论已完成整理。"
+
+
+def _canonical_topic(item: dict[str, Any], index: int) -> dict[str, Any]:
+    """把新文档的话题固定为 Schema 2.2，避免旧冗余字段继续写入。"""
+
+    outcome = item.get("outcome")
+    if not isinstance(outcome, dict):
+        legacy_result = item.get("result") if isinstance(item.get("result"), dict) else {}
+        outcome = (
+            {"content": legacy_result.get("summary", "")}
+            if str(legacy_result.get("status") or "") == "concluded" and legacy_result.get("summary")
+            else None
+        )
+    if isinstance(outcome, dict):
+        outcome = dict(outcome)
+        outcome["content"] = normalize_text(outcome.get("content", "") or outcome.get("summary", ""), max_len=240)
+        if outcome["content"] in {
+            "", "暂无结论", "暂无结论。", "未形成明确结论", "未形成明确结论。",
+            "仍在讨论", "仍在讨论。", "讨论停留在观点交流", "讨论停留在观点交流。",
+        }:
+            outcome = None
+    return {
+        "id": str(item.get("id") or item.get("topic_key") or f"topic-{index}"),
+        "title": normalize_text(item.get("title", ""), max_len=140) or "主要话题",
+        "start_time": str(item.get("start_time") or ""),
+        "end_time": str(item.get("end_time") or ""),
+        "time_ranges": item.get("time_ranges", []) if isinstance(item.get("time_ranges"), list) else [],
+        "discussion_flow": normalize_text(item.get("discussion_flow", "") or item.get("summary", ""), max_len=360),
+        "outcome": outcome,
+        "action_items": item.get("action_items", []) if isinstance(item.get("action_items"), list) else [],
+        "open_questions": item.get("open_questions", []) if isinstance(item.get("open_questions"), list) else [],
+        "risk_flags": item.get("risk_flags", []) if isinstance(item.get("risk_flags"), list) else [],
+        "quotes": item.get("quotes", []) if isinstance(item.get("quotes"), list) else [],
+        "resource_ids": item.get("resource_ids", []) if isinstance(item.get("resource_ids"), list) else [],
+    }
 
 
 def build_report_document(
@@ -52,7 +87,54 @@ def build_report_document(
     chat_name = str(ctx.get("display_name") or chat_id)
     report_date = start_time[:10]
     date_label = report_date if end_time[:10] == report_date else f"{report_date}_至_{end_time[:10]}"
-    topics = [dict(item, id=str(item.get("id") or f"topic-{index}")) for index, item in enumerate(report.get("sections", []), 1)]
+    topics = [
+        _canonical_topic(item, index)
+        for index, item in enumerate(report.get("sections", []), 1)
+        if isinstance(item, dict)
+    ]
+    topics_by_id = {str(item["id"]): item for item in topics}
+
+    def target_topic(item: Any) -> dict[str, Any] | None:
+        if not isinstance(item, dict):
+            return None
+        linked = str(item.get("topic_id") or "")
+        if linked and linked in topics_by_id:
+            return topics_by_id[linked]
+        return topics[0] if len(topics) == 1 else None
+
+    # 兼容尚未经过 repair_final_report 的 2.1 形态调用方；新文档只写嵌套结构。
+    for key in ("action_items", "open_questions", "risk_flags", "quotes"):
+        for item in report.get(key, []) if isinstance(report.get(key), list) else []:
+            target = target_topic(item)
+            if target is not None:
+                target.setdefault(key, []).append(item)
+    for item in report.get("decisions", []) if isinstance(report.get("decisions"), list) else []:
+        target = target_topic(item)
+        if target is not None and not target.get("outcome"):
+            target["outcome"] = item
+    catalog_ids = {
+        str(item.get("id") or "")
+        for group in resources.get("groups", [])
+        if isinstance(group, dict)
+        for item in group.get("items", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    assigned_ids: dict[str, list[str]] = {}
+    for group in resources.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        topic_id = str(group.get("topic_id") or "")
+        if not topic_id or topic_id == "other":
+            continue
+        assigned_ids[topic_id] = [
+            str(item.get("id"))
+            for item in group.get("items", [])
+            if isinstance(item, dict) and str(item.get("id") or "") in catalog_ids
+        ]
+    for topic in topics:
+        topic_id = str(topic.get("id") or "")
+        # 目录分组已经完成语义复核；以目录结果为准，避免模型原始关联绕过“未归类”保护。
+        topic["resource_ids"] = list(dict.fromkeys(assigned_ids.get(topic_id, [])))
     return {
         "schema_version": SCHEMA_VERSION,
         "metadata": {
@@ -84,11 +166,6 @@ def build_report_document(
             "topics": topics,
             "ai_observations": report.get("ai_observations", []),
             "members": report.get("participant_insights", []) or stats.get("top_speakers", []),
-            "quotes": report.get("quotes", []),
-            "decisions": report.get("decisions", []),
-            "action_items": report.get("action_items", []),
-            "open_questions": report.get("open_questions", []),
-            "risk_flags": report.get("risk_flags", []),
             "mood": report.get("mood", {}),
             "conclusion": normalize_text(report.get("conclusion", ""), max_len=240),
             "resources": resources,

@@ -328,8 +328,13 @@ MAP_SCHEMA_EXAMPLE = {
             "title": "一个可单独成段的话题簇标题",
             "start_time": "2026-04-08 09:12",
             "end_time": "2026-04-08 09:35",
-            "summary": "这个话题如何被提起、展开以及当前结果。",
-            "bullets": ["观点或信息补充1", "讨论转折或结果2"],
+            "discussion_flow": "用连续叙述说明这个话题如何被提起、展开和推进。",
+            "outcome": {"content": "仅在明确形成落点时填写", "tone": "formal", "confidence": 0.9},
+            "action_items": [],
+            "open_questions": [],
+            "risk_flags": [],
+            "quotes": [],
+            "resource_ids": [],
             "evidence_ids": ["m_xxx", "m_yyy"],
         }
     ],
@@ -340,29 +345,6 @@ MAP_SCHEMA_EXAMPLE = {
             "evidence_ids": ["m_xxx"],
         }
     ],
-    "quotes": [
-        {
-            "speaker": "[[user:wxid_xxx]]",
-            "time": "2026-04-08 09:23",
-            "quote": "一句值得引用的话",
-            "message_id": "m_xxx",
-            "why_it_matters": "为什么值得引用",
-        }
-    ],
-    "decisions": [{"content": "已达成的结论", "evidence_ids": ["m_xxx"], "tone": "formal", "confidence": 0.92}],
-    "action_items": [
-        {
-            "owner": "[[user:wxid_xxx]] 或留空",
-            "task": "[[user:wxid_xxx]] 相关待办事项",
-            "deadline": "时间或留空",
-            "status_hint": "紧急/一般/观察",
-            "evidence_ids": ["m_xxx"],
-            "tone": "formal",
-            "confidence": 0.9,
-        }
-    ],
-    "open_questions": [{"question": "未解决的问题", "evidence_ids": ["m_xxx"], "tone": "formal", "confidence": 0.88}],
-    "risk_flags": [{"content": "需关注的风险", "evidence_ids": ["m_xxx"], "tone": "formal", "confidence": 0.85}],
     "light_moments": [{"content": "群友间的玩笑或调侃", "evidence_ids": ["m_xxx"], "tone": "joke"}],
     "mood": {
         "label": "活跃/理性/轻松/焦虑/冲突等",
@@ -386,36 +368,19 @@ REDUCE_SCHEMA_EXAMPLE = {
                 {"start": "2026-04-08 09:12", "end": "2026-04-08 10:30"},
                 {"start": "2026-04-08 15:10", "end": "2026-04-08 15:35"},
             ],
-            "summary": "跨片段合并后的讨论脉络",
-            "bullets": ["观点或补充1", "转折或结果2"],
+            "discussion_flow": "跨片段合并后的连续讨论脉络",
+            "outcome": {"content": "明确形成的讨论落点", "tone": "formal", "confidence": 0.9},
+            "action_items": [],
+            "open_questions": [],
+            "risk_flags": [],
+            "quotes": [],
+            "resource_ids": [],
             "source_refs": ["shard-001", "shard-002"],
         }
     ],
     "participant_notes": [
         {"name": "[[user:wxid_xxx]]", "observation": "[[user:wxid_xxx]] 的角色观察", "source_refs": ["shard-001"]}
     ],
-    "quotes": [
-        {
-            "speaker": "[[user:wxid_xxx]]",
-            "time": "2026-04-08 09:23",
-            "quote": "一句代表性话语",
-            "source_refs": ["shard-001"],
-        }
-    ],
-    "decisions": [{"content": "结论", "source_refs": ["shard-001"], "tone": "formal", "confidence": 0.9}],
-    "action_items": [
-        {
-            "owner": "[[user:wxid_xxx]] 或留空",
-            "task": "[[user:wxid_xxx]] 相关待办事项",
-            "deadline": "时间或留空",
-            "status_hint": "紧急/一般/观察",
-            "source_refs": ["shard-001"],
-            "tone": "formal",
-            "confidence": 0.9,
-        }
-    ],
-    "open_questions": [{"question": "未决问题", "source_refs": ["shard-001"], "tone": "formal", "confidence": 0.88}],
-    "risk_flags": [{"content": "潜在风险或争议点", "source_refs": ["shard-001"], "tone": "formal", "confidence": 0.85}],
     "light_moments": [{"content": "轻松插曲", "source_refs": ["shard-001"], "tone": "joke"}],
     "mood": {"label": "整体氛围", "reason": "原因", "source_refs": ["shard-001"]},
 }
@@ -440,9 +405,14 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
                 {"start": "2026-04-08 15:10", "end": "2026-04-08 15:35"},
             ],
             "discussion_flow": "讨论如何被提起、如何展开、出现了什么补充或转折，以及最终进展。",
-            "key_points": ["有信息量的观点或事实补充", "存在的不同意见"],
-            "turning_points": ["新信息出现后，讨论重点发生的变化"],
-            "result": {"status": "concluded/pending/no_conclusion", "summary": "实际结果；没有结论时明确说明"},
+            "outcome": {"content": "明确形成的讨论落点", "tone": "formal", "confidence": 0.9},
+            "action_items": [
+                {"owner": "[[user:wxid_xxx]] 或留空", "task": "明确行动项", "deadline": "时间或留空", "tone": "formal", "confidence": 0.9}
+            ],
+            "open_questions": [{"question": "仍需解决的严肃问题", "tone": "formal", "confidence": 0.88}],
+            "risk_flags": [{"content": "需要继续观察的风险", "tone": "formal", "confidence": 0.85}],
+            "quotes": [{"speaker": "[[user:wxid_xxx]]", "time": "2026-04-08 09:23", "quote": "一句代表性原话"}],
+            "resource_ids": ["res_xxx"],
         }
     ],
     "ai_observations": [
@@ -451,25 +421,7 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
     "participant_insights": [
         {"name": "[[user:wxid_xxx]]", "insight": "[[user:wxid_xxx]] 的关键作用或状态"}
     ],
-    "quotes": [
-        {
-            "speaker": "[[user:wxid_xxx]]",
-            "time": "2026-04-08 09:23",
-            "quote": "一句可放进报告的原话",
-            "why_it_matters": "为什么重要",
-            "topic_id": "topic-sushi-queue",
-        }
-    ],
-    "decisions": [{"content": "已明确的结论", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.9}],
-    "action_items": [
-        {"owner": "[[user:wxid_xxx]] 或留空", "task": "[[user:wxid_xxx]] 相关行动项", "deadline": "时间或留空", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.9}
-    ],
-    "open_questions": [{"question": "未解决的问题", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.88}],
-    "risk_flags": [{"content": "需要继续观察的风险或争议", "topic_id": "topic-sushi-queue", "tone": "formal", "confidence": 0.85}],
     "light_moments": [{"content": "明确的玩笑、调侃或轻松插曲", "tone": "joke"}],
-    "resource_groups": [
-        {"topic_id": "topic-sushi-queue", "topic": "与 sections 一致的主题", "summary": "该组资源用途", "resource_ids": ["res_xxx"]}
-    ],
     "mood": {"label": "整体氛围", "reason": "判断依据"},
     "conclusion": "一句简短自然的报告结语",
 }
@@ -488,15 +440,16 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 5. 允许保留轻度口语化，但不能夸张、不能编造。
 6. 控制片段输出长度，但要保留话题缘起、观点变化和阶段结果所需的信息。
 7. theme_cards 最多 3 条，highlight_sections 最多 4 条，participant_notes 最多 4 条。
-8. quotes 最多 2 条，decisions/action_items/open_questions 各最多 3 条。
-9. action_items/open_questions/risk_flags 只有在确实没有明确事项、问题或风险时才返回空数组，不要为省略而置空。
-10. 每个 highlight_sections.bullets 最多 3 条。
-11. highlight_sections 表示“话题簇”而不是机械时间切段；如果同一时间窗口里存在多个不同话题，可以拆成多个 sections，时间范围允许重叠。
-12. 不要只写最显眼的主线，持续时间较短但消息量可观、内容明确的次级话题也要覆盖，避免遗漏例如运动分享、生活分享、工具讨论这类支线。
-13. 输入里会提供 member_directory；提到具体成员时，请统一使用对应的 `[[user:sender_id]]` 占位符，不要直接输出昵称。
-14. 必须区分正式结论、暂时讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 decisions/action_items/open_questions/risk_flags。
-15. decisions/action_items/open_questions 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时，降低确定性或放入 light_moments。
-16. 为同一语义话题生成稳定、简短的 topic_key；同一时间片内再次出现的同一话题不要拆成多个 key。
+8. 每个话题以 discussion_flow 为核心，通常 50-250 个汉字；信息较少就短写，不得为了长度重复同义内容。
+9. outcome/action_items/open_questions/risk_flags/quotes/resource_ids 都是可选细节；没有可靠内容就返回空值或空数组，禁止填写“暂无结论”“仍在讨论”等占位语。
+10. 每个话题 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选项只保留直接影响后续理解的信息。
+11. highlight_sections 表示语义话题而不是机械时间切段；时间相邻只是弱线索。只有讨论对象、核心问题与上下文指向相同，或存在明确回复/承接关系时才能合并。
+12. 同一时间窗口出现不同讨论对象时必须拆开，时间范围允许重叠；严禁把先后出现但语义无关的话题串成同一个 discussion_flow。
+13. 不要只写最显眼的主线，持续时间较短但消息量可观、内容明确的次级话题也要覆盖。
+14. 输入里会提供 member_directory；提到具体成员时，请统一使用对应的 `[[user:sender_id]]` 占位符，不要直接输出昵称。
+15. 必须区分正式讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 outcome/action_items/open_questions/risk_flags。
+16. outcome/action_items/open_questions/risk_flags 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时省略或放入 light_moments。
+17. 为同一语义话题生成稳定、简短的 topic_key；同一时间片内再次出现的同一话题不要拆成多个 key。
 
 输出 json schema 示例：
 {json.dumps(MAP_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -517,18 +470,18 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 
 要求：
 1. 只整合输入中的已有信息，不要引入外部信息。
-2. 去重同类主题、同类结论和重复行动项。
-3. highlight_sections 应按“话题簇”整理，不要机械按时间线硬切；跨 shard 再次出现的同一话题必须合并，并用 time_ranges 保留多个讨论区间。
+2. 去重同类主题和话题内部重复细节，不要把 discussion_flow 再拆成同义要点。
+3. highlight_sections 应按语义话题整理；跨 shard 只有在讨论对象、核心问题和上下文指向一致，或存在明确回复/承接关系时才合并，并用 time_ranges 保留多个区间。
 4. source_refs 必须引用输入里的 shard_id 或 bundle_id。
-5. risk_flags 至少覆盖明显争议、风险、未落地事项；没有则返回空数组。
-6. 控制输出长度，但不要删掉理解讨论发展过程所需的缘起、观点、补充、转折或结果。
+5. outcome/action_items/open_questions/risk_flags/quotes/resource_ids 都是可选细节；无可靠内容就留空，不得用占位文本凑字段。
+6. discussion_flow 通常 50-250 个汉字；保留理解讨论发展所需的缘起、观点、补充、转折或结果，但不重复同义信息。
 7. theme_cards 最多 4 条，highlight_sections 最多 6 条，participant_notes 最多 6 条。
-8. quotes 最多 3 条，decisions/action_items/open_questions 各最多 4 条。
+8. 每个话题 quotes 默认 0-1 条、最多 2 条，open_questions 最多 2 条。
 9. 合并时检查是否遗漏持续但相对次级的话题，不要只保留最热主线。
 10. 不要求每个 shard/bundle 都形成一个 section；普通闲聊或无独立信息量的片段可以不进入主要话题。
-11. 判断是否合并的核心是讨论对象、问题和语义是否属于同一件事，而不是时间是否连续。
+11. 时间接近或相邻不能单独作为合并依据；讨论对象不同、问题不同或没有承接关系时必须分开。
 12. 如果输入里出现 `[[user:sender_id]]` 占位符，输出时保留该占位符，不要改写成昵称。
-13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成正式结论、行动项、开放问题或风险。
+13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成讨论落点、行动项、开放问题或风险。
 
 输出 json schema 示例：
 {json.dumps(REDUCE_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -561,22 +514,22 @@ def build_final_prompts(
 2. theme_cards 是“今日速览”，动态生成约 3-5 条短卡片；不强制凑足，不展开完整讨论过程。
 3. sections 是“今日主要话题”，表示语义话题而不是机械时间段；数量根据当天内容动态决定，不设最低数量。
 4. 报表语言要像运营洞察报告，不要写成泛泛总结。
-5. action_items/open_questions/risk_flags 只有在确实没有明确事项、问题或风险时才返回空数组，不要为省略而置空。
-6. 主要话题需要有足够信息解释讨论如何发展，但不要堆积聊天记录。
-7. theme_cards 最多 5 条，participant_insights 最多 6 条，quotes 最多 4 条。
-8. 每个 section 使用 discussion_flow 自然叙述缘起、展开、观点、补充、转折与结果；key_points 和 turning_points 只在确有内容时填写。
+5. 每个 section 以 discussion_flow 为唯一必需正文，自然叙述缘起、展开、观点、补充、转折与进展；通常 50-250 个汉字，信息少就短写，禁止同义反复。
+6. outcome/action_items/open_questions/risk_flags/quotes/resource_ids 均为话题内可选字段；没有可靠内容就返回空值或空数组，不得填写“暂无结论”“仍在讨论”“讨论停留在观点交流”等占位文本。
+7. theme_cards 最多 5 条且每条只做速览，不复述完整 discussion_flow；participant_insights 最多 6 条。
+8. 每个 section 的 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选细节从严保留。
 9. 如果多个话题的主要活跃时间交叠，允许不同 sections 的 start_time / end_time 重叠，不要为了避免重叠而把不同主题强行糅合成一段。
 10. 覆盖当日所有明显成型且有信息量的话题；普通闲聊不必为了覆盖时间线而进入 sections。
 11. 同一话题上午出现、下午继续时必须合并为一个 section，并用 time_ranges 记录多个区间。
-12. 不要因为时间不连续拆分同一话题，也不要为了减少数量合并无关话题。
+12. 不要因为时间不连续拆分同一话题，也不要为了减少数量合并无关话题；时间相邻只是弱线索，必须同时核对讨论对象、核心问题、语义和回复承接关系。
 13. 如果输入里的 bundles 使用 `[[user:sender_id]]` 占位符，最终输出请保留这些占位符，不要改写成昵称。
 14. one_line_summary 必须精炼自然，概括当天真正有区分度的内容，避免机械复述消息数，建议不超过 60 个汉字。
 15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、行动项、开放问题或风险；light_moments 仅用于内部过滤，不作为对外报告模块。
-16. decisions/action_items/open_questions/risk_flags 采用高判定门槛。结构化对象必须提供 tone/confidence，并如实保留；不得把 casual/joke/sarcasm/teasing/uncertain 升级为 formal。
-17. resource_groups 只能引用资源清单中真实存在的 resource_id；优先通过 topic_id 关联到 sections，相同主题的链接和文件必须放在同一组，不能可靠归类时使用“其他 / 未归类”。
+16. outcome/action_items/open_questions/risk_flags 采用高判定门槛。结构化对象必须提供 tone/confidence，并如实保留；不得把 casual/joke/sarcasm/teasing/uncertain 升级为 formal。
+17. section.resource_ids 只能引用资源清单中真实存在的 resource_id；只有资源标题、上下文或原消息与该话题语义明确一致时才关联，不能可靠归类时不要塞进任何话题。
 18. ai_observations 回答“从今天这些聊天中可以观察到什么”，不得重复话题摘要，不得推测成员性格、关系或真实意图。
-19. 结论、行动、问题、风险和引用应尽量填写 topic_id；无法可靠关联时留空，不得强行归类。
-20. result 只有在聊天中存在明确结论、共识、决定或安排时才能标为 concluded；否则使用 pending 或 no_conclusion，并保守说明。
+19. 结论、行动、问题、风险和引用直接放入所属 section；无法可靠关联时省略，不得强行归类。
+20. outcome 只有在聊天中存在明确结论、共识、决定、安排或可复述落点时才填写；未形成落点时返回 null，不作说明。
 21. conclusion 是简短结语，不复述整份报告，不包含虚构事实。
 
 最终 json schema 示例：
