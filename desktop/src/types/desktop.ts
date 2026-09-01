@@ -4,6 +4,7 @@ export type Settings = {
   api_url: string;
   model: string;
   thinking: boolean;
+  reasoning_effort: "high" | "max";
   export_root: string;
   image_dpi: number;
   range_mode: "single" | "custom";
@@ -16,8 +17,23 @@ export type Settings = {
   schedule_last_attempt_date: string;
   schedule_last_run_date: string;
   schedule_last_status: string;
+  mcp_enabled: boolean;
+  mcp_port: number;
+  mcp_host?: string;
+  mcp_endpoint?: string;
   summarized_chat_ids?: string[];
   api_key_configured?: boolean;
+  deepseek_api_key_configured?: boolean;
+  openai_compatible_api_key_configured?: boolean;
+};
+
+export type McpServerStatus = {
+  running: boolean;
+  pid?: number | null;
+  transport: "streamable-http";
+  host: "127.0.0.1";
+  port: number;
+  endpoint: string;
 };
 
 export type Chat = { id: string; name: string; summarized?: boolean };
@@ -183,6 +199,7 @@ export const INITIAL_SETTINGS: Settings = {
   api_url: "https://api.deepseek.com/chat/completions",
   model: "deepseek-v4-flash",
   thinking: false,
+  reasoning_effort: "high",
   export_root: "",
   image_dpi: 300,
   range_mode: "single",
@@ -195,4 +212,6 @@ export const INITIAL_SETTINGS: Settings = {
   schedule_last_attempt_date: "",
   schedule_last_run_date: "",
   schedule_last_status: "",
+  mcp_enabled: false,
+  mcp_port: 8765,
 };

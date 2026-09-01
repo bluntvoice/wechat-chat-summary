@@ -31,6 +31,21 @@ def _resolve(value: Any, names: dict[str, str]) -> str:
     return re.sub(r"\[\[user:([^\]]+)\]\]", lambda match: names.get(match.group(1), "群成员"), text)
 
 
+def _resolve_html(value: Any, names: dict[str, str], *, member_class: str = "") -> str:
+    """转义普通文本，并可对成员占位符施加受控 HTML 样式。"""
+
+    text = str(value or "")
+    output: list[str] = []
+    cursor = 0
+    for match in re.finditer(r"\[\[user:([^\]]+)\]\]", text):
+        output.append(_esc(text[cursor : match.start()]))
+        name = _esc(names.get(match.group(1), "群成员"))
+        output.append(f'<strong class="{member_class}">{name}</strong>' if member_class else name)
+        cursor = match.end()
+    output.append(_esc(text[cursor:]))
+    return "".join(output)
+
+
 def _text(item: Any, *keys: str) -> str:
     if isinstance(item, str):
         return item
@@ -127,6 +142,9 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     def resolved(value: Any) -> str:
         return _esc(_resolve(value, names))
 
+    def topic_resolved(value: Any) -> str:
+        return _resolve_html(value, names, member_class="topic-member")
+
     themes = content.get("themes", []) or []
     topics = [item for item in content.get("topics", []) or [] if isinstance(item, dict)]
     members = _dedupe_resolved_members(
@@ -185,7 +203,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
         ranges = topic.get("time_ranges", []) if isinstance(topic.get("time_ranges"), list) else []
         if not ranges and (topic.get("start_time") or topic.get("end_time")):
             ranges = [{"start": topic.get("start_time", ""), "end": topic.get("end_time", "")}]
-        chips = []
+        labels = []
         for item in ranges:
             if not isinstance(item, dict):
                 continue
@@ -194,28 +212,28 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             if not start and not end:
                 continue
             label = start if not end or end == start else f"{start} — {end}"
-            chips.append(f'<span>{resolved(label)}</span>')
-        return f'<div class="time-chips">{"".join(chips)}</div>' if chips else ""
+            labels.append(resolved(label))
+        return f'<p class="topic-time">{" · ".join(labels)}</p>' if labels else ""
 
-    def render_quote(item: Any) -> str:
+    def render_quote(item: Any, resolve_value=resolved) -> str:
         if _is_redacted(item):
             return _redacted_html(item)
         quote = _text(item, "quote", "content", "text")
         if not quote:
             return ""
-        speaker = resolved(item.get("speaker", "")) if isinstance(item, dict) else ""
+        speaker = resolve_value(item.get("speaker", "")) if isinstance(item, dict) else ""
         sent_at = resolved(item.get("time", "")) if isinstance(item, dict) else ""
-        reason = resolved(item.get("why_it_matters", "")) if isinstance(item, dict) else ""
+        reason = resolve_value(item.get("why_it_matters", "")) if isinstance(item, dict) else ""
         meta = " · ".join(value for value in (speaker, sent_at) if value)
         return (
             '<article class="quote-item">'
             + (f'<div class="quote-meta">{meta}</div>' if meta else "")
-            + f'<blockquote>{resolved(quote)}</blockquote>'
+            + f'<blockquote>{resolve_value(quote)}</blockquote>'
             + (f'<p>{reason}</p>' if reason else "")
             + '</article>'
         )
 
-    def render_simple_items(label: str, items: list[Any], *keys: str) -> str:
+    def render_simple_items(label: str, items: list[Any], *keys: str, resolve_value=resolved) -> str:
         rows = []
         for item in items:
             if _is_redacted(item):
@@ -223,21 +241,31 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             else:
                 value = _text(item, *keys)
                 if value:
-                    rows.append(f'<li>{resolved(value)}</li>')
+                    rows.append(f'<li>{resolve_value(value)}</li>')
         return f'<div class="topic-extra"><h4>{_esc(label)}</h4><ul>{"".join(rows)}</ul></div>' if rows else ""
 
-    def render_resource_group(group: dict[str, Any]) -> str:
+    def render_resource_group(
+        group: dict[str, Any],
+        resolve_value=resolved,
+        mark_member_senders: bool = False,
+    ) -> str:
         if _is_redacted(group):
             return _redacted_html(group)
         items = group.get("items", []) or []
+        def resource_sender(item: dict[str, Any]) -> str:
+            sender_id = str(item.get("sender_id") or "")
+            if mark_member_senders and sender_id:
+                return resolve_value(f"[[user:{sender_id}]]")
+            return resolve_value(item.get("sender", ""))
+
         items_html = "".join(
             _redacted_html(item, "div")
             if _is_redacted(item)
             else '<div class="resource-item">'
             f'<span class="resource-kind">{"文件" if item.get("type") == "file" else "链接"}</span>'
-            f'<div><strong>{resolved(item.get("title") or item.get("file_name") or item.get("url"))}</strong>'
-            f'<p>{resolved(item.get("context_summary", ""))}</p>'
-            f'<small>{resolved(item.get("sender", ""))} · {resolved(item.get("sent_at", ""))}</small>'
+            f'<div><strong>{resolve_value(item.get("title") or item.get("file_name") or item.get("url"))}</strong>'
+            f'<p>{resolve_value(item.get("context_summary", ""))}</p>'
+            f'<small>{resource_sender(item)} · {resolved(item.get("sent_at", ""))}</small>'
             + (f'<a href="{_esc(item.get("url"))}" rel="noreferrer">查看链接</a>' if str(item.get("url", "")).startswith(("http://", "https://")) else "")
             + '</div></div>'
             for item in items
@@ -245,8 +273,8 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
         )
         return (
             '<article class="resource-group">'
-            f'<header><h4>{resolved(group.get("topic", "相关资源"))}</h4><span>{len(items)} 项</span></header>'
-            + (f'<p class="group-note">{resolved(group.get("summary", ""))}</p>' if group.get("summary") else "")
+            f'<header><h4>{resolve_value(group.get("topic", "相关资源"))}</h4><span>{len(items)} 项</span></header>'
+            + (f'<p class="group-note">{resolve_value(group.get("summary", ""))}</p>' if group.get("summary") else "")
             + items_html + '</article>'
         )
 
@@ -273,17 +301,17 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
         if legacy_status in {"pending", "no_conclusion"}:
             outcome_text = ""
         extras = [
-            render_simple_items("行动事项", topic.get("action_items", []) or [], "task"),
-            render_simple_items("开放问题", topic.get("open_questions", []) or [], "question", "content"),
-            render_simple_items("风险提示", topic.get("risk_flags", []) or [], "content"),
+            render_simple_items("行动事项", topic.get("action_items", []) or [], "task", resolve_value=topic_resolved),
+            render_simple_items("开放问题", topic.get("open_questions", []) or [], "question", "content", resolve_value=topic_resolved),
+            render_simple_items("风险提示", topic.get("risk_flags", []) or [], "content", resolve_value=topic_resolved),
         ]
         for label, items, keys in legacy_serious_specs:
             related = [item for item in items if belongs_to(item, topic)]
             used_item_ids.update(id(item) for item in related)
-            extras.append(render_simple_items(label, related, *keys))
+            extras.append(render_simple_items(label, related, *keys, resolve_value=topic_resolved))
         related_quotes = [*(topic.get("quotes", []) or []), *[item for item in quotes if belongs_to(item, topic)]]
         used_item_ids.update(id(item) for item in related_quotes)
-        quote_html = "".join(render_quote(item) for item in related_quotes[:2])
+        quote_html = "".join(render_quote(item, topic_resolved) for item in related_quotes[:2])
         linked_resource_ids = {str(value) for value in topic.get("resource_ids", []) or []}
         related_groups = [
             group for group in groups
@@ -291,13 +319,13 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             or any(str(item.get("id") or "") in linked_resource_ids for item in group.get("items", []) if isinstance(item, dict))
         ]
         used_item_ids.update(id(item) for item in related_groups)
-        resource_html = "".join(render_resource_group(group) for group in related_groups)
+        resource_html = "".join(render_resource_group(group, topic_resolved, True) for group in related_groups)
         return (
             f'<article class="main-topic"><div class="section-index">{index}</div><div class="section-body">'
+            + f'<h3>{topic_resolved(topic.get("title", "主要话题"))}</h3>'
             + time_ranges_html(topic)
-            + f'<h3>{resolved(topic.get("title", "主要话题"))}</h3>'
-            + (f'<p class="discussion-flow">{resolved(flow)}</p>' if flow else "")
-            + (_redacted_html(outcome) if _is_redacted(outcome) else (f'<div class="topic-result concluded"><span>讨论落点</span><p>{resolved(outcome_text)}</p></div>' if outcome_text else ""))
+            + (f'<p class="discussion-flow">{topic_resolved(flow)}</p>' if flow else "")
+            + (_redacted_html(outcome) if _is_redacted(outcome) else (f'<div class="topic-result concluded"><span>讨论落点</span><p>{topic_resolved(outcome_text)}</p></div>' if outcome_text else ""))
             + "".join(extras)
             + (f'<div class="topic-extra"><h4>相关原话</h4>{quote_html}</div>' if quote_html else "")
             + (f'<div class="topic-extra resources-in-topic"><h4>相关资源</h4>{resource_html}</div>' if resource_html else "")
@@ -391,7 +419,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
 .metrics{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}} .metric{{background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.65);border-radius:8px;padding:10px;min-width:0}} .metric span{{display:block;font-size:10px;color:var(--muted)}} .metric strong{{font-size:20px;margin-right:2px}} .metric small{{font-size:10px}}
 .card{{background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:10px;padding:14px 12px;box-shadow:var(--shadow)}} .card>h2{{font-size:17px;margin:0 0 10px;font-weight:900}} h3{{font-size:16px;margin:0 0 5px}} h4{{font-size:13px;margin:0 0 5px}} p{{margin:0;font-size:14px;color:#526159}}
 .brief-grid{{display:grid;gap:8px}} .brief-card{{padding:12px;border-radius:8px;background:linear-gradient(180deg,#fffdf5,#fff7fb);border:1px solid rgba(225,106,151,.15)}} .brief-card h3{{font-size:16px;color:#e16a97}} .brief-card p{{font-size:14px}}
-.main-topic{{display:grid;grid-template-columns:32px 1fr;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}} .main-topic:last-child{{border-bottom:0;padding-bottom:0}} .section-index{{width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-top:1px}} .section-body{{min-width:0}} .time-chips{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px}} .time-chips span{{padding:2px 7px;border-radius:99px;background:#edf7ed;color:var(--green-dark);font-size:10px;font-weight:700}} .discussion-flow{{line-height:1.72;font-size:14px}} .topic-extra{{margin-top:8px;padding:8px 9px;border-radius:8px;background:#f8fbf6}} .topic-extra ul{{margin:0;padding-left:18px;font-size:12px;color:#526159;line-height:1.65}} .topic-result{{display:flex;gap:7px;align-items:flex-start;margin-top:8px;padding:7px 9px;border-left:3px solid #78b889;border-radius:6px;background:#f2f9f2}} .topic-result span{{flex:0 0 auto;padding:1px 6px;border-radius:99px;background:#dff0df;font-size:10px;color:#477557}} .topic-result p{{font-size:12px}}
+.main-topic{{display:grid;grid-template-columns:32px 1fr;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}} .main-topic:last-child{{border-bottom:0;padding-bottom:0}} .section-index{{width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-top:1px}} .section-body{{min-width:0}} .topic-time{{margin:-1px 0 6px;color:var(--muted);font-size:11px;line-height:1.55}} .topic-member{{color:#3478bd;font-weight:800}} .discussion-flow{{line-height:1.72;font-size:14px}} .topic-extra{{margin-top:8px;padding:8px 9px;border-radius:8px;background:#f8fbf6}} .topic-extra ul{{margin:0;padding-left:18px;font-size:12px;color:#526159;line-height:1.65}} .topic-result{{display:flex;gap:7px;align-items:flex-start;margin-top:8px;padding:7px 9px;border-left:3px solid #78b889;border-radius:6px;background:#f2f9f2}} .topic-result span{{flex:0 0 auto;padding:1px 6px;border-radius:99px;background:#dff0df;font-size:10px;color:#477557}} .topic-result p{{font-size:12px}}
 .observation{{padding:12px 13px;border-radius:11px;background:#f5faf2;margin-top:8px}} .observation:first-of-type{{margin-top:0}} .observation:nth-child(2n){{background:#fff9e8}} .supplement{{background:#f7f5fb}}
 .member-list{{list-style:none;padding:0;margin:0;display:grid;gap:6px}} .member-list li{{display:flex;align-items:center;gap:10px;padding:9px 10px;background:#f7fbf5;border-radius:10px}} .rank{{display:inline-flex;align-items:center;justify-content:center;flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:#dff0df;color:#3f8757;font:700 12px ui-monospace}} .member-list strong{{font-size:13px}} .member-list p{{font-size:12px}}
 .activity-block{{padding:12px 0;border-top:1px dashed #dfe8da}} .activity-block:first-of-type{{border-top:0;padding-top:0}} .speaker-list{{list-style:none;padding:0;margin:0;display:grid;gap:6px}} .speaker-row{{display:grid;grid-template-columns:28px minmax(90px,.8fr) 1fr 48px;align-items:center;gap:9px;padding:8px 10px;background:#f7fbf5;border-radius:10px}} .speaker-row strong{{font-size:12px;overflow-wrap:anywhere}} .speaker-row i{{height:8px;border-radius:8px;background:#e7efe2;overflow:hidden}} .speaker-row i b{{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,#8bd092,#5eae79)}} .speaker-count{{font-size:11px;color:var(--muted);text-align:right;white-space:nowrap}}

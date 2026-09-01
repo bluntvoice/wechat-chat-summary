@@ -20,6 +20,10 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 THINKING=false
 THINKING_LEVEL=high
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
+# 通用 OpenAI Compatible Provider（按需启用）
+# OPENAI_COMPATIBLE_API_KEY=<API_KEY_PLACEHOLDER>
+# OPENAI_COMPATIBLE_MODEL=<MODEL_NAME>
+# OPENAI_COMPATIBLE_API_URL=https://example.com/v1
 WECHAT_DATA_API_URL=http://127.0.0.1:10392
 GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 ```
@@ -47,6 +51,7 @@ GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 - 主流程固定走 `map -> reduce -> final`，不再暴露 `direct_range` / `topic-first` 这类分支模式。
 - LLM 返回 JSON 自动修复按显式开关理解，默认关闭；需要时显式传 `--allow-json-repair`。
 - DeepSeek 默认显式传 `max_tokens` 预算，避免 JSON 输出链路在思考模式或异常情况下失控扩张；如需改预算，优先从命令行参数或代码常量调整。
+- 通用 OpenAI Compatible Provider 不发送 `thinking` 或 `reasoning_effort`；这些字段、余额接口和模型校验仅属于 DeepSeek。
 - LLM 花费改为按任务前后余额快照对比，不再在每次请求后动态打印 usage 计费估算。
 - 文档只保留当前推荐参数，不再展开旧兼容入口。
 
@@ -136,6 +141,35 @@ Tauri 解析的 Windows 用户数据目录，只保存报告结构、独立每�
 生成页的“已总结”状态按 WeChatDataAnalysis 返回的 `chat.id` 与 SQLite 有效报告匹配。SQLite 是
 唯一事实来源；设置中的 `summarized_chat_ids` 仅为刷新后的缓存。历史库中的旧群不会被强行加入
 当前群选择器，但仍会在历史中心显示。
+
+## 本机 MCP Server
+
+MCP Server 与 AI Provider 是两套独立入口：现有 CLI / 桌面生成流程仍调用用户配置的 AI API；
+MCP Server 则向外部 MCP Host 暴露受控 tools，由 Host 内的 AI 完成分析。本软件当前不是 MCP Client，
+MCP Server 也不读取 DeepSeek Key。
+
+桌面设置中默认关闭 MCP。用户开启后，Tauri 启动同一安装包内 Python sidecar 的
+`--run-mcp-server` 入口，固定绑定 `127.0.0.1`，默认 endpoint 为
+`http://127.0.0.1:8765/mcp`，transport 为 Streamable HTTP。桌面进程退出时会终止子进程。
+源码调试可直接运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m group_insight.desktop_bridge --run-mcp-server --port 8765
+```
+
+工具职责如下：
+
+- `list_chats`：列出当前数据源可分析群聊；
+- `get_chat_stats` / `get_chat_analysis_context`：临时读取明确范围并返回统计或受控上下文；
+- `get_daily_stats`：读取第五阶段每日聚合统计；
+- `list_history` / `search_history` / `get_report`：读取历史结构化结果，不返回本机文件路径；
+- `submit_report`：严格校验 Schema 2.2 并完成版本、导出和 HistoryStore 闭环；
+- `render_report`：只按 `report_id` 恢复受控根目录中的缺失导出，不接受任意路径。
+
+原始消息单次最多读取 31 天、2000 条和 100 万字符，不长期持久化。`submit_report` 的输入上限为
+2 MiB；旧 2.1 顶层 `decisions`、`action_items`、`open_questions`、`risk_flags`、`quotes` 不能作为
+新报告主存储结构。新报告只能使用 `content.topics[*]` 下的 `discussion_flow`、`outcome`、
+`action_items`、`open_questions`、`risk_flags`、`quotes` 与 `resource_ids`。
 
 v0.2.1 桌面端的“定时生成当日报告”使用软件内置定时器，可随时关闭；软件关闭时不执行，
 并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划注册模块相互独立。
@@ -278,7 +312,7 @@ python -m pip install -U typing-extensions
 - `group_insight/__main__.py`：`python -m group_insight` 模块入口。
 - `group_insight/runtime.py`：`.venv` 重定向等运行时辅助逻辑。
 - `group_insight/cli.py`：命令行参数和主流程装配。
-- `group_insight/settings.py`：默认值、路径、`.env` 加载和 MCP 懒加载。
+- `group_insight/settings.py`：默认值、路径和 `.env` 加载。
 - `group_insight/models.py`：领域数据模型（`StructuredMessage`、`MessageChunk` 等）。
 - `group_insight/common.py`：跨模块通用工具（文本归一化、slugify、主题相似度、文件读写等）。
 - `group_insight/conversation.py`：消息清洗、发言人归一和消息分类。
@@ -286,7 +320,7 @@ python -m pip install -U typing-extensions
 - `group_insight/rich_content.py`：富媒体消息解析（appmsg XML、链接卡片、合并聊天、回复、拍一拍、红包等）。
 - `group_insight/chunking.py`：消息分片策略（数量、字符数、时间跨度、话题连续性）与 prompt 载荷构造。
 - `group_insight/stats.py`：本地统计与词云（发言排行、互动榜单、时段分布、词频）。
-- `group_insight/llm.py`：LLM 协议、DeepSeek 客户端、余额快照和 prompt 构造。
+- `group_insight/llm.py`：LLM 协议、通用 OpenAI Compatible 客户端、DeepSeek 专属扩展、余额快照和 prompt 构造。
 - `group_insight/pipeline.py`：固定 `map/reduce/final` 分析流水线。
 - `group_insight/report_model.py`：最终日报结构修复、去重和 fallback 生成。
 - `group_insight/report_schema.py`：统一 report schema 2.2 与 2.0/2.1 旧报告只读适配。
@@ -299,6 +333,8 @@ python -m pip install -U typing-extensions
 - `group_insight/report_paths.py`：报告目录分层、日期标签和历史版本分配。
 - `group_insight/desktop_bridge.py`：桌面端 JSONL 桥接命令。
 - `group_insight/desktop_config.py`：桌面端本机配置和私有 Key 存储。
+- `group_insight/mcp_service.py`：MCP tools 的参数校验、数据访问、Schema 2.2 提交与报告闭环。
+- `group_insight/mcp_server.py`：本机 Streamable HTTP MCP transport 和工具注册。
 - `group_insight/alerts.py`：异常告警邮件发送（可选）。
 - `group_insight/cache_utils.py`：map/reduce/final 阶段缓存工具。
 - `group_insight/scheduler.py`：Windows 任务计划注册模块。

@@ -1,8 +1,4 @@
-"""LLM 客户端封装与群聊日报 prompt 构造。
-
-这里统一 DeepSeek 的 JSON 调用接口，并集中维护 map、reduce、final、
-direct-final 和 topic-first 模式使用的结构化提示词。
-"""
+"""AI Provider 客户端与群聊日报 prompt 构造。"""
 from __future__ import annotations
 
 import json
@@ -41,30 +37,66 @@ class LLMClientProtocol:
         raise NotImplementedError
 
 
-class DeepSeekClient(LLMClientProtocol):
-    """DeepSeek Chat Completions JSON 调用客户端。"""
+DEEPSEEK_TEXT_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
+LEGACY_DEEPSEEK_MODELS = {
+    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-reasoner": "deepseek-v4-flash",
+}
+
+
+def normalize_deepseek_model(model: str) -> str:
+    """规范化并校验当前支持的 DeepSeek 文本模型。"""
+
+    normalized = LEGACY_DEEPSEEK_MODELS.get((model or "").strip().lower(), (model or "").strip().lower())
+    if normalized not in DEEPSEEK_TEXT_MODELS:
+        choices = "、".join(sorted(DEEPSEEK_TEXT_MODELS))
+        raise ValueError(f"DeepSeek 模型必须选择：{choices}")
+    return normalized
+
+
+def normalize_chat_completions_url(value: str, provider: str) -> str:
+    """把 Provider 的 Base URL 或 endpoint 规范化为 Chat Completions URL。"""
+
+    raw = (value or "").strip().rstrip("/")
+    if not raw:
+        raise ValueError("API URL 不能为空。")
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("API URL 必须是有效的 http/https 地址。")
+    if parsed.username or parsed.password:
+        raise ValueError("API URL 不得包含用户名或密码。")
+    path = parsed.path.rstrip("/")
+    if not path:
+        path = "/chat/completions" if provider == "deepseek" else "/v1/chat/completions"
+    elif not path.endswith("/chat/completions"):
+        path += "/chat/completions"
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
+
+
+class OpenAICompatibleClient(LLMClientProtocol):
+    """通用 OpenAI Compatible Chat Completions JSON 客户端。"""
+
     def __init__(
         self,
         api_key: str,
-        model: str = DEFAULT_DEEPSEEK_MODEL,
-        api_url: str = DEFAULT_API_URL,
+        model: str,
+        api_url: str = "",
         timeout: int = 180,
         max_retries: int = 3,
         allow_json_repair: bool = False,
-        thinking_enabled: bool = DEFAULT_DEEPSEEK_THINKING,
-        reasoning_effort: str = DEFAULT_DEEPSEEK_REASONING_EFFORT,
-        provider: str = "deepseek",
     ) -> None:
         """初始化客户端配置和限频/重试参数。"""
-        self.provider = provider
-        self.api_key = api_key
-        self.model = model
-        self.api_url = api_url
+        self.provider = "openai-compatible"
+        self.api_key = (api_key or "").strip()
+        self.model = (model or "").strip()
+        if not self.api_key:
+            raise ValueError("AI API Key 不能为空。")
+        if not self.model:
+            raise ValueError("模型名称不能为空。")
+        self.api_url = normalize_chat_completions_url(api_url, self.provider)
         self.timeout = timeout
         self.max_retries = max_retries
         self.allow_json_repair = allow_json_repair
-        self.thinking_enabled = bool(thinking_enabled)
-        self.reasoning_effort = reasoning_effort
         self.last_response_model = ""
 
     def chat_json(
@@ -89,7 +121,7 @@ class DeepSeekClient(LLMClientProtocol):
                     raise ValueError(f"{self.provider} 返回空内容")
                 return safe_json_loads(content)
             except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, RuntimeError) as exc:
-                last_error = exc
+                last_error = self._redact_error(exc)
                 if isinstance(exc, json.JSONDecodeError) and self.allow_json_repair:
                     try:
                         repaired = self._repair_json(
@@ -99,11 +131,17 @@ class DeepSeekClient(LLMClientProtocol):
                         if repaired:
                             return safe_json_loads(repaired)
                     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, RuntimeError) as repair_exc:
-                        last_error = repair_exc
+                        last_error = self._redact_error(repair_exc)
                 if attempt >= self.max_retries:
                     break
                 time.sleep(attempt * 2)
         raise RuntimeError(f"{self.provider} 调用失败: {last_error}") from last_error
+
+    def _redact_error(self, error: Exception) -> Exception:
+        """避免上游错误正文回显当前 API Key。"""
+
+        message = str(error).replace(self.api_key, "[REDACTED]")
+        return RuntimeError(message)
 
     def _request_content(
         self,
@@ -139,15 +177,23 @@ class DeepSeekClient(LLMClientProtocol):
             except Exception:
                 detail = ""
             if detail:
-                raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {detail[:1000]}") from exc
+                safe_detail = detail.replace(self.api_key, "[REDACTED]")
+                raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {safe_detail[:1000]}") from exc
             raise
         parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{self.provider} 返回了非对象响应")
         self.last_response_model = str(parsed.get("model") or "").strip()
-        return (
-            parsed.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
+        choices = parsed.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ValueError(f"{self.provider} 响应缺少 choices")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise ValueError(f"{self.provider} 响应缺少 message")
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            raise ValueError(f"{self.provider} 返回了非文本 content")
+        return content
 
     def _build_payload(
         self,
@@ -156,7 +202,7 @@ class DeepSeekClient(LLMClientProtocol):
         max_tokens: int | None,
         temperature: float,
     ) -> dict[str, Any]:
-        """构造一次 DeepSeek chat completion 请求体。"""
+        """构造通用 Chat Completions 请求体。"""
         payload = {
             "model": self.model,
             "messages": [
@@ -167,44 +213,12 @@ class DeepSeekClient(LLMClientProtocol):
             "temperature": temperature,
             "stream": False,
         }
-        if self.provider == "deepseek":
-            payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
-            if self.thinking_enabled and self.reasoning_effort:
-                payload["reasoning_effort"] = self.reasoning_effort
         if max_tokens is not None and max_tokens > 0:
             payload["max_tokens"] = max_tokens
         return payload
 
-    def get_user_balance(self) -> dict[str, Any]:
-        """查询当前 DeepSeek 账号余额。"""
-        balance_url = build_deepseek_balance_url(self.api_url)
-        request = urllib.request.Request(
-            balance_url,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="GET",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = ""
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                detail = ""
-            if detail:
-                raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {detail[:1000]}") from exc
-            raise
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            raise RuntimeError("DeepSeek 余额接口返回了非对象响应")
-        return parsed
-
     def _repair_json(self, broken_json: str, max_tokens: int | None) -> str:
-        """在 DeepSeek 返回 JSON 截断或损坏时请求模型修复。"""
+        """在 Provider 返回 JSON 截断或损坏时请求模型修复。"""
         candidate = extract_json_object(broken_json) or broken_json
         candidate = candidate.strip()
         if not candidate:
@@ -231,6 +245,76 @@ class DeepSeekClient(LLMClientProtocol):
             max_tokens=min(max_tokens, 4096) if max_tokens is not None else 4096,
             temperature=0.0,
         )
+
+
+class DeepSeekClient(OpenAICompatibleClient):
+    """在通用协议上增加 DeepSeek 专属能力。"""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_DEEPSEEK_MODEL,
+        api_url: str = DEFAULT_API_URL,
+        timeout: int = 180,
+        max_retries: int = 3,
+        allow_json_repair: bool = False,
+        thinking_enabled: bool = DEFAULT_DEEPSEEK_THINKING,
+        reasoning_effort: str = DEFAULT_DEEPSEEK_REASONING_EFFORT,
+    ) -> None:
+        normalized_model = normalize_deepseek_model(model)
+        super().__init__(
+            api_key=api_key,
+            model=normalized_model,
+            api_url=api_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            allow_json_repair=allow_json_repair,
+        )
+        self.provider = "deepseek"
+        self.api_url = normalize_chat_completions_url(api_url, self.provider)
+        self.thinking_enabled = bool(thinking_enabled)
+        self.reasoning_effort = (reasoning_effort or "").strip().lower()
+        if self.reasoning_effort not in {"high", "max"}:
+            raise ValueError("DeepSeek Reasoning Effort 只能是 high 或 max。")
+
+    def _build_payload(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int | None,
+        temperature: float,
+    ) -> dict[str, Any]:
+        payload = super()._build_payload(system_prompt, user_prompt, max_tokens, temperature)
+        payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
+        if self.thinking_enabled:
+            payload["reasoning_effort"] = self.reasoning_effort
+        return payload
+
+    def get_user_balance(self) -> dict[str, Any]:
+        """查询当前 DeepSeek 账号余额。"""
+
+        request = urllib.request.Request(
+            build_deepseek_balance_url(self.api_url),
+            headers={"Accept": "application/json", "Authorization": f"Bearer {self.api_key}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            if detail:
+                safe_detail = detail.replace(self.api_key, "[REDACTED]")
+                raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {safe_detail[:1000]}") from exc
+            raise
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("DeepSeek 余额接口返回了非对象响应")
+        return parsed
 
 
 def llm_cache_identity(client: LLMClientProtocol | None) -> str:

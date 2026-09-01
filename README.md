@@ -2,8 +2,8 @@
 
 读取 `WeChatDataAnalysis` 提供的本地 API，按指定群聊和时间范围生成结构化统计、
 AI 总结、统一结构 JSON、完整 HTML 及 300 DPI PNG 完整长图。当前代码已包含 Windows 桌面端闭环、
-SQLite 历史中心与搜索、当日链接/文件整理、真实阶段进度、人工屏蔽、成员名称碰撞防护，以及面向
-手机分享的日报长图。
+SQLite 历史中心与搜索、当日链接/文件整理、真实阶段进度、人工屏蔽、成员名称碰撞防护、
+本机 MCP Server，以及面向手机分享的日报长图。
 
 ## 项目来源与使用说明
 
@@ -20,7 +20,8 @@ SQLite 历史中心与搜索、当日链接/文件整理、真实阶段进度、
 - `group_insight/`：负责消息归一化、统计、分片、AI 分析、资源整理、统一报告结构、SQLite 历史索引和报告渲染。
 - `desktop/`：Tauri 2 + React/TypeScript 桌面端，通过 UTF-8 JSONL 调用 Python 核心。
 - `pywechat/`：可选的微信 UI 自动发送子模块。
-- AI 分析支持 DeepSeek 与通用 OpenAI Compatible API；MCP 属于后续阶段。
+- AI API 支持 DeepSeek 与通用 OpenAI Compatible；本机 MCP Server 供外部 AI 客户端调用。
+- 本软件当前不是 MCP Client，MCP Server 本身也不是 AI Provider。
 
 旧 `wechat-decrypt` gitlink 仍存在于上游提交历史中，但当前代码、依赖和运行流程均不再使用它。
 
@@ -33,6 +34,10 @@ SQLite 历史中心与搜索、当日链接/文件整理、真实阶段进度、
 DEEPSEEK_API_KEY=<API_KEY_PLACEHOLDER>
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
+# 使用通用 Provider 时填写下面三项，并通过 --provider openai-compatible 启动 CLI。
+# OPENAI_COMPATIBLE_API_KEY=<API_KEY_PLACEHOLDER>
+# OPENAI_COMPATIBLE_MODEL=<MODEL_NAME>
+# OPENAI_COMPATIBLE_API_URL=https://example.com/v1
 WECHAT_DATA_API_URL=http://127.0.0.1:10392
 GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 ```
@@ -65,18 +70,19 @@ npm run tauri dev
 
 桌面端另提供群聊日历热力图，默认显示最近一年和消息数量，可切换参与人数、有效消息数量，并支持
 年份或自定义范围。缺少缓存的日期只针对当前群聊和范围按需读取，不调用 AI；真实 0 与尚未统计
-分别显示。点击已有报告的日期可直接进入历史中心。MCP、正式签名和自动更新尚未完成。
+分别显示。点击已有报告的日期可直接进入历史中心。
 “关于”页显示 Tauri 安装包实际运行版本和 GitHub 项目地址，便于构建 Release 后核对版本；
 当前尚未实现检查更新。
 GitHub Actions 已可生成测试安装包和执行人工确认的正式 Release，但不会因此自动发布新版本。
-第六阶段仍为 MCP、设置完善、检查更新、代码签名与自动更新。
+第六阶段已完成 Provider 整理、独立设置页和 MCP Server；检查更新、代码签名与自动更新仍未完成。
 
-桌面端默认按单日生成，并可切换自定义日期区间；成功生成后会记住上次群聊。AI 区域提供
-独立“保存设置”和“测试 API”按钮；DeepSeek 模型通过 Flash / Pro 下拉框明确选择，测试成功
+桌面端默认按单日生成，并可切换自定义日期区间；成功生成后会记住上次群聊。设置页提供
+AI Provider、数据源、报告导出和 MCP Server 配置；DeepSeek 模型通过 Flash / Pro 下拉框明确选择，测试成功
 时会显示服务端实际响应模型。生成过程中显示真实阶段、百分比和已用时间。完成后可
 分别打开完整 PNG 长图、完整 HTML 或报告所在目录。PNG 与 HTML 使用相同的信息模块，
 按“今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 → 今日活跃情况 → 报告结尾”呈现。
-主要话题采用圆形序号和连续讨论脉络，同一语义话题可保留多个不连续时间区间；时间相邻
+主要话题采用圆形序号和连续讨论脉络，标题位于时间范围上方，时间使用普通正文样式，
+话题内容中的群成员昵称使用蓝色加粗。同一语义话题可保留多个不连续时间区间；时间相邻
 不会被单独用作合并依据。讨论落点、行动、问题、风险、引用和资源仅在确有内容且可可靠
 关联时嵌入对应话题，不再重复展示“关键观点”“讨论转折”或“暂无结论”等占位内容。
 
@@ -93,6 +99,59 @@ ID。群关键词会做规范化去重。资源整理会在提取阶段忽略微
 桌面端还支持可关闭的每日定时生成，可固定群聊与时间。该功能属于软件内置定时器：只有
 软件保持运行时才会触发，每天最多自动尝试一次，不创建 Windows 任务计划，也不会在软件
 关闭期间后台运行。
+
+## AI API 与 MCP Server
+
+两条链路彼此独立：
+
+- **AI API**：软件自身的“生成总结”调用用户配置的 DeepSeek 或 OpenAI Compatible API。
+- **MCP Server**：外部 MCP Host 调用群聊拾遗的工具，外部 AI 完成分析后提交 Schema 2.2 报告。
+
+通用 Provider 只发送标准 Chat Completions JSON 字段；Thinking、Reasoning Effort、余额接口和
+DeepSeek 模型校验仅由 DeepSeek Provider 使用。不同 Provider 的 API Key 分开保存在本机私有密钥文件，
+不会写入公开设置、SQLite、日志、报告或测试 fixture。
+
+MCP Server 默认关闭。用户在设置页明确开启后，桌面程序启动受托管子进程，仅监听
+`http://127.0.0.1:8765/mcp` 的 Streamable HTTP；软件退出时子进程同步终止，不创建 Windows Service。
+当前 tools：
+
+- `list_chats`
+- `get_chat_stats`
+- `get_chat_analysis_context`
+- `get_daily_stats`
+- `list_history`
+- `search_history`
+- `get_report`
+- `submit_report`
+- `render_report`
+
+`get_chat_analysis_context` 仅按明确的群聊和时间范围临时读取消息，单次最多 31 天、2000 条消息、
+100 万字符；完整正文不写入 SQLite 或报告目录。`submit_report` 先严格校验 Report Schema 2.2，
+再由软件分配版本、重建确定性统计和资源、生成 JSON / HTML / PNG、写入 HistoryStore 并刷新
+`summarized_chat_ids`。非法文档不会进入历史库。
+
+### MCP Host 本机联调
+
+先在群聊拾遗“设置 → MCP Server”中启动服务并复制配置。Codex CLI、ChatGPT Windows 桌面端和
+IDE 扩展可直接使用本机 Streamable HTTP：
+
+```toml
+[mcp_servers.wechat_chat_summary]
+url = "http://127.0.0.1:8765/mcp"
+enabled = true
+tool_timeout_sec = 300
+```
+
+Codex 配置文件默认为 `~/.codex/config.toml`；也可在 ChatGPT 桌面端或 Codex IDE 扩展的
+“Settings → MCP servers → Add server”中选择 Streamable HTTP 并填写上述 URL。Claude Code 可运行：
+
+```powershell
+claude mcp add --transport http --scope user wechat-chat-summary http://127.0.0.1:8765/mcp
+claude mcp get wechat-chat-summary
+```
+
+ChatGPT Web 和 Claude Web 的自定义连接器由云端访问，不能直接连接 `127.0.0.1`。本阶段不开放
+局域网监听、不提供公网入口，也不实现 MCP Client；请使用同机 Host 进行验收。
 
 ## 运行
 

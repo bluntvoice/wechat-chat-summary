@@ -142,6 +142,56 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertNotIn("resource-group:nth-of-type", html)
         self.assertNotIn("new URLSearchParams", html)
 
+    def test_topic_title_precedes_plain_time_and_member_names_are_highlighted(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-08-31 00:00:00", end_time="2026-08-31 23:59:59", version=1,
+            stats={
+                "message_count": 2,
+                "effective_char_count": 10,
+                "participant_count": 2,
+                "member_aliases": [
+                    {"sender_id": "wxid_a", "sender_name": "小甲"},
+                    {"sender_id": "wxid_b", "sender_name": "小乙"},
+                ],
+            },
+            report={
+                "one_line_summary": "摘要",
+                "theme_cards": [],
+                "sections": [{
+                    "id": "topic-project",
+                    "title": "项目安排",
+                    "start_time": "09:00",
+                    "end_time": "10:00",
+                    "time_ranges": [{"start": "09:00", "end": "10:00"}],
+                    "discussion_flow": "[[user:wxid_a]] 请 [[user:wxid_b]] 确认安排。",
+                    "resource_ids": ["r1"],
+                }],
+            },
+            resources={
+                "count": 1,
+                "groups": [{
+                    "topic_id": "topic-project",
+                    "topic": "项目安排",
+                    "summary": "相关资料",
+                    "items": [{
+                        "id": "r1", "type": "file", "title": "清单.xlsx",
+                        "sender_id": "wxid_a", "sender": "小甲", "sent_at": "09:30",
+                    }],
+                }],
+            },
+            exports={"json": "a.json", "html": "a.html", "png": "a.png"},
+            provider="deepseek", model="deepseek-v4-flash", dry_run=False,
+            chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        self.assertLess(html.index("<h3>项目安排</h3>"), html.index('class="topic-time"'))
+        self.assertIn('<p class="topic-time">09:00 — 10:00</p>', html)
+        self.assertNotIn("time-chip", html)
+        self.assertGreaterEqual(html.count('<strong class="topic-member">小甲</strong>'), 2)
+        self.assertIn('<strong class="topic-member">小乙</strong>', html)
+        self.assertIn(".topic-member{color:#3478bd;font-weight:800}", html)
+
     def test_jokes_do_not_become_serious_items(self):
         report = repair_final_report(
             {

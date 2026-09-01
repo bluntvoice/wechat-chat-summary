@@ -4,9 +4,10 @@ import AboutPage from "./pages/AboutPage";
 import GeneratePage from "./pages/GeneratePage";
 import HeatmapPage from "./pages/HeatmapPage";
 import HistoryPage from "./pages/HistoryPage";
+import SettingsPage from "./pages/SettingsPage";
 import type { HistoryNavigationTarget } from "./types/desktop";
 
-type AppPage = "generate" | "history" | "heatmap" | "about";
+type AppPage = "generate" | "history" | "heatmap" | "settings" | "about";
 
 const appIcon = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
 
@@ -26,14 +27,16 @@ export default function App() {
         <button className={page === "generate" ? "active" : ""} aria-current={page === "generate" ? "page" : undefined} onClick={() => setPage("generate")}><span>生</span><small>生成总结</small></button>
         <button className={page === "history" ? "active" : ""} aria-current={page === "history" ? "page" : undefined} onClick={() => setPage("history")}><span>历</span><small>历史中心</small></button>
         <button className={page === "heatmap" ? "active" : ""} aria-current={page === "heatmap" ? "page" : undefined} onClick={() => setPage("heatmap")}><span>热</span><small>热力图</small></button>
+        <button className={page === "settings" ? "active" : ""} aria-current={page === "settings" ? "page" : undefined} onClick={() => setPage("settings")}><span>设</span><small>设置</small></button>
         <button className={page === "about" ? "active" : ""} aria-current={page === "about" ? "page" : undefined} onClick={() => setPage("about")}><span>关</span><small>关于</small></button>
       </nav>
       <p className="rail-foot">本地历史</p>
     </aside>
     <div className="page-host">
-      <div className="page-slot" hidden={page !== "generate"}><GeneratePage /></div>
+      <div className="page-slot" hidden={page !== "generate"}><GeneratePage active={page === "generate"} onOpenSettings={() => setPage("settings")} /></div>
       <div className="page-slot" hidden={page !== "history"}><HistoryPage active={page === "history"} target={historyTarget} /></div>
       <div className="page-slot" hidden={page !== "heatmap"}><HeatmapPage active={page === "heatmap"} onOpenHistory={openHistory} /></div>
+      <div className="page-slot" hidden={page !== "settings"}><SettingsPage active={page === "settings"} /></div>
       <div className="page-slot" hidden={page !== "about"}><AboutPage /></div>
     </div>
   </main>;

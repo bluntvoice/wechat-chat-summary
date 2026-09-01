@@ -20,6 +20,8 @@
 - `group_insight/report_paths.py`：导出图/报告数据分层与版本保留。
 - `group_insight/desktop_bridge.py`：桌面端与 Python 核心的 UTF-8 JSONL 桥接。
 - `group_insight/desktop_config.py`：桌面端本机设置与私有密钥。
+- `group_insight/mcp_service.py`：MCP 受控数据访问、Schema 校验与报告归档闭环。
+- `group_insight/mcp_server.py`：本机 Streamable HTTP MCP Server 与 tools 注册。
 - `group_insight/cli.py`：命令行装配。
 - `desktop/`：Tauri 2 + React/TypeScript Windows 桌面端。
 
@@ -46,8 +48,11 @@
 - Windows 文件读写统一使用 UTF-8。
 - 根目录 Python 环境优先使用 `uv`；不要把环境或缓存下载到 C 盘。
 - 核心依赖见 `requirements.txt`；RPA 依赖单独见 `requirements-rpa.txt`。
-- 数据源和分析提供方必须解耦。后续 AI 分析支持两种模式：
-  直接调用可配置 AI API，或通过 MCP 把分析任务交给外部 AI 客户端。
+- 数据源和分析提供方必须解耦。软件自身生成直接调用可配置 AI API；MCP Server 供外部 AI 客户端
+  调用，二者不是二选一模式。本软件当前不是 MCP Client，MCP Server 不是 AI Provider。
+- MCP Server 默认关闭，只允许绑定 `127.0.0.1`，由桌面程序托管子进程；不得创建 Windows Service
+  或在软件退出后残留服务。原始消息必须按明确范围临时读取并限制范围、条数和字符数，不得写入
+  SQLite 或报告目录。
 - 缺少群聊、时间范围、本地 API 或关键配置时应 fail-fast，不添加静默兜底。
 - 调试优先使用 `--dry-run --no-image --no-send-after-run`。
 - 修改后至少运行：
@@ -137,8 +142,8 @@
 
 ## 当前迭代边界
 
-- 已实现：真实数据 API、结构化统计、DeepSeek/OpenAI Compatible API、独立输出、
-  版本保留、300 DPI PNG，以及源码可运行的 Windows 桌面端最小闭环。
+- 已实现：真实数据 API、结构化统计、独立的 DeepSeek/OpenAI Compatible Provider、独立输出、
+  版本保留、300 DPI PNG、设置页、本机 Streamable HTTP MCP Server，以及源码可运行的 Windows 桌面端闭环。
 - 报告 schema 当前为向后兼容的 2.2，并继续读取 2.0/2.1。HTML 与 PNG 必须共享完整正文，不得自动精简或维护
   两套内容结构。报告一级顺序为“今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 →
   今日活跃情况 → 报告结尾”。
@@ -146,6 +151,10 @@
   必须核对讨论对象、核心问题、上下文指向及回复承接关系。每个主要话题以 `discussion_flow` 为核心，
   `outcome`、行动、问题、风险、引用和资源为可选嵌套细节；没有可靠内容时不得生成占位文本。
   不得重新引入“关键观点”“讨论转折”或独立的“详细讨论脉络”等重复模块，也不得对外展示“轻松插曲”。
+- “今日主要话题”每项必须先显示标题，再以普通正文样式显示时间范围，不使用胶囊外框；话题内容中的
+  群成员昵称使用蓝色加粗。
+- MCP 新报告必须先严格校验 Report Schema 2.2，再分配版本和写入文件/HistoryStore；只接受
+  `topics[*]` 嵌套的结论、行动、问题、风险、引用和资源关联。非法报告不得污染 SQLite。
 - 日报视觉继续参考 `wzj042/wechat-auto-insight` 的米白—浅绿页面渐变、绿—黄头图及
   “圆形序号 + 右侧正文”讨论脉络结构；改变该产品行为前先向用户确认。
 - 本地 Windows 测试安装包和 GitHub Actions 测试/发布工作流已建立；自动化发布不等同于代码签名。
@@ -153,4 +162,4 @@
   群聊日历热力图（消息数、参与人数、有效消息数）。
 - 关于页必须优先显示 Tauri 安装包运行时版本，以便核对 Release 实际版本；浏览器开发预览才回退
   `desktop/package.json`。版本来源仍遵循统一同步脚本，不得在页面另维护手写版本常量。
-- 后续迭代：MCP Server、设置完善、检查更新、代码签名与自动更新。
+- 后续迭代：检查更新、代码签名与自动更新；MCP Client 不在当前产品范围。

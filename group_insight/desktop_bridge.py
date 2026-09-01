@@ -6,17 +6,21 @@ import json
 import os
 import subprocess
 import sys
-import urllib.parse
 import re
 from pathlib import Path
 from typing import Any
 
-from .desktop_config import ensure_desktop_data_dir, load_desktop_settings, save_desktop_settings
+from .desktop_config import (
+    ensure_desktop_data_dir,
+    load_desktop_api_key,
+    load_desktop_settings,
+    save_desktop_settings,
+)
 from .fetching import fetch_structured_messages
 from .heatmap import build_heatmap_data, ensure_chat_daily_stats
 from .history_store import HistoryStore
 from .progress import read_progress
-from .llm import DeepSeekClient
+from .llm import DeepSeekClient, OpenAICompatibleClient, normalize_chat_completions_url
 from .redaction import list_redaction_targets, redact_report_document
 from .rendering import render_html_report
 from .report_paths import allocate_report_paths
@@ -33,21 +37,6 @@ def _force_utf8_stdio() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
             reconfigure(encoding="utf-8", errors="replace")
-
-
-def normalize_chat_completions_url(value: str, provider: str) -> str:
-    raw = value.strip().rstrip("/")
-    if not raw:
-        raise ValueError("API URL 不能为空。")
-    parsed = urllib.parse.urlsplit(raw)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("API URL 必须是有效的 http/https 地址。")
-    path = parsed.path.rstrip("/")
-    if path in {"", "/"}:
-        path = "/chat/completions" if provider == "deepseek" else "/v1/chat/completions"
-    elif path.endswith("/v1"):
-        path += "/chat/completions"
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 
 def _client(settings: dict[str, Any], *, timeout: float = 15.0) -> WeChatDataAPIClient:
@@ -87,14 +76,21 @@ def _test_ai(settings: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("请先填写 AI API Key。")
     provider = str(settings.get("provider") or "deepseek")
     api_url = normalize_chat_completions_url(str(settings.get("api_url") or ""), provider)
-    client = DeepSeekClient(
-        api_key=api_key,
-        model=str(settings.get("model") or "").strip(),
-        api_url=api_url,
-        timeout=45,
-        max_retries=1,
-        provider=provider,
-        thinking_enabled=bool(settings.get("thinking", False)) if provider == "deepseek" else False,
+    common = {
+        "api_key": api_key,
+        "model": str(settings.get("model") or "").strip(),
+        "api_url": api_url,
+        "timeout": 45,
+        "max_retries": 1,
+    }
+    client = (
+        DeepSeekClient(
+            **common,
+            thinking_enabled=bool(settings.get("thinking", False)),
+            reasoning_effort=str(settings.get("reasoning_effort") or "high"),
+        )
+        if provider == "deepseek"
+        else OpenAICompatibleClient(**common)
     )
     result = client.chat_json(
         "你是连接测试助手，只输出 JSON。",
@@ -174,15 +170,21 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
         "--result-file",
         str(result_path),
     ]
-    if bool(settings.get("thinking", False)) and provider == "deepseek":
-        command.append("--thinking")
+    if provider == "deepseek":
+        command.append("--thinking" if bool(settings.get("thinking", False)) else "--no-thinking")
+        if bool(settings.get("thinking", False)):
+            command.extend(["--reasoning-effort", str(settings.get("reasoning_effort") or "high")])
 
     environment = os.environ.copy()
     environment.update(
         {
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
-            "DEEPSEEK_API_KEY": api_key,
+            (
+                "DEEPSEEK_API_KEY"
+                if provider == "deepseek"
+                else "OPENAI_COMPATIBLE_API_KEY"
+            ): api_key,
             "GROUP_INSIGHT_NO_VENV_REDIRECT": "1",
         }
     )
@@ -472,10 +474,16 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             settings.update(overrides)
         return _ensure_daily_stats(settings, payload)
 
-    settings = load_desktop_settings(include_secret=True)
+    settings = load_desktop_settings(include_secret=False)
     overrides = payload.get("settings", {})
     if isinstance(overrides, dict):
         settings.update(overrides)
+    provider = str(settings.get("provider") or "deepseek")
+    settings["api_key"] = (
+        str(overrides.get("api_key") or "").strip()
+        if isinstance(overrides, dict) and "api_key" in overrides
+        else load_desktop_api_key(provider)
+    )
     if command == "test_wechat":
         result = _list_chats(settings)
         return {key: value for key, value in result.items() if key != "chats"} | {
@@ -499,6 +507,12 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     _force_utf8_stdio()
+    if len(sys.argv) > 1 and sys.argv[1] == "--run-mcp-server":
+        from .mcp_server import main as run_mcp_server
+
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        run_mcp_server()
+        return
     if bool(getattr(sys, "frozen", False)) and len(sys.argv) > 1 and sys.argv[1] == "--run-report":
         from .cli import main as run_report
 

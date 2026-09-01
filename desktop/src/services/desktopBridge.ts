@@ -12,3 +12,7 @@ export async function openSystemPath(path?: string) {
   if (!path) return;
   await invoke("open_system_path", { path });
 }
+
+export async function invokeDesktop<T>(command: string, args: Record<string, unknown> = {}) {
+  return invoke<T>(command, args);
+}
