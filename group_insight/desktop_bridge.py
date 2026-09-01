@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from .desktop_config import ensure_desktop_data_dir, load_desktop_settings, save_desktop_settings
+from .fetching import fetch_structured_messages
+from .heatmap import build_heatmap_data, ensure_chat_daily_stats
 from .history_store import HistoryStore
 from .progress import read_progress
 from .llm import DeepSeekClient
@@ -263,6 +265,58 @@ def _state_with_history() -> dict[str, Any]:
     return _refresh_history_state()
 
 
+def _get_heatmap_data(payload: dict[str, Any]) -> dict[str, Any]:
+    chat_id = str(payload.get("chat_id") or "").strip()
+    if not chat_id:
+        raise ValueError("请先选择群聊。")
+    with HistoryStore() as history:
+        result = build_heatmap_data(
+            history,
+            chat_id=chat_id,
+            start_date=str(payload.get("start_date") or ""),
+            end_date=str(payload.get("end_date") or ""),
+        )
+        row = history.connection.execute(
+            "SELECT display_name FROM chats WHERE chat_id=?",
+            (chat_id,),
+        ).fetchone()
+        result["chat_name"] = str(row["display_name"] if row else payload.get("chat_name") or chat_id)
+        return result
+
+
+def _ensure_daily_stats(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """按需读取微信消息并仅持久化聚合统计；此路径不创建 AI 客户端。"""
+
+    chat_id = str(payload.get("chat_id") or "").strip()
+    if not chat_id:
+        raise ValueError("请先选择群聊。")
+    api_url = str(settings.get("wechat_api_url") or "").strip()
+    chat = _client(settings, timeout=30).resolve_chat(chat_id)
+
+    def fetch_range(start_date: str, end_date: str):
+        return fetch_structured_messages(
+            chat.username,
+            start_date,
+            end_date,
+            api_url=api_url,
+            account=chat.account,
+            source=chat.source,
+        )
+
+    with HistoryStore() as history:
+        result = ensure_chat_daily_stats(
+            history,
+            chat_id=chat.username,
+            chat_name=chat.display_name,
+            start_date=str(payload.get("start_date") or ""),
+            end_date=str(payload.get("end_date") or ""),
+            fetch_range=fetch_range,
+        )
+    result["chat_name"] = chat.display_name
+    result["ai_called"] = False
+    return result
+
+
 def _load_report_document(payload: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     source_path = Path(str(payload.get("json_path") or "")).expanduser()
     if not source_path.is_file():
@@ -409,6 +463,14 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
                 limit=int(payload.get("limit") or 200),
                 offset=int(payload.get("offset") or 0),
             )
+    if command == "get_heatmap_data":
+        return _get_heatmap_data(payload)
+    if command == "ensure_daily_stats":
+        settings = load_desktop_settings(include_secret=False)
+        overrides = payload.get("settings", {})
+        if isinstance(overrides, dict):
+            settings.update(overrides)
+        return _ensure_daily_stats(settings, payload)
 
     settings = load_desktop_settings(include_secret=True)
     overrides = payload.get("settings", {})

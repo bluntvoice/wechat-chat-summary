@@ -22,6 +22,54 @@ export type Settings = {
 
 export type Chat = { id: string; name: string; summarized?: boolean };
 
+export type HeatmapMetric = "message_count" | "participant_count" | "effective_message_count";
+
+export type HeatmapReportLink = {
+  report_id: string;
+  report_date: string;
+  version: number;
+  headline: string;
+  one_line_summary: string;
+};
+
+export type HeatmapDay = {
+  date: string;
+  status: "known" | "unknown";
+  message_count: number | null;
+  effective_message_count: number | null;
+  participant_count: number | null;
+  effective_char_count: number | null;
+  link_count: number | null;
+  file_count: number | null;
+  calculated_at: string;
+  report: HeatmapReportLink | null;
+};
+
+export type HeatmapData = {
+  version: number;
+  chat_id: string;
+  chat_name: string;
+  start_date: string;
+  end_date: string;
+  days: HeatmapDay[];
+  missing_ranges: Array<{ start: string; end: string }>;
+  known_days: number;
+  unknown_days: number;
+  ai_called?: boolean;
+  scan?: {
+    cache_hit: boolean;
+    scanned_days: number;
+    scanned_ranges: Array<{ start: string; end: string }>;
+  };
+};
+
+export type HistoryNavigationTarget = {
+  chatId: string;
+  date: string;
+  reportId: string;
+  requestId: number;
+};
+
 export type BridgeResponse<T> = {
   id: string;
   ok: boolean;

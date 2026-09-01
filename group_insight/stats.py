@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date as date_value, datetime, timedelta
 from typing import Any
 
 from .common import extract_topic_tokens, make_user_placeholder, normalize_text, strip_wechat_emoji_shortcodes
@@ -257,8 +257,13 @@ def build_local_stats(messages: list[StructuredMessage]) -> dict[str, Any]:
     }
 
 
-def build_chat_daily_stats(messages: list[StructuredMessage]) -> list[dict[str, Any]]:
-    """按自然日计算可独立于报告保存的基础统计。"""
+def build_chat_daily_stats(
+    messages: list[StructuredMessage],
+    *,
+    start_date: str = "",
+    end_date: str = "",
+) -> list[dict[str, Any]]:
+    """按自然日计算基础统计；指定范围时也为已扫描的空白日期生成零值。"""
 
     from .resources import extract_resources
 
@@ -269,9 +274,22 @@ def build_chat_daily_stats(messages: list[StructuredMessage]) -> list[dict[str, 
             date = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d")
         grouped[date].append(message)
 
+    dates = sorted(grouped)
+    if start_date or end_date:
+        if not start_date or not end_date:
+            raise ValueError("日统计范围必须同时提供开始和结束日期。")
+        start = date_value.fromisoformat(start_date)
+        end = date_value.fromisoformat(end_date)
+        if end < start:
+            raise ValueError("日统计结束日期不能早于开始日期。")
+        dates = [
+            (start + timedelta(days=offset)).isoformat()
+            for offset in range((end - start).days + 1)
+        ]
+
     rows: list[dict[str, Any]] = []
-    for date in sorted(grouped):
-        day_messages = grouped[date]
+    for date in dates:
+        day_messages = grouped.get(date, [])
         stats = build_local_stats(day_messages)
         resources = extract_resources(day_messages)
         rows.append(
