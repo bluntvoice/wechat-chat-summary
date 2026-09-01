@@ -7,10 +7,19 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from group_insight.desktop_bridge import _redact_report, _test_ai, build_report_entrypoint, normalize_chat_completions_url
+from group_insight.desktop_bridge import (
+    _list_chats,
+    _redact_report,
+    _refresh_history_state,
+    _test_ai,
+    build_report_entrypoint,
+    handle,
+    normalize_chat_completions_url,
+)
 from group_insight.history_store import HistoryStore as ActualHistoryStore
 from group_insight.report_paths import allocate_report_paths
 from group_insight.report_schema import build_report_document
+from tests.test_history_center import history_document
 
 
 class DesktopBridgeTests(unittest.TestCase):
@@ -103,6 +112,72 @@ class DesktopBridgeTests(unittest.TestCase):
             new_payload = Path(result["json_path"]).read_text(encoding="utf-8")
             self.assertNotIn("私密内容", new_payload)
             self.assertIn("已屏蔽，建议在群内查看", new_payload)
+
+    def test_chat_list_pins_summarized_ids_and_never_injects_missing_wechat_groups(self) -> None:
+        class FakeAPI:
+            def list_sessions(self, *, limit: int):
+                self.limit = limit
+                return {
+                    "account": "account-a",
+                    "source": "realtime",
+                    "sessions": [
+                        {"username": "z@chatroom", "name": "Beta 群", "isGroup": True},
+                        {"username": "history@chatroom", "name": "跨境项目讨论群", "isGroup": True},
+                        {"username": "a@chatroom", "name": "Alpha 群", "isGroup": True},
+                    ],
+                }
+
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            "os.environ", {"WECHAT_CHAT_SUMMARY_DATA_DIR": str(Path(temp_dir) / "data")}
+        ):
+            root = Path(temp_dir)
+            with ActualHistoryStore() as history:
+                history.upsert_report(history_document(root))
+                missing = history_document(root, version=2)
+                missing["metadata"]["chat"] = {"id": "missing@chatroom", "name": "已退出旧群"}
+                missing["metadata"]["report_id"] = "report-missing-history"
+                history.upsert_report(missing)
+            with patch("group_insight.desktop_bridge._client", return_value=FakeAPI()):
+                result = _list_chats({"wechat_api_url": "http://127.0.0.1:10392"})
+            self.assertEqual(
+                [item["id"] for item in result["chats"]],
+                ["history@chatroom", "a@chatroom", "z@chatroom"],
+            )
+            self.assertTrue(result["chats"][0]["summarized"])
+            self.assertNotIn("missing@chatroom", {item["id"] for item in result["chats"]})
+
+    def test_refresh_history_state_imports_new_export_root_and_bridge_queries_it(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            "os.environ", {"WECHAT_CHAT_SUMMARY_DATA_DIR": str(Path(temp_dir) / "data")}
+        ):
+            root = Path(temp_dir) / "reports"
+            report_dir = root / "跨境项目讨论群" / "报告数据" / "2026-08-31报告数据"
+            report_dir.mkdir(parents=True)
+            report_path = report_dir / "跨境项目讨论群_2026-08-31_群聊总结.json"
+            report_path.write_text(
+                json.dumps(history_document(root), ensure_ascii=False),
+                encoding="utf-8",
+            )
+            state = _refresh_history_state({"export_root": str(root)}, import_reports=True)
+            self.assertEqual(state["summarized_chat_ids"], ["history@chatroom"])
+            self.assertEqual(state["history_import"]["imported"], 1)
+            chats = handle("list_history_chats", {})["items"]
+            self.assertEqual(chats[0]["chat_id"], "history@chatroom")
+            reports = handle(
+                "list_history_reports",
+                {"chat_id": "history@chatroom", "version_strategy": "latest"},
+            )
+            self.assertEqual(reports["items"][0]["version"], 1)
+            report_id = reports["items"][0]["report_id"]
+            detail = handle("get_history_report", {"report_id": report_id})
+            self.assertEqual(detail["chat_id"], "history@chatroom")
+            self.assertIn("action_items", {item["module_key"] for item in detail["modules"]})
+            versions = handle("get_report_versions", {"report_id": report_id})["items"]
+            self.assertEqual([item["version"] for item in versions], [1])
+            search = handle("search_history", {"keyword": "尾程清关"})
+            self.assertGreater(search["total"], 0)
+            resources = handle("list_history_resources", {"report_id": report_id})
+            self.assertEqual(resources["total"], 2)
 
 
 if __name__ == "__main__":

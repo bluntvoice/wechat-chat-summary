@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import RedactionEditor from "../components/RedactionEditor";
 import { useReportGeneration } from "../hooks/useReportGeneration";
 import { localDate } from "../services/dates";
+import { filterAndSortChats, type ChatListFilter } from "../services/chatList";
 import { bridge, openSystemPath } from "../services/desktopBridge";
 import {
   INITIAL_SETTINGS,
@@ -13,14 +14,13 @@ import {
   type Settings,
 } from "../types/desktop";
 
-const appIcon = new URL("../../src-tauri/icons/icon.png", import.meta.url).href;
-
 function GeneratePage() {
   const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
   const [apiKey, setApiKey] = useState("");
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatId, setChatId] = useState("");
   const [query, setQuery] = useState("");
+  const [chatFilter, setChatFilter] = useState<ChatListFilter>("all");
   const [reportDate, setReportDate] = useState(localDate());
   const [startDate, setStartDate] = useState(localDate());
   const [endDate, setEndDate] = useState(localDate());
@@ -31,6 +31,7 @@ function GeneratePage() {
   const [selectedRedactions, setSelectedRedactions] = useState<string[]>([]);
   const [redactionEditorOpen, setRedactionEditorOpen] = useState(false);
   const [redactionBusy, setRedactionBusy] = useState(false);
+  const indexedExportRoot = useRef("");
   const { busy, setBusy, progress, result, setResult, runGeneration } = useReportGeneration({
     settings,
     setSettings,
@@ -44,7 +45,10 @@ function GeneratePage() {
   });
 
   useEffect(() => {
-    bridge<Settings>("get_state").then((saved) => setSettings({ ...INITIAL_SETTINGS, ...saved })).catch((error) => setMessage(String(error)));
+    bridge<Settings>("get_state").then((saved) => {
+      indexedExportRoot.current = saved.export_root || "";
+      setSettings({ ...INITIAL_SETTINGS, ...saved });
+    }).catch((error) => setMessage(String(error)));
   }, []);
 
   useEffect(() => {
@@ -63,10 +67,14 @@ function GeneratePage() {
   }, [settings.schedule_enabled, settings.schedule_time, settings.schedule_chat_id, settings.schedule_last_attempt_date, busy]);
 
   const summarized = useMemo(() => new Set(settings.summarized_chat_ids || []), [settings.summarized_chat_ids]);
-  const filteredChats = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    return needle ? chats.filter((chat) => chat.name.toLocaleLowerCase().includes(needle)) : chats;
-  }, [chats, query]);
+  const filteredChats = useMemo(
+    () => filterAndSortChats(chats, summarized, query, chatFilter),
+    [chats, summarized, query, chatFilter],
+  );
+  useEffect(() => {
+    if (filteredChats.some((chat) => chat.id === chatId)) return;
+    setChatId(filteredChats[0]?.id || "");
+  }, [filteredChats, chatId]);
   const selectedChat = chats.find((chat) => chat.id === chatId);
   const statusSettings = () => ({ ...settings, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}) });
 
@@ -74,7 +82,10 @@ function GeneratePage() {
     setWechatState("testing"); setMessage("正在读取本机群聊列表…");
     try {
       const data = await bridge<{ chats: Chat[]; account: string }>("list_chats", { settings: statusSettings() });
-      setChats(data.chats); setWechatState("ready"); setMessage(`已连接，读取到 ${data.chats.length} 个群聊。`);
+      const summarizedChatIds = data.chats.filter((chat) => chat.summarized).map((chat) => chat.id);
+      setChats(data.chats);
+      setSettings((current) => ({ ...current, summarized_chat_ids: summarizedChatIds }));
+      setWechatState("ready"); setMessage(`已连接，读取到 ${data.chats.length} 个群聊。`);
       const remembered = data.chats.find((chat) => chat.id === settings.last_chat_id);
       if (remembered) setChatId(remembered.id); else if (data.chats.length && !chatId) setChatId(data.chats[0].id);
     } catch (error) { setWechatState("error"); setMessage(error instanceof Error ? error.message : String(error)); }
@@ -85,7 +96,15 @@ function GeneratePage() {
       const payload: Record<string, unknown> = { ...settings };
       if (apiKey.trim()) payload.api_key = apiKey.trim();
       const saved = await bridge<Settings>("save_settings", { settings: payload });
-      setSettings((current) => ({ ...current, ...saved })); setApiKey("");
+      let historyState: Partial<Settings> = {};
+      if ((saved.export_root || "") !== indexedExportRoot.current) {
+        historyState = await bridge<Partial<Settings>>("refresh_history_state", {
+          settings: saved,
+          import_reports: true,
+        });
+        indexedExportRoot.current = saved.export_root || "";
+      }
+      setSettings((current) => ({ ...current, ...saved, ...historyState })); setApiKey("");
       if (showNotice) setMessage(`AI 与导出设置已保存；当前模型：${saved.model}。`);
     } catch (error) {
       if (!showNotice) throw error;
@@ -149,13 +168,12 @@ function GeneratePage() {
       await bridge<Settings>("save_settings", { settings: claimed });
       await runGeneration(settings.schedule_chat_id, settings.schedule_chat_name, today, today, "single", true);
       const completed = {
-        ...claimed,
         last_chat_id: settings.schedule_chat_id,
         last_chat_name: settings.schedule_chat_name,
         schedule_last_run_date: today,
         schedule_last_status: "success",
       };
-      setSettings(completed);
+      setSettings((current) => ({ ...current, ...completed }));
       await bridge("save_settings", { settings: completed });
     } catch (error) {
       const failed = { ...claimed, schedule_last_status: "failed" };
@@ -223,21 +241,14 @@ function GeneratePage() {
   const activeStart = settings.range_mode === "single" ? reportDate : startDate;
   const activeEnd = settings.range_mode === "single" ? reportDate : endDate;
 
-  return <main className="app-shell">
-    <aside className="rail">
-      <div className="brand-mark"><img src={appIcon} alt="群聊拾遗" /></div><div className="rail-line" aria-hidden="true" />
-      <div className={`rail-node ${wechatState === "ready" ? "done" : "active"}`}><span>1</span><small>连接</small></div>
-      <div className={`rail-node ${chatId ? "done" : ""}`}><span>2</span><small>选择</small></div>
-      <div className={`rail-node ${result ? "done" : busy ? "active" : ""}`}><span>3</span><small>生成</small></div>
-    </aside>
-    <div className="workspace">
+  return <div className="workspace">
       <header className="topbar"><div><p className="eyebrow">WECHAT · LOCAL INSIGHT</p><h1>微信群聊总结</h1></div><div className={`system-state ${wechatState}`}><span />{wechatState === "ready" ? "数据源已连接" : "等待连接数据源"}</div></header>
       <section className="notice" aria-live="polite"><strong>{busy ? "处理中" : "当前状态"}</strong><span>{message}</span></section>
       <div className="grid">
         <section className="panel source-panel">
           <div className="panel-heading"><div><span className="step-tag">01</span><h2>连接微信数据</h2></div><button className="button secondary" onClick={connectWeChat} disabled={wechatState === "testing" || busy}>{wechatState === "testing" ? "连接中…" : "测试并读取群聊"}</button></div>
           <label><span>WeChatDataAnalysis API</span><input value={settings.wechat_api_url} onChange={(e) => setSettings({ ...settings, wechat_api_url: e.target.value })} /></label>
-          <div className="chat-picker"><label><span>搜索群聊</span><input placeholder="输入群聊名称" value={query} onChange={(e) => setQuery(e.target.value)} disabled={!chats.length} /></label><label><span>选择群聊</span><select value={chatId} onChange={(e) => setChatId(e.target.value)} disabled={!filteredChats.length}>{!filteredChats.length && <option value="">连接后显示群聊</option>}{filteredChats.map((chat) => <option key={chat.id} value={chat.id}>{chat.name}{summarized.has(chat.id) ? " · 已总结" : ""}</option>)}</select></label></div>
+          <div className="chat-picker"><div className="chat-search-control"><span>搜索群聊</span><div className="chat-search-row"><input aria-label="搜索群聊" placeholder="输入群聊名称" value={query} onChange={(e) => setQuery(e.target.value)} disabled={!chats.length} /><div className="mini-segmented" role="group" aria-label="群聊筛选"><button className={chatFilter === "all" ? "selected" : ""} onClick={() => setChatFilter("all")}>全部</button><button className={chatFilter === "summarized" ? "selected" : ""} onClick={() => setChatFilter("summarized")}>已总结</button></div></div></div><label><span>选择群聊</span><select value={chatId} onChange={(e) => setChatId(e.target.value)} disabled={!filteredChats.length}>{!filteredChats.length && <option value="">没有符合条件的群聊</option>}{filteredChats.map((chat) => <option key={chat.id} value={chat.id}>{chat.name}{summarized.has(chat.id) ? " · 已总结" : ""}</option>)}</select></label></div>
           {selectedChat && <p className="selection-note">本次总结：<strong>{selectedChat.name}</strong>{summarized.has(selectedChat.id) && <em>　已有历史报告</em>}</p>}
         </section>
         <section className="panel range-panel">
@@ -269,7 +280,6 @@ function GeneratePage() {
       <section className={`action-dock ${result ? "has-result" : ""}`}><div><strong>{selectedChat?.name || "尚未选择群聊"}</strong><span>{activeStart === activeEnd ? activeStart : `${activeStart} 至 ${activeEnd}`} · PNG 300 DPI</span>{progress && <div className="progress-wrap"><i><b style={{ width: `${progress.percent}%` }} /></i><small>{progress.percent}% · {progress.message} · 已用 {Math.round(progress.elapsed_seconds)} 秒</small></div>}</div><button className="button primary" onClick={generate} disabled={busy || !chatId}>{busy ? "正在生成…" : "生成群聊总结"}</button></section>
       {result && <section className="result-panel"><div className="result-copy"><span className="result-check">✓</span><div><h2>报告生成完成{result.version ? ` · v${result.version}` : ""}</h2><p>摘要长图与完整 HTML 已生成，旧版本不会被覆盖。</p></div></div><div className="result-actions"><button className="button primary small" onClick={() => openPath(result.png_path)}>打开图片</button><button className="button secondary" onClick={() => openPath(result.html_path)}>打开 HTML</button><button className="button secondary" onClick={() => openPath(result.chat_dir || result.data_dir)}>打开报告所在目录</button><button className="button ghost" disabled={redactionBusy} onClick={openRedactionEditor}>{redactionBusy ? "读取中…" : "编辑并屏蔽内容"}</button></div></section>}
       {result && redactionEditorOpen && <RedactionEditor targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onClose={() => setRedactionEditorOpen(false)} onToggle={toggleRedaction} onApply={applyRedactions} />}
-    </div>
-  </main>;
+  </div>;
 }
 export default GeneratePage;

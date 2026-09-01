@@ -106,7 +106,7 @@ $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 内存中参与分析，不会写入报告目录。PNG 默认写入 300 DPI 元数据，可通过
 `--image-dpi` 调整。
 
-v0.2.2 继续使用向后兼容的统一 `report schema 2.1`：PNG 与 HTML 呈现相同的完整信息，按
+当前使用向后兼容的统一 `report schema 2.2`：PNG 与 HTML 呈现相同的完整信息，按
 “今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 → 今日活跃情况 → 报告结尾”组织；
 同一语义话题可合并多个不连续时间区间，结论、行动、问题、风险、引用和资源嵌入对应话题。
 无法可靠关联的补充信息进入 AI 今日观察，未归类资源保留为其他资源；JSON 与 SQLite 历史索引
@@ -126,6 +126,16 @@ ID。群关键词会合并重复短语，并移除与高频长词重复的二字
 `--result-file <path>` 读取版本化的结构化生成结果，不依赖 CLI 中文日志。历史库默认位于
 Tauri 解析的 Windows 用户数据目录，只保存报告结构、独立每日统计、资源与文件路径，不复制
 完整聊天正文。SQLite database schema version 与 Report Schema 2.2 分开维护；2.0/2.1 历史报告继续兼容读取。
+
+历史中心通过 JSONL Bridge 调用 `list_history_chats`、`list_history_reports`、
+`get_history_report`、`search_history`、`get_report_versions`、`list_history_resources` 和
+`refresh_history_state`，React 不直接访问 SQLite。HistoryStore 从 Schema 2.2 的
+`content.topics[*]` 派生主要话题、讨论结论、行动事项、开放问题、风险提示、代表性原话和资源等
+逻辑模块，并保留 FTS5 + 中文子串回退。报告列表默认显示最新版本，旧版本始终保留。
+
+生成页的“已总结”状态按 WeChatDataAnalysis 返回的 `chat.id` 与 SQLite 有效报告匹配。SQLite 是
+唯一事实来源；设置中的 `summarized_chat_ids` 仅为刷新后的缓存。历史库中的旧群不会被强行加入
+当前群选择器，但仍会在历史中心显示。
 
 v0.2.1 桌面端的“定时生成当日报告”使用软件内置定时器，可随时关闭；软件关闭时不执行，
 并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划注册模块相互独立。
@@ -279,10 +289,10 @@ python -m pip install -U typing-extensions
 - `group_insight/llm.py`：LLM 协议、DeepSeek 客户端、余额快照和 prompt 构造。
 - `group_insight/pipeline.py`：固定 `map/reduce/final` 分析流水线。
 - `group_insight/report_model.py`：最终日报结构修复、去重和 fallback 生成。
-- `group_insight/report_schema.py`：统一 report schema 2.1 与 2.0/旧报告只读适配。
+- `group_insight/report_schema.py`：统一 report schema 2.2 与 2.0/2.1 旧报告只读适配。
 - `group_insight/resources.py`：URL、链接卡片、文件资源提取与主题归类。
 - `group_insight/redaction.py`：报告条目枚举、无正文屏蔽占位和新版本文档生成。
-- `group_insight/history_store.py`：SQLite 历史底座、模块表、日统计和 FTS 索引。
+- `group_insight/history_store.py`：SQLite 历史迁移、Schema 2.2 逻辑模块、版本/资源查询、日统计和 FTS 索引。
 - `group_insight/progress.py`：跨进程阶段进度文件。
 - `group_insight/rendering.py`：信息量一致的移动端 HTML 与 PNG 完整长图渲染；视觉参考上游渐变背景和圆形序号讨论脉络。
 - `group_insight/transport.py`：PNG 导出和 RPA 发送。

@@ -57,8 +57,10 @@ def _client(settings: dict[str, Any], *, timeout: float = 15.0) -> WeChatDataAPI
 
 def _list_chats(settings: dict[str, Any]) -> dict[str, Any]:
     payload = _client(settings).list_sessions(limit=1000)
+    with HistoryStore() as history:
+        summarized = set(history.summarized_chat_ids())
     seen: set[str] = set()
-    chats: list[dict[str, str]] = []
+    chats: list[dict[str, Any]] = []
     for item in payload.get("sessions", []):
         if not isinstance(item, dict) or not bool(item.get("isGroup")):
             continue
@@ -67,8 +69,8 @@ def _list_chats(settings: dict[str, Any]) -> dict[str, Any]:
         if not username or username in seen:
             continue
         seen.add(username)
-        chats.append({"id": username, "name": name})
-    chats.sort(key=lambda item: item["name"].casefold())
+        chats.append({"id": username, "name": name, "summarized": username in summarized})
+    chats.sort(key=lambda item: (not bool(item["summarized"]), item["name"].casefold(), item["id"]))
     return {
         "connected": True,
         "account": str(payload.get("account") or ""),
@@ -225,16 +227,22 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
         "last_chat_name": str(payload.get("chat_name") or ""),
         "range_mode": str(payload.get("range_mode") or "single"),
     })
+    with HistoryStore() as history:
+        result["summarized_chat_ids"] = history.summarized_chat_ids()
     return result
 
 
-def _state_with_history() -> dict[str, Any]:
-    settings = load_desktop_settings(include_secret=False)
+def _refresh_history_state(
+    settings: dict[str, Any] | None = None,
+    *,
+    import_reports: bool = True,
+) -> dict[str, Any]:
+    settings = dict(settings or load_desktop_settings(include_secret=False))
     with HistoryStore() as history:
         export_root = str(settings.get("export_root") or "").strip()
         import_result = (
             history.import_export_root(Path(export_root))
-            if export_root
+            if export_root and import_reports
             else {"scanned": 0, "imported": 0, "skipped": 0, "failed": 0}
         )
         summarized_chat_ids = history.summarized_chat_ids()
@@ -247,7 +255,12 @@ def _state_with_history() -> dict[str, Any]:
             ).fetchone()
             settings["last_chat_id"] = last_chat_id
             settings["last_chat_name"] = str(row["display_name"] if row else "")
+        settings["history_chats"] = history.list_history_chats()
     return settings
+
+
+def _state_with_history() -> dict[str, Any]:
+    return _refresh_history_state()
 
 
 def _load_report_document(payload: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
@@ -317,6 +330,7 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
         raise RuntimeError(f"屏蔽版 PNG 生成失败: {image_error or '未生成图片'}")
     with HistoryStore() as history:
         history.upsert_report(redacted)
+        summarized_chat_ids = history.summarized_chat_ids()
     return {
         "completed": True,
         "version": paths.version,
@@ -327,6 +341,7 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
         "json_path": str(json_path),
         "html_path": str(html_path),
         "png_path": str(paths.image_path),
+        "summarized_chat_ids": summarized_chat_ids,
     }
 
 
@@ -338,6 +353,62 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(values, dict):
             raise ValueError("设置必须是 JSON 对象。")
         return save_desktop_settings(values)
+    if command == "refresh_history_state":
+        settings = load_desktop_settings(include_secret=False)
+        overrides = payload.get("settings", {})
+        if isinstance(overrides, dict):
+            settings.update(overrides)
+        return _refresh_history_state(
+            settings,
+            import_reports=bool(payload.get("import_reports", True)),
+        )
+    if command == "list_history_chats":
+        with HistoryStore() as history:
+            return {
+                "items": history.list_history_chats(
+                    keyword=str(payload.get("keyword") or ""),
+                    limit=int(payload.get("limit") or 500),
+                )
+            }
+    if command == "list_history_reports":
+        with HistoryStore() as history:
+            return history.list_reports(
+                chat_id=str(payload.get("chat_id") or ""),
+                start_date=str(payload.get("start_date") or ""),
+                end_date=str(payload.get("end_date") or ""),
+                module_filter=str(payload.get("module_filter") or "all"),
+                keyword=str(payload.get("keyword") or ""),
+                version_strategy=str(payload.get("version_strategy") or "latest"),
+                limit=int(payload.get("limit") or 50),
+                offset=int(payload.get("offset") or 0),
+            )
+    if command == "get_history_report":
+        with HistoryStore() as history:
+            return history.get_report_detail(str(payload.get("report_id") or ""))
+    if command == "search_history":
+        with HistoryStore() as history:
+            return history.search_history(
+                str(payload.get("keyword") or payload.get("query") or ""),
+                chat_id=str(payload.get("chat_id") or ""),
+                start_date=str(payload.get("start_date") or ""),
+                end_date=str(payload.get("end_date") or ""),
+                module_filter=str(payload.get("module_filter") or "all"),
+                version_strategy=str(payload.get("version_strategy") or "latest"),
+                limit=int(payload.get("limit") or 50),
+                offset=int(payload.get("offset") or 0),
+            )
+    if command == "get_report_versions":
+        with HistoryStore() as history:
+            return {"items": history.list_report_versions(str(payload.get("report_id") or ""))}
+    if command == "list_history_resources":
+        with HistoryStore() as history:
+            return history.list_resources(
+                report_id=str(payload.get("report_id") or ""),
+                chat_id=str(payload.get("chat_id") or ""),
+                keyword=str(payload.get("keyword") or ""),
+                limit=int(payload.get("limit") or 200),
+                offset=int(payload.get("offset") or 0),
+            )
 
     settings = load_desktop_settings(include_secret=True)
     overrides = payload.get("settings", {})
