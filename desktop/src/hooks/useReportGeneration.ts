@@ -59,6 +59,18 @@ export function useReportGeneration({
         end: `${end} 23:59:59`,
         export_root: settings.export_root,
       });
+      let summarizedChatIds = generated.summarized_chat_ids || [];
+      try {
+        const refreshed = await bridge<{ summarized_chat_ids?: string[] }>("refresh_history_state", {
+          import_reports: false,
+        });
+        summarizedChatIds = refreshed.summarized_chat_ids || summarizedChatIds;
+      } catch {
+        // 分析引擎已确认写入 SQLite；仅在状态刷新失败时即时补上当前群。
+      }
+      if (!summarizedChatIds.includes(targetChatId)) {
+        summarizedChatIds = [...summarizedChatIds, targetChatId];
+      }
       setResult(generated);
       setProgress({
         stage: "completed",
@@ -70,6 +82,7 @@ export function useReportGeneration({
         ...current,
         last_chat_id: targetChatId,
         last_chat_name: targetChatName,
+        summarized_chat_ids: summarizedChatIds,
       }));
       setMessage(scheduled ? "定时日报已生成，图片与完整 HTML 分别可打开。" : "报告已生成，图片与完整 HTML 分别可打开。");
       return generated;

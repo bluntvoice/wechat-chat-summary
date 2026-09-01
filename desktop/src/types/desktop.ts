@@ -20,7 +20,7 @@ export type Settings = {
   api_key_configured?: boolean;
 };
 
-export type Chat = { id: string; name: string };
+export type Chat = { id: string; name: string; summarized?: boolean };
 
 export type BridgeResponse<T> = {
   id: string;
@@ -40,6 +40,77 @@ export type GenerationResult = {
   json_path?: string;
   html_path?: string;
   png_path?: string;
+  summarized_chat_ids?: string[];
+};
+
+export type HistoryChat = {
+  chat_id: string;
+  display_name: string;
+  report_count: number;
+  latest_report_date: string;
+  latest_generated_at: string;
+};
+
+export type HistoryReport = {
+  report_id: string;
+  chat_id: string;
+  display_name: string;
+  report_date: string;
+  period_start: string;
+  period_end: string;
+  version: number;
+  schema_version: string;
+  generated_at: string;
+  provider: string;
+  model: string;
+  headline: string;
+  one_line_summary: string;
+  message_count: number;
+  participant_count: number;
+  resource_count: number;
+  modules: string[];
+};
+
+export type HistoryModule = {
+  module_key: string;
+  module_label: string;
+  ordinal: number;
+  title: string;
+  content: unknown;
+};
+
+export type HistoryExport = { path: string; exists: boolean };
+
+export type HistoryReportDetail = Omit<HistoryReport, "modules"> & {
+  content: Record<string, unknown>;
+  stats: Record<string, unknown>;
+  modules: HistoryModule[];
+  resources: Array<Record<string, unknown>>;
+  redactions: Array<Record<string, unknown>>;
+  exports: { json: HistoryExport; html: HistoryExport; png: HistoryExport };
+};
+
+export type HistorySearchHit = {
+  report_id: string;
+  chat_id: string;
+  chat_name: string;
+  report_date: string;
+  period_start: string;
+  period_end: string;
+  version: number;
+  generated_at: string;
+  module_key: string;
+  module_label: string;
+  title: string;
+  snippet: string;
+};
+
+export type Paginated<T> = {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 };
 
 export type Progress = {
