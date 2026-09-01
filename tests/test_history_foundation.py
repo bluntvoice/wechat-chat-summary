@@ -42,13 +42,13 @@ def searchable_document(root: Path) -> dict[str, object]:
                 {
                     "id": "topic-clearance",
                     "title": "美国尾程清关风险",
-                    "summary": "今天主要讨论美国尾程清关风险及资料准备，Tail clearance 需要复核。",
-                    "key_points": ["张三负责补全材料"],
+                    "discussion_flow": "今天主要讨论美国尾程清关风险及资料准备，Tail clearance 需要复核。",
+                    "action_items": [{"task": "准备尾程清关资料", "owner": "张三"}],
+                    "open_questions": [{"question": "海关编码是否需要调整"}],
+                    "resource_ids": ["res-link", "res-file"],
                 }
             ],
             "participant_insights": [{"name": "张三", "insight": "负责清关资料复核"}],
-            "action_items": [{"task": "准备尾程清关资料", "owner": "张三"}],
-            "open_questions": [{"question": "海关编码是否需要调整"}],
         },
         resources={
             "count": 2,

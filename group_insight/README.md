@@ -125,7 +125,7 @@ ID。群关键词会合并重复短语，并移除与高频长词重复的二字
 桌面端可通过 `--progress-file <path>` 读取原子写入的阶段进度 JSON，并通过
 `--result-file <path>` 读取版本化的结构化生成结果，不依赖 CLI 中文日志。历史库默认位于
 Tauri 解析的 Windows 用户数据目录，只保存报告结构、独立每日统计、资源与文件路径，不复制
-完整聊天正文。SQLite database schema version 与 Report Schema 2.1 分开维护。
+完整聊天正文。SQLite database schema version 与 Report Schema 2.2 分开维护；2.0/2.1 历史报告继续兼容读取。
 
 v0.2.1 桌面端的“定时生成当日报告”使用软件内置定时器，可随时关闭；软件关闭时不执行，
 并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划注册模块相互独立。
