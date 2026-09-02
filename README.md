@@ -72,9 +72,18 @@ npm run tauri dev
 年份或自定义范围。缺少缓存的日期只针对当前群聊和范围按需读取，不调用 AI；真实 0 与尚未统计
 分别显示。点击已有报告的日期可直接进入历史中心。
 “关于”页显示 Tauri 安装包实际运行版本和 GitHub 项目地址，便于构建 Release 后核对版本；
-当前尚未实现检查更新。
+版本只显示一次，并提供复制项目地址和手动检查更新。软件启动时不检查、也不在后台周期检查；只有用户
+点击后才访问本项目官方 GitHub Releases。普通更新通道只接受 Stable，不接受 Draft、Prerelease、
+Beta 或 RC，也不会提示降级。
 GitHub Actions 已可生成测试安装包和执行人工确认的正式 Release，但不会因此自动发布新版本。
-第六阶段已完成 Provider 整理、独立设置页和 MCP Server；检查更新、代码签名与自动更新仍未完成。
+第六阶段已完成 Provider 整理、独立设置页和 MCP Server；第七阶段已完成正式安装包的手动更新闭环，
+当前 Windows 安装包仍未进行代码签名。
+
+发现更高 Stable 版本后，桌面端只匹配
+`WeChat-Chat-Summary_<version>_x64-setup.exe` 和对应 `.sha256`，下载到系统临时目录并显示真实字节
+进度。SHA-256 一致且用户确认后才启动安装程序；安装程序启动失败时软件保持运行。这里提供的是
+“官方 Release 来源限制 + 文件完整性校验”，不是数字签名或绝对安全保证。更新检查不会上传聊天、
+API Key、SQLite、报告或群聊名称。
 
 桌面端默认按单日生成，并可切换自定义日期区间；成功生成后会记住上次群聊。设置页提供
 AI Provider、数据源、报告导出和 MCP Server 配置；DeepSeek 模型通过 Flash / Pro 下拉框明确选择，测试成功
@@ -215,6 +224,7 @@ cd desktop
 npm test
 npm run build
 cd src-tauri
+cargo test --lib --locked
 cargo check
 ```
 
@@ -246,6 +256,9 @@ cargo check
 Release 仅在测试和安装包构建通过后提交版本文件。任何步骤失败都不会创建 GitHub Release；
 可打开该次 Actions 运行，展开带红色失败标记的步骤查看完整日志。若失败发生在版本提交和
 Tag 已成功推送之后、Release 创建之前，需要先检查仓库 Tag/Release 状态再重试，禁止覆盖既有 Tag。
+
+正式安装包把软件自有文件放在安装根目录的 `program` 中。升级和卸载只递归处理该目录；Windows
+App Local Data 中的设置、密钥、SQLite 与统计缓存，以及用户选择的报告目录均不属于安装器删除范围。
 
 ## 隐私
 

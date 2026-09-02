@@ -16,7 +16,7 @@ Python 核心。开发模式使用仓库虚拟环境，测试安装包使用 PyI
 - 打开图片、报告数据目录和群聊报告目录；
 - 在独立历史中心按群聊、日期、模块和关键词查询本地报告；
 - 在独立热力图页查看消息数、参与人数或有效消息数，并从报告日期跳转历史中心；
-- 在关于页核对 Tauri 安装包实际运行版本并复制 GitHub 项目地址。
+- 在关于页核对 Tauri 安装包实际运行版本、复制项目地址并手动检查/下载 Stable 更新。
 
 软件自身的配置、密钥、SQLite 与任务进度由 Tauri 定位到 Windows 标准 App Local Data
 目录，报告导出目录与其严格分离。新用户未选择报告目录时不会预填开发机路径，首次生成会
@@ -35,11 +35,12 @@ npm run tauri dev
 npm test
 npm run build
 cd src-tauri
+cargo test --lib --locked
 cargo check
 ```
 
 当前 Rust 桥接在开发模式下优先使用仓库 `.venv\Scripts\python.exe`。正式安装包需在
-Release 构建中读取安装目录内的 `engine\group-insight-sidecar.exe`。桌面端与报告子进程通过
+Release 构建中读取安装目录内的 `program\engine\group-insight-sidecar.exe`。桌面端与报告子进程通过
 专用 JSON 结果文件传递输出路径，不解析 CLI 的中文人类日志。普通 Bridge 请求仍各自启动短生命周期
 Python 进程；MCP Server 是单独托管的长生命周期子进程，软件退出事件会执行 kill + wait。
 
@@ -49,7 +50,13 @@ Python 进程；MCP Server 是单独托管的长生命周期子进程，软件�
 只负责请求身份、交互和日历绘制。MCP 设置会显示状态、transport、endpoint、端口和复制配置，
 不会把 MCP Server 描述成软件主动调用外部 AI。
 关于页优先通过 Tauri runtime 读取安装包版本，普通浏览器开发预览才回退到
-`desktop/package.json`；检查更新仍留在后续阶段。
+`desktop/package.json`，页面不维护独立版本号。页面加载不检查更新；用户点击后才请求
+`https://api.github.com/repos/bluntvoice/wechat-chat-summary/releases/latest`。Rust 后端再次排除
+Draft/Prerelease，使用 SemVer 比较，并只接受精确命名的 Windows x64 installer 与 `.sha256`。
+
+下载写入系统临时目录 `wechat-chat-summary-update\<version>`。有 `Content-Length` 时显示真实百分比
+和字节数，没有时只显示已下载字节；取消、中断或校验失败会清理临时文件。SHA-256 一致后仍需用户
+明确确认，安装程序成功启动后当前软件才退出。更新失败不会影响生成、历史、热力图或 MCP。
 
 本地测试安装包（不创建 Tag / GitHub Release）：
 
@@ -59,10 +66,14 @@ Python 进程；MCP Server 是单独托管的长生命周期子进程，软件�
 
 默认产物目录为仓库根目录下 `artifacts\windows`，安装向导默认安装到当前用户的
 `%LOCALAPPDATA%\Programs\WeChat Chat Summary` 并允许改选其他目录。卸载脚本只移除主程序、
-分析引擎和快捷方式，不删除用户自定义报告目录。脚本会从参数、`MAKENSIS_PATH`、PATH 和
+分析引擎和快捷方式，不删除用户自定义报告目录。软件文件统一位于安装根目录的 `program`，升级和
+卸载只递归处理该目录；App Local Data、SQLite、API/MCP 设置、热力图缓存及安装根目录中的其他文件
+不在递归删除范围。脚本会从参数、`MAKENSIS_PATH`、PATH 和
 NSIS 标准安装位置查找 `makensis.exe`，找不到时明确停止；不依赖开发者用户名或固定盘符。
 PyInstaller 构建显式收集 `mcp` 包并包含 `group_insight.mcp_server`，安装后的同一 sidecar 同时承担
 JSONL Bridge 与 `--run-mcp-server` 入口。
 
 GitHub 网页测试构建使用 `.github/workflows/build-test.yml`；正式发布使用
 `.github/workflows/release.yml`。两者复用同一脚本，测试构建不会创建 Tag 或 Release。
+Stable 资产命名为 `WeChat-Chat-Summary_<version>_x64-setup.exe` 及同名 `.sha256`；含 SemVer
+预发布后缀的 Release 标记为 Prerelease，不进入普通更新通道。当前安装包没有 Windows 代码签名。

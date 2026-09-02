@@ -167,6 +167,7 @@ jobs:
         run: |
           npm test --prefix desktop
           npm run build --prefix desktop
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib --locked
           cargo check --manifest-path desktop/src-tauri/Cargo.toml --locked
           git diff --check
 
