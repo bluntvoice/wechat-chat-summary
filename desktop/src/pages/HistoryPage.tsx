@@ -67,7 +67,7 @@ const FIELD_LABELS: Record<string, string> = {
 const HIDDEN_FIELDS = new Set([
   "id", "topic_id", "resource_id", "metadata", "redacted", "tone", "confidence",
   "sender_id", "sender_username", "username", "title", "start_time", "end_time",
-  "redaction_id", "redaction_target_id",
+  "redaction_id", "redaction_target_id", "message_id", "file_size", "source",
 ]);
 
 function datePart(value: string) {
@@ -170,6 +170,39 @@ function isActivityStatsModule(module: HistoryModule) {
     .some((key) => key in content);
 }
 
+function resourceDomain(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value.length > 54 ? `${value.slice(0, 51)}…` : value;
+  }
+}
+
+function ResourcePreview({ value, memberNames }: { value: unknown; memberNames: Record<string, string> }) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return <ValueView value={value} memberNames={memberNames} />;
+  }
+  const resource = value as Record<string, unknown>;
+  const type = String(resource.type || "").toLowerCase() === "file" ? "文件" : "链接";
+  const topic = String(resource.topic || "").trim();
+  const context = resolveMemberTokens(String(resource.context_summary || "").trim(), memberNames);
+  const senderId = String(resource.sender_id || "").trim();
+  const sender = senderId
+    ? memberNames[senderId] || resolveMemberTokens(String(resource.sender || "群成员").trim(), memberNames)
+    : resolveMemberTokens(String(resource.sender || "").trim(), memberNames);
+  const sentAt = String(resource.sent_at || "").trim().slice(0, 16);
+  const url = String(resource.url || "").trim();
+  const metadata = [sender, sentAt].filter(Boolean);
+  const showTopic = topic && topic !== "其他 / 未归类" && topic !== "其他/未归类";
+
+  return <div className="history-resource-preview">
+    <div className="history-resource-tags"><span>{type}</span>{showTopic && <small>{topic}</small>}</div>
+    {context && <p>{context}</p>}
+    {metadata.length > 0 && <div className="history-resource-meta">{metadata.join(" · ")}</div>}
+    {url && <div className="history-resource-domain" title={url}>{resourceDomain(url)}</div>}
+  </div>;
+}
+
 function ModuleCard({
   module,
   memberNames,
@@ -206,7 +239,9 @@ function ModuleCard({
     <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : module.title}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
     {isActivityStatsModule(module)
       ? <ActivityStatsView value={module.content} memberNames={memberNames} />
-      : <ValueView value={module.content} memberNames={memberNames} />}
+      : module.module_key === "resources"
+        ? <ResourcePreview value={module.content} memberNames={memberNames} />
+        : <ValueView value={module.content} memberNames={memberNames} />}
   </article>;
 }
 

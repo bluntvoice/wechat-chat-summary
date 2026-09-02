@@ -256,6 +256,13 @@ input:focus, select:focus { border-color: var(--green); }
 .history-segment-list > div { min-width: 0; display: grid; grid-template-columns: 28px minmax(30px, 1fr) 22px; align-items: center; gap: 5px; }
 .history-segment-list span, .history-segment-list strong { color: #6c7b72; font-size: 8px; }
 .history-segment-list strong { text-align: right; }
+.history-resource-preview { display: grid; gap: 6px; }
+.history-resource-tags { display: flex; align-items: center; gap: 6px; }
+.history-resource-tags span { padding: 2px 5px; border-radius: 4px; background: #e2eee6; color: #3d6c4d; font-size: 8px; font-weight: 700; }
+.history-resource-tags small { overflow: hidden; color: #718078; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.history-resource-preview p { margin: 0; color: #536159; font-size: 10px; line-height: 1.55; }
+.history-resource-meta { color: #849088; font-size: 8px; }
+.history-resource-domain { overflow: hidden; color: #397155; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .history-empty { min-height: 150px; display: grid; place-content: center; justify-items: center; gap: 4px; padding: 20px; color: #8a9690; text-align: center; font-size: 11px; }
 .history-empty strong { color: #5e6e65; font-size: 13px; }
 .history-empty.compact { min-height: 72px; padding: 12px; }
