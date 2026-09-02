@@ -165,6 +165,7 @@ def default_settings() -> dict[str, Any]:
         "last_chat_name": "",
         "schedule_enabled": False,
         "schedule_time": "22:30",
+        "schedule_date_mode": "today",
         "schedule_chat_id": "",
         "schedule_chat_name": "",
         "schedule_last_attempt_date": "",
@@ -267,6 +268,7 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
         "last_chat_name",
         "schedule_enabled",
         "schedule_time",
+        "schedule_date_mode",
         "schedule_chat_id",
         "schedule_chat_name",
         "schedule_last_attempt_date",
@@ -293,6 +295,10 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
     if effort not in {"high", "max"}:
         raise ValueError("DeepSeek Reasoning Effort 只能是 high 或 max。")
     current["reasoning_effort"] = effort
+    schedule_date_mode = str(current.get("schedule_date_mode") or "today").strip().lower()
+    if schedule_date_mode not in {"today", "yesterday"}:
+        raise ValueError("定时报告日期仅支持 today 或 yesterday。")
+    current["schedule_date_mode"] = schedule_date_mode
     port = int(current.get("mcp_port") or MCP_DEFAULT_PORT)
     if port < 1024 or port > 65535:
         raise ValueError("MCP 端口必须在 1024 到 65535 之间。")

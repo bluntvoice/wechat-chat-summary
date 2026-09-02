@@ -12,6 +12,7 @@ export type Settings = {
   last_chat_name: string;
   schedule_enabled: boolean;
   schedule_time: string;
+  schedule_date_mode: "today" | "yesterday";
   schedule_chat_id: string;
   schedule_chat_name: string;
   schedule_last_attempt_date: string;
@@ -209,6 +210,7 @@ export const INITIAL_SETTINGS: Settings = {
   last_chat_name: "",
   schedule_enabled: false,
   schedule_time: "22:30",
+  schedule_date_mode: "today",
   schedule_chat_id: "",
   schedule_chat_name: "",
   schedule_last_attempt_date: "",

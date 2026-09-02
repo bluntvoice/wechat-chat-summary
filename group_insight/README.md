@@ -174,7 +174,7 @@ MCP Server 也不读取 DeepSeek Key。
 新报告主存储结构。新报告只能使用 `content.topics[*]` 下的 `discussion_flow`、`outcome`、
 `action_items`、`open_questions`、`risk_flags`、`quotes` 与 `resource_ids`。
 
-v0.2.1 桌面端的“定时生成当日报告”使用软件内置定时器，可随时关闭；软件关闭时不执行，
+桌面端的“定时生成报告”使用软件内置定时器，可选择生成触发当日或昨日的报告，并可随时关闭；软件关闭时不执行，
 并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划注册模块相互独立。
 
 ## RPA 发送前预热

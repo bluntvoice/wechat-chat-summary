@@ -2,7 +2,7 @@ import { CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import RedactionEditor from "../components/RedactionEditor";
 import { useReportGeneration } from "../hooks/useReportGeneration";
-import { localDate } from "../services/dates";
+import { localDate, scheduledReportDate } from "../services/dates";
 import { filterAndSortChats, type ChatListFilter } from "../services/chatList";
 import { bridge, openSystemPath } from "../services/desktopBridge";
 import {
@@ -60,7 +60,7 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
     checkSchedule();
     const timer = window.setInterval(checkSchedule, 30_000);
     return () => window.clearInterval(timer);
-  }, [settings.schedule_enabled, settings.schedule_time, settings.schedule_chat_id, settings.schedule_last_attempt_date, busy]);
+  }, [settings.schedule_enabled, settings.schedule_time, settings.schedule_date_mode, settings.schedule_chat_id, settings.schedule_chat_name, settings.schedule_last_attempt_date, busy]);
 
   const summarized = useMemo(() => new Set(settings.summarized_chat_ids || []), [settings.summarized_chat_ids]);
   const filteredChats = useMemo(
@@ -117,7 +117,8 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
     try {
       const saved = await bridge<Settings>("save_settings", { settings: next });
       setSettings((current) => ({ ...current, ...saved }));
-      setMessage(settings.schedule_enabled ? `已启用每日 ${settings.schedule_time} 定时生成；软件关闭时不会执行。` : "定时生成已关闭。");
+      const dateLabel = settings.schedule_date_mode === "yesterday" ? "昨日" : "当日";
+      setMessage(settings.schedule_enabled ? `已启用每日 ${settings.schedule_time} 定时生成${dateLabel}报告；软件关闭时不会执行。` : "定时生成已关闭。");
     } catch (error) {
       setMessage(`定时设置保存失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -132,20 +133,22 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
     try { await runGeneration(chatId, selectedChat?.name || "", start, end, settings.range_mode); } catch { /* 状态已在 runGeneration 中展示 */ }
   }
 
-  async function runScheduledGeneration(today: string) {
-    const claimed = { ...settings, schedule_last_attempt_date: today, schedule_last_status: "running" };
+  async function runScheduledGeneration(triggerDate: string) {
+    const reportDate = scheduledReportDate(triggerDate, settings.schedule_date_mode);
+    const claimed = { ...settings, schedule_last_attempt_date: triggerDate, schedule_last_status: "running" };
     setSettings(claimed);
     try {
       await bridge<Settings>("save_settings", { settings: claimed });
-      await runGeneration(settings.schedule_chat_id, settings.schedule_chat_name, today, today, "single", true);
+      await runGeneration(settings.schedule_chat_id, settings.schedule_chat_name, reportDate, reportDate, "single", true);
       const completed = {
         last_chat_id: settings.schedule_chat_id,
         last_chat_name: settings.schedule_chat_name,
-        schedule_last_run_date: today,
+        schedule_last_run_date: reportDate,
         schedule_last_status: "success",
       };
       setSettings((current) => ({ ...current, ...completed }));
       await bridge("save_settings", { settings: completed });
+      setMessage(`定时报告已生成：${settings.schedule_chat_name} · ${reportDate}。`);
     } catch (error) {
       const failed = { ...claimed, schedule_last_status: "failed" };
       setSettings(failed);
@@ -238,13 +241,14 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
           <label><span>独立报告根目录</span><div className="path-control"><input readOnly value={settings.export_root || "尚未配置"} /><button className="button secondary" onClick={onOpenSettings}>打开设置</button></div></label>
           <div className="archive-preview"><span>自动归档</span><code>群聊 / 导出图 / 年 / 月</code><code>群聊 / 报告数据 / 日期报告数据</code></div>
           <div className="schedule-box">
-            <div className="schedule-title"><div><strong>定时生成当日报告</strong><small>仅软件保持运行时执行，每天最多自动尝试一次</small></div><label className="switch"><input type="checkbox" checked={settings.schedule_enabled} onChange={(e) => setSettings({ ...settings, schedule_enabled: e.target.checked })} /><span /></label></div>
+            <div className="schedule-title"><div><strong>定时生成报告</strong><small>可选择当日或昨日；仅软件保持运行时执行</small></div><label className="switch"><input type="checkbox" checked={settings.schedule_enabled} onChange={(e) => setSettings({ ...settings, schedule_enabled: e.target.checked })} /><span /></label></div>
+            <div className="schedule-date-mode"><span>报告日期</span><div className="mini-segmented" role="group" aria-label="定时报告日期"><button className={settings.schedule_date_mode === "today" ? "selected" : ""} disabled={!settings.schedule_enabled} onClick={() => setSettings({ ...settings, schedule_date_mode: "today" })}>当日</button><button className={settings.schedule_date_mode === "yesterday" ? "selected" : ""} disabled={!settings.schedule_enabled} onClick={() => setSettings({ ...settings, schedule_date_mode: "yesterday" })}>昨日</button></div></div>
             <div className="schedule-fields">
               <label><span>每日时间</span><input type="time" value={settings.schedule_time} disabled={!settings.schedule_enabled} onChange={(e) => setSettings({ ...settings, schedule_time: e.target.value })} /></label>
               <label><span>定时群聊</span><input readOnly value={settings.schedule_chat_name || "尚未设置"} /></label>
             </div>
             <div className="schedule-actions"><button className="button ghost" disabled={!selectedChat || busy} onClick={() => setSettings({ ...settings, schedule_chat_id: selectedChat?.id || "", schedule_chat_name: selectedChat?.name || "" })}>设为当前群聊</button><button className="button secondary" disabled={busy} onClick={saveScheduleSettings}>保存定时设置</button></div>
-            {settings.schedule_last_attempt_date && <p className="schedule-status">最近尝试：{settings.schedule_last_attempt_date} · {settings.schedule_last_status === "success" ? "成功" : settings.schedule_last_status === "failed" ? "失败" : "执行中"}{settings.schedule_last_run_date && settings.schedule_last_run_date !== settings.schedule_last_attempt_date ? ` · 最近成功 ${settings.schedule_last_run_date}` : ""}</p>}
+            {settings.schedule_last_attempt_date && <p className="schedule-status">最近尝试：{settings.schedule_last_attempt_date} · {settings.schedule_last_status === "success" ? "成功" : settings.schedule_last_status === "failed" ? "失败" : "执行中"}{settings.schedule_last_run_date ? ` · 最近生成报告 ${settings.schedule_last_run_date}` : ""}</p>}
           </div>
         </section>
       </div>

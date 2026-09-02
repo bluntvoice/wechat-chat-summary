@@ -89,16 +89,26 @@ class DesktopConfigTests(unittest.TestCase):
                 {
                     "schedule_enabled": True,
                     "schedule_time": "21:45",
+                    "schedule_date_mode": "yesterday",
                     "schedule_chat_id": "room@chatroom",
                     "schedule_chat_name": "测试群",
                 }
             )
             self.assertTrue(saved["schedule_enabled"])
             self.assertEqual(saved["schedule_time"], "21:45")
+            self.assertEqual(saved["schedule_date_mode"], "yesterday")
             save_desktop_settings({"schedule_enabled": False})
             loaded = load_desktop_settings()
             self.assertFalse(loaded["schedule_enabled"])
             self.assertEqual(loaded["schedule_chat_id"], "room@chatroom")
+
+    def test_schedule_date_mode_defaults_to_today_and_rejects_invalid_value(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            self.assertEqual(load_desktop_settings()["schedule_date_mode"], "today")
+            with self.assertRaises(ValueError):
+                save_desktop_settings({"schedule_date_mode": "two-days-ago"})
 
 
 if __name__ == "__main__":
