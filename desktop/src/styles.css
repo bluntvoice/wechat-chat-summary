@@ -90,14 +90,19 @@ input:focus, select:focus { border-color: var(--green); }
 .archive-preview span { color: var(--green-dark); font-size: 11px; font-weight: 700; }
 .archive-preview code { color: #59665f; font: 11px/1.5 "Cascadia Mono", Consolas, monospace; }
 .schedule-box { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; gap: 11px; }
-.schedule-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.schedule-title > div { display: grid; gap: 2px; }
+.schedule-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.schedule-title > div { min-width: 0; display: grid; gap: 2px; }
+.schedule-title .switch { flex: 0 0 38px; }
 .schedule-title strong { font-size: 12px; color: #31483a; }
 .schedule-title small, .schedule-status { margin: 0; color: #7b8780; font-size: 10px; }
+.schedule-date-mode { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.schedule-date-mode > span { color: #5f6d65; font-size: 11px; }
+.schedule-date-mode .mini-segmented button { min-height: 25px; padding: 3px 10px; }
+.schedule-date-mode .mini-segmented button:disabled { cursor: not-allowed; opacity: .55; }
 .schedule-fields { display: grid; grid-template-columns: .7fr 1.3fr; gap: 8px; }
 .schedule-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .switch { display: block; position: relative; width: 38px; height: 22px; cursor: pointer; }
-.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; pointer-events: none; }
 .switch span { position: absolute; inset: 0; border-radius: 99px; background: #bcc9c1; transition: background .16s; }
 .switch span::after { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: transform .16s; }
 .switch input:checked + span { background: var(--green); }

@@ -1,143 +1,145 @@
-# 微信群聊总结（wechat-chat-summary）
+# 群聊拾遗（wechat-chat-summary）
 
-读取 `WeChatDataAnalysis` 提供的本地 API，按指定群聊和时间范围生成结构化统计、
-AI 总结、统一结构 JSON、完整 HTML 及 300 DPI PNG 完整长图。当前代码已包含 Windows 桌面端闭环、
-SQLite 历史中心与搜索、当日链接/文件整理、真实阶段进度、人工屏蔽、成员名称碰撞防护、
-本机 MCP Server，以及面向手机分享的日报长图。
+一个基于本地微信聊天数据的微信群聊统计、AI 总结与历史回顾工具。
 
-## 项目来源与使用说明
+项目通过 [WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) 提供的本地 API 读取微信聊天数据。选择指定群聊和日期后，可以自动完成消息统计、AI 内容分析，并生成适合电脑查看和手机分享的 PNG 长图、HTML 报告及结构化 JSON。
 
-本项目参考并使用了以下两个公开 GitHub 项目：
+除了生成单次总结外，项目还提供历史报告管理、全文搜索、群聊活跃热力图、内容屏蔽、定时生成以及 MCP Server 等功能。
 
-- [wzj042/wechat-auto-insight](https://github.com/wzj042/wechat-auto-insight)：本仓库的基础项目。保留并改造了其中的 `group_insight` 总结流程、报告渲染及可选微信发送能力；日报继续参考其米白—浅绿页面渐变、绿—黄头图和圆形序号讨论脉络设计；已移除不再可用的 `wechat-decrypt` 上游解密模块依赖。
-- [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis)：作为真实微信数据读取工具。本项目通过其本地 REST API 获取会话、成员和消息数据，并在 `group_insight/wechat_data_api.py` 中实现兼容适配；仓库不包含该工具本体、用户数据库或解密后的聊天数据。
+> 当前版本：**v0.2.3**
+>
+> 当前主要面向 Windows 桌面环境开发。
+>
+> 项目仍处于持续开发阶段。
+>
+> GitHub 暂未发布正式 Stable Release。
 
-可选的微信 UI 自动发送功能继续使用 `pywechat` 子模块；数据读取和报告生成不依赖该功能。
+## 这个项目可以做什么？
 
-## 当前架构
+微信群消息很多时，我们通常会遇到几个问题：
 
-- `WeChatDataAnalysis`：负责微信 4.x 数据读取、解密和本地 API。
-- `group_insight/`：负责消息归一化、统计、分片、AI 分析、资源整理、统一报告结构、SQLite 历史索引和报告渲染。
-- `desktop/`：Tauri 2 + React/TypeScript 桌面端，通过 UTF-8 JSONL 调用 Python 核心。
-- `pywechat/`：可选的微信 UI 自动发送子模块。
-- AI API 支持 DeepSeek 与通用 OpenAI Compatible；本机 MCP Server 供外部 AI 客户端调用。
-- 本软件当前不是 MCP Client，MCP Server 本身也不是 AI Provider。
+- 一天没看群，不知道大家讨论了什么；
+- 重要讨论和日常闲聊混在一起，很难快速回顾；
+- 群里分享过的链接、文件过段时间很难再找到；
+- 每天的聊天记录缺少可以长期保存和回看的整理结果；
+- 想观察一个群长期以来什么时候活跃、讨论量有什么变化。
 
-旧 `wechat-decrypt` gitlink 仍存在于上游提交历史中，但当前代码、依赖和运行流程均不再使用它。
+「群聊拾遗」希望解决的就是这些问题。
 
-## 配置
-
-先启动 `WeChatDataAnalysis` 并完成账号数据加载。复制 `.env.example` 为 `.env`，
-填写 API Key 和独立输出目录：
-
-```dotenv
-DEEPSEEK_API_KEY=<API_KEY_PLACEHOLDER>
-DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
-# 使用通用 Provider 时填写下面三项，并通过 --provider openai-compatible 启动 CLI。
-# OPENAI_COMPATIBLE_API_KEY=<API_KEY_PLACEHOLDER>
-# OPENAI_COMPATIBLE_MODEL=<MODEL_NAME>
-# OPENAI_COMPATIBLE_API_URL=https://example.com/v1
-WECHAT_DATA_API_URL=http://127.0.0.1:10392
-GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
+```text
+读取本地微信数据
+↓
+选择群聊和日期
+↓
+AI 总结
+↓
+生成长图
+↓
+自动保存
+↓
+历史查询与长期回顾
 ```
 
-`.env` 仅供本机使用，已被 Git 忽略。输出目录应与源码和软件安装目录分离。
+本工具不需要通过微信机器人持续监听群聊，而是读取本机已经存在的微信聊天数据。
 
-桌面端的软件自身数据目录由 Tauri 使用 Windows 标准 App Local Data API 确定，通常位于
-`%LOCALAPPDATA%\com.bluntvoice.wechat-chat-summary`；普通设置、API Key、SQLite 和任务进度
-分别保存在其中。报告目录始终独立：新用户默认为空，首次生成前必须在界面选择，选择后继续沿用。
-若旧版 `D:\工具\WeChat Chat Summary\data` 存在且新目录尚未使用，软件会校验后复制配置、
-密钥和历史库，保留旧目录作为回退；新目录已有文件时不会覆盖。
+## 已实现功能
 
-## 快速开始
+### 1. 微信群聊读取
 
-1. 启动 WeChatDataAnalysis 并确认本机数据接口可用。
-2. 打开群聊拾遗，在“生成总结”中测试连接并读取群聊。
-3. 在“设置”中配置 AI API，并选择独立报告根目录。
-4. 选择群聊与单日或自定义日期范围。
-5. 生成总结，观察真实阶段、百分比和持续刷新的耗时。
-6. 打开 PNG、HTML 或报告目录；需要时生成屏蔽版新版本。
-7. 在历史中心检索报告，在热力图回顾每日活跃。
+- 通过 WeChatDataAnalysis 本地 REST API 获取数据；
+- 获取群聊列表、群成员及指定日期范围的消息；
+- 统计消息数量、有效消息数量、参与人数、活跃成员、活跃时段等信息；
+- 支持搜索群聊，并根据本地历史记录识别和筛选“已总结”群聊。
 
-桌面端首次使用会显示可关闭的简短指南；关闭后不会在每次启动时强制弹出，可随时从侧栏“指南”重新打开。
+### 2. 单日 / 自定义时间范围总结
 
-## 桌面端开发运行
+- 默认按单日生成总结；
+- 支持自定义起止日期；
+- 成功生成后记住上次使用的群聊；
+- 已生成过报告的群聊会置顶显示，并可单独筛选。
 
-安装依赖后从 `desktop` 目录启动；npm、Cargo 等工具使用各自的标准缓存，也可由开发者
-通过环境变量改到任意有足够空间的目录：
+### 3. AI 群聊总结
 
-```powershell
-cd desktop
-npm ci
-npm run tauri dev
+当前支持以下 AI Provider：
+
+- DeepSeek；
+- OpenAI Compatible。
+
+AI 分析会整理总体情况、主要讨论话题、讨论脉络、重要结论、行动事项、开放问题、风险、引用、链接和文件，以及 AI 综合观察。玩笑、调侃、反话和低可信内容会经过严肃性与可信度过滤，减少误判为正式结论的情况。
+
+### 4. 多格式报告导出
+
+- PNG 长图；
+- HTML 完整报告；
+- JSON 结构化报告数据。
+
+PNG 采用适合手机纵向阅读的长图形式，可用于微信群或其他场景分享。HTML 与 PNG 使用同一份完整报告正文。
+
+### 5. 主要话题与讨论脉络
+
+「今日主要话题」不是简单按照时间段切割消息。系统会结合讨论对象、核心问题、上下文、回复关系和语义关联等信息，判断消息是否属于同一个话题。
+
+一个话题即使在当天多个不连续时间段被反复讨论，也可以被归纳到同一个主题中。结论、行动事项、开放问题、风险、引用和资源会尽可能关联到对应话题；没有可靠内容时不会生成占位结论。
+
+### 6. 链接与文件整理
+
+- 提取普通 URL、微信链接卡片和文件元数据；
+- 尽量把链接和文件归入对应主题；
+- 无法可靠判断归属时进入“其他 / 未归类”；
+- 过滤微信红包消息、疑似红包领取页和红包素材链接。
+
+### 7. 历史中心
+
+历史报告按以下层级组织：
+
+```text
+群聊 → 日期 → 报告 → 版本
 ```
 
-当前阶段提供源码可运行的桌面闭环，并提供不依赖源码目录的本地 Windows 测试安装包
-构建脚本。安装向导默认使用当前 Windows 用户的本地应用程序目录，并允许改选目录；
-程序数据和报告目录独立管理，升级或卸载测试程序不会删除它们。
-当前已建立独立历史中心：按群聊查看日期、报告、历史版本和逻辑模块，支持日期、模块与关键词筛选，
-并可打开对应 PNG、HTML 和 JSON。历史详情可进入屏蔽模式，直接点击报告中的完整条目进行选择，
-折叠的完整列表用于批量选择和查漏。生成页的已总结群按 SQLite 历史记录置顶，并可切换“全部 / 已总结”；
-新生成、定时生成和切换导出目录重新导入后会即时刷新。
+可以查看不同日期和版本的报告、报告模块与资源，并打开对应的 PNG、HTML 和 JSON。旧群聊即使当前数据源中已不可见，已有历史报告仍会保留在历史中心。
 
-桌面端另提供群聊日历热力图，默认显示最近一年和消息数量，可切换参与人数、有效消息数量，并支持
-年份或自定义范围。缺少缓存的日期只针对当前群聊和范围按需读取，不调用 AI；真实 0 与尚未统计
-分别显示。点击已有报告的日期可直接进入历史中心。
-“关于”页显示 Tauri 安装包实际运行版本和 GitHub 项目地址，便于构建 Release 后核对版本；
-版本只显示一次，并提供复制项目地址和手动检查更新。软件启动时不检查、也不在后台周期检查；只有用户
-点击后才访问本项目官方 GitHub Releases。普通更新通道只接受 Stable，不接受 Draft、Prerelease、
-Beta 或 RC，也不会提示降级。
-GitHub Actions 已可生成测试安装包和执行人工确认的正式 Release，但不会因此自动发布新版本。
-第六阶段已完成 Provider 整理、独立设置页和 MCP Server；第七阶段已完成正式安装包的手动更新闭环，
-当前 Windows 安装包仍未进行代码签名。
+### 8. 历史搜索
 
-发现更高 Stable 版本后，桌面端只匹配
-`WeChat-Chat-Summary_<version>_x64-setup.exe` 和对应 `.sha256`，下载到系统临时目录并显示真实字节
-进度。SHA-256 一致且用户确认后才启动安装程序；安装程序启动失败时软件保持运行。这里提供的是
-“官方 Release 来源限制 + 文件完整性校验”，不是数字签名或绝对安全保证。更新检查不会上传聊天、
-API Key、SQLite、报告或群聊名称。
+历史中心使用本机 SQLite 索引，支持按群聊、日期范围和报告模块筛选，并搜索总结、成员、话题、结论、行动事项、开放问题、风险、引用、资源标题、文件名和 URL。中文搜索在全文索引未命中时还会使用本地子串匹配。
 
-桌面端默认按单日生成，并可切换自定义日期区间；成功生成后会记住上次群聊。设置页提供
-AI Provider、数据源、报告导出和 MCP Server 配置；DeepSeek 模型通过 Flash / Pro 下拉框明确选择，测试成功
-时会显示服务端实际响应模型。生成过程中显示后端真实阶段和百分比；已用时间由桌面端持续计时，
-不会因单个 AI 阶段长时间处理而停住。完成后可
-分别打开完整 PNG 长图、完整 HTML 或报告所在目录。PNG 与 HTML 使用相同的信息模块，
-按“今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 → 今日活跃情况 → 报告结尾”呈现。
-主要话题采用圆形序号和连续讨论脉络，标题位于时间范围上方，时间使用普通正文样式，
-话题内容中的群成员昵称使用蓝色加粗。同一语义话题可保留多个不连续时间区间；时间相邻
-不会被单独用作合并依据。讨论落点、行动、问题、风险、引用和资源仅在确有内容且可可靠
-关联时嵌入对应话题，不再重复展示“关键观点”“讨论转折”或“暂无结论”等占位内容。
+### 9. 人工屏蔽内容
 
-报告生成后可进入“编辑并屏蔽内容”，也可在历史详情预览中直接选择热点、讨论、成员、结论、行动、
-问题、风险、引用和资源等完整条目；辅助列表用于批量选择和查漏，不提供任意文字级删除。屏蔽只在本机读取既有结构化 JSON 并重新渲染，不重新读取群聊、
-不再次调用 AI；结果保存为 `_v2`、`_v3` 等新版本，原报告不被覆盖。屏蔽版 JSON、HTML、
-PNG 和搜索索引不保留被屏蔽条目的标题、成员或总结，只显示所属时间及“已屏蔽，建议在群内查看”。
-屏蔽列表和历史详情会用报告内成员目录解析群昵称，不显示 `[[user:...]]` 内部标识。
-“轻松插曲”不再作为报告模块展示，但玩笑/反话识别仍用于阻止其进入正式结论。
+生成报告后，可以选择不适合分享的完整内容条目。历史报告预览支持进入屏蔽模式后直接点击报告条目，也保留完整条目列表用于批量选择和查漏。
 
-报告中的成员名称优先使用群昵称，其次使用微信网名，不使用本机联系人备注；若上游将同一
-显示名同时分配给两个及以上不同账号，软件会将其视为名称碰撞，并分别回退到微信网名或账号
-ID。群关键词会做规范化去重。资源整理会在提取阶段忽略微信红包消息、疑似红包领取页与红包素材链接。
+屏蔽过程：
 
-桌面端还支持可关闭的每日定时生成，可固定群聊与时间。该功能属于软件内置定时器：只有
-软件保持运行时才会触发，每天最多自动尝试一次，不创建 Windows 任务计划，也不会在软件
-关闭期间后台运行。
+- 不重新读取聊天；
+- 不重新调用 AI；
+- 不覆盖原报告；
+- 生成 `_v2`、`_v3` 等递增新版本。
 
-## AI API 与 MCP Server
+被屏蔽内容不会继续进入新版本正文和搜索索引。新版本仅保留所属时间及“已屏蔽，建议在群内查看”的提示，不保留被屏蔽条目的标题、成员、总结、引用或资源详情。
 
-两条链路彼此独立：
+### 10. 群聊活跃热力图
 
-- **AI API**：软件自身的“生成总结”调用用户配置的 DeepSeek 或 OpenAI Compatible API。
-- **MCP Server**：外部 MCP Host 调用群聊拾遗的工具，外部 AI 完成分析后提交 Schema 2.2 报告。
+热力图支持按以下指标查看每日活跃程度：
 
-通用 Provider 只发送标准 Chat Completions JSON 字段；Thinking、Reasoning Effort、余额接口和
-DeepSeek 模型校验仅由 DeepSeek Provider 使用。不同 Provider 的 API Key 分开保存在本机私有密钥文件，
-不会写入公开设置、SQLite、日志、报告或测试 fixture。
+- 消息数量；
+- 有效消息数量；
+- 参与人数。
 
-MCP Server 默认关闭。用户在设置页明确开启后，桌面程序启动受托管子进程，仅监听
-`http://127.0.0.1:8765/mcp` 的 Streamable HTTP；软件退出时子进程同步终止，不创建 Windows Service。
-当前 tools：
+时间范围支持最近一年、指定年份和自定义日期范围。缺少缓存时，软件会按当前群聊和范围从本地聊天数据按需计算，不调用 AI；尚未统计与已确认没有消息会分别显示。
+
+### 11. 每日定时生成
+
+桌面端支持为一个固定群聊设置每日生成时间，并可选择生成触发当日或昨日的报告。只有「群聊拾遗」保持运行时才会触发，每个自然日最多自动尝试一次。
+
+桌面端的这一定时功能：
+
+- 不创建 Windows Task Scheduler 任务；
+- 不安装 Windows Service；
+- 软件关闭后不会继续运行。
+
+### 12. MCP Server
+
+MCP Server 属于高级功能。软件自身生成总结时使用用户配置的 AI API；MCP Server 则向外部 MCP Host 提供受控的群聊数据、统计、历史搜索和报告能力，由外部 AI 完成分析并提交结果。
+
+当前群聊拾遗提供 MCP Server，但不是 MCP Client。当前 tools：
 
 - `list_chats`
 - `get_chat_stats`
@@ -149,15 +151,135 @@ MCP Server 默认关闭。用户在设置页明确开启后，桌面程序启动
 - `submit_report`
 - `render_report`
 
-`get_chat_analysis_context` 仅按明确的群聊和时间范围临时读取消息，单次最多 31 天、2000 条消息、
-100 万字符；完整正文不写入 SQLite 或报告目录。`submit_report` 先严格校验 Report Schema 2.2，
-再由软件分配版本、重建确定性统计和资源、生成 JSON / HTML / PNG、写入 HistoryStore 并刷新
-`summarized_chat_ids`。非法文档不会进入历史库。
+## 下载与安装
 
-### MCP Host 本机联调
+当前项目仍处于正式 Release 发布前阶段。Windows 安装包构建及更新机制已经在源码中建立，但 GitHub Releases 暂未提供正式稳定版安装包。
 
-先在群聊拾遗“设置 → MCP Server”中启动服务并复制配置。Codex CLI、ChatGPT Windows 桌面端和
-IDE 扩展可直接使用本机 Streamable HTTP：
+正式版本发布后，将优先通过本仓库的 [GitHub Releases](https://github.com/bluntvoice/wechat-chat-summary/releases) 页面提供 Windows 安装程序。
+
+### 正式版本
+
+> **待补充：首次 Stable Release 发布后，在此补充最新版下载入口、安装方式及版本要求。**
+
+<!-- TODO: 首次 Stable Release 发布后补充最新版安装包下载地址及安装说明 -->
+
+## 前置依赖
+
+### Windows
+
+当前桌面端主要面向 Windows 开发和测试。
+
+### 微信电脑版及本地聊天数据
+
+需要本机已经存在可由 WeChatDataAnalysis 读取的微信聊天数据。
+
+### WeChatDataAnalysis
+
+本项目本身不直接负责微信数据库解密和原始数据读取。相关能力由 [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) 提供。
+
+基本流程：
+
+1. 安装并启动 WeChatDataAnalysis；
+2. 完成微信数据加载；
+3. 启动本地 API；
+4. 再由群聊拾遗连接。
+
+默认本机地址为：
+
+```text
+http://127.0.0.1:10392
+```
+
+### AI API
+
+- 用户需要自行向 AI 服务商申请 API Key；
+- AI 服务费用由对应服务商收取；
+- 本项目不提供免费 AI API。
+
+### MCP（可选）
+
+普通用户使用群聊拾遗生成总结不需要配置 MCP。只有需要让外部 MCP Host 调用本机数据与报告能力时，才需要启用 MCP Server。
+
+## 快速开始
+
+1. 启动 WeChatDataAnalysis；
+2. 确认本机数据接口可用；
+3. 打开群聊拾遗；
+4. 在“生成总结”页面测试数据源并读取群聊；
+5. 在“设置”页面配置 AI API；
+6. 选择独立的报告目录；
+7. 选择群聊；
+8. 选择单日或自定义日期范围；
+9. 生成总结；
+10. 打开 PNG、HTML 或报告所在目录；
+11. 在“历史中心”查看过去的报告和版本；
+12. 需要时通过“热力图”查看长期活跃情况。
+
+桌面端首次使用会显示可以关闭的简短指南。关闭后不会在每次启动时强制弹出，也可以随时从侧栏重新打开。
+
+## 生成的报告包含什么？
+
+当前报告按以下顺序呈现：
+
+1. 今日总览；
+2. 今日速览；
+3. 今日主要话题；
+4. AI 今日观察；
+5. 今日活跃情况；
+6. 报告结尾。
+
+PNG 适合手机纵向阅读与分享；HTML 适合在电脑上查看完整报告；JSON 用于保存结构化报告数据以及供程序后续读取。
+
+同日重复生成不会覆盖旧报告，而是使用 `_v2`、`_v3` 等递增版本。当前新报告使用 Report Schema 2.2，同时继续兼容读取旧 2.0 / 2.1 报告。
+
+## 本地数据与隐私
+
+### 微信数据读取
+
+微信数据由 WeChatDataAnalysis 从本机读取，群聊拾遗通过其本地 API 获取当前请求所需的群聊、成员和消息数据。
+
+### 群聊拾遗保存的数据
+
+根据当前实现，软件会在 Windows 用户数据目录或用户选择的报告目录中保存：
+
+- 普通设置；
+- AI Provider 配置及本机私有 API Key；
+- SQLite 历史索引；
+- 每日聚合统计与热力图缓存；
+- JSON、HTML 和 PNG 报告；
+- 任务状态与生成进度。
+
+软件不会为了历史查询额外建立一份完整的原始微信聊天正文数据库。报告目录和 SQLite 历史库也不保存 AI 分析阶段使用的完整原始消息分片。
+
+### AI 数据传输说明
+
+使用第三方 AI API 进行总结时，为完成分析，必要的聊天内容需要发送给用户所配置的 AI 服务商。因此，“微信数据来自本机”并不等同于“所有 AI 分析内容永远不会离开本机”。
+
+使用前请自行了解对应服务商的：
+
+- 隐私政策；
+- 数据保存政策；
+- API 数据使用规则。
+
+商业秘密、客户信息、内部资料和个人敏感信息应谨慎发送给第三方 AI 服务。
+
+## AI API 与 MCP Server
+
+### AI API
+
+软件自身的“生成总结”调用用户配置的 DeepSeek 或 OpenAI Compatible API。DeepSeek 支持其专属的 Thinking、Reasoning Effort、余额查询和模型校验；通用 OpenAI Compatible 请求不会自动携带 DeepSeek 专属字段。
+
+### MCP Server
+
+外部 MCP Host 可以调用群聊拾遗提供的群聊数据、统计、历史搜索、报告读取和报告生成能力。MCP Server 默认关闭，仅监听本机，软件退出后由桌面程序终止，不安装 Windows Service。
+
+默认地址：
+
+```text
+http://127.0.0.1:8765/mcp
+```
+
+Codex 配置示例：
 
 ```toml
 [mcp_servers.wechat_chat_summary]
@@ -166,125 +288,155 @@ enabled = true
 tool_timeout_sec = 300
 ```
 
-Codex 配置文件默认为 `~/.codex/config.toml`；也可在 ChatGPT 桌面端或 Codex IDE 扩展的
-“Settings → MCP servers → Add server”中选择 Streamable HTTP 并填写上述 URL。Claude Code 可运行：
+MCP 分析链路与软件自身的 AI API 生成链路彼此独立。当前软件不是 MCP Client，也不会通过 MCP 调用外部 AI。
 
-```powershell
-claude mcp add --transport http --scope user wechat-chat-summary http://127.0.0.1:8765/mcp
-claude mcp get wechat-chat-summary
+## 配置
+
+普通桌面用户可以直接通过软件“设置”页面配置数据源、AI Provider、报告目录和 MCP Server。API Key 会按 Provider 分开保存在 Windows 用户数据目录的私有密钥文件中，不写入公开设置、SQLite、日志或报告。
+
+从源码运行时可以参考 `.env.example`：
+
+```dotenv
+DEEPSEEK_API_KEY=<API_KEY>
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
+
+# 使用 OpenAI Compatible 时按实际服务填写：
+# OPENAI_COMPATIBLE_API_KEY=<API_KEY>
+# OPENAI_COMPATIBLE_MODEL=<MODEL_NAME>
+# OPENAI_COMPATIBLE_API_URL=https://api.example.com/v1
+
+WECHAT_DATA_API_URL=http://127.0.0.1:10392
+
+GROUP_INSIGHT_OUTPUT_ROOT=<你的报告目录>
 ```
 
-ChatGPT Web 和 Claude Web 的自定义连接器由云端访问，不能直接连接 `127.0.0.1`。本阶段不开放
-局域网监听、不提供公网入口，也不实现 MCP Client；请使用同机 Host 进行验收。
+`.env` 只供本机源码运行使用，已被 Git 忽略。报告目录应与源码目录、软件安装目录及 WeChatDataAnalysis 安装目录分开。
 
-## 运行
+## 从源码运行
 
-真实数据干跑会生成统计与 HTML，但不调用模型、不导出图片、不发送微信：
-
-```powershell
-python -m group_insight `
-  --chat "群聊完整名称" `
-  --start "2026-08-28 00:00:00" `
-  --end "2026-08-28 23:59:59" `
-  --dry-run `
-  --no-image `
-  --no-send-after-run
-```
-
-完整分析和 PNG 导出：
+当前 CI 使用 Python 3.12、Node.js 24 和 Rust stable。首次运行前安装 Python 依赖及 Playwright Chromium：
 
 ```powershell
-python -m group_insight `
-  --chat "群聊完整名称" `
-  --start "2026-08-28 00:00:00" `
-  --end "2026-08-28 23:59:59" `
-  --image-dpi 300 `
-  --no-send-after-run
+python -m pip install -r requirements.txt
+python -m playwright install chromium
 ```
 
-默认视口宽度为 760 CSS 像素，浏览器以 2 倍缩放导出约 1520 像素宽的长图。
-PNG 会写入 300 DPI 的 `pHYs` 元数据，不会为了修改 DPI 而重采样图片。
+启动桌面开发版本：
 
-## 输出
+```powershell
+cd desktop
+npm ci
+npm run tauri dev
+```
+
+Windows 安装包构建还需要 NSIS 和 `desktop/requirements-build.txt` 中的 PyInstaller，普通源码开发运行不需要执行正式发布工作流。
+
+## 项目结构
 
 ```text
-<报告根目录>\<对话名>\
-  导出图\YYYY\MM\YYYY-MM-DD报告.png
-  报告数据\YYYY-MM-DD报告数据\
-    <对话名>_YYYY-MM-DD_群聊总结.json
-    <对话名>_YYYY-MM-DD_群聊总结.html
+wechat-chat-summary
+│
+├─ desktop/
+│  └─ Windows Tauri 2 + React 桌面端
+│
+├─ group_insight/
+│  └─ 消息处理、统计、AI 分析、历史数据及报告生成
+│
+├─ pywechat/
+│  └─ 可选微信 UI 自动操作模块
+│
+├─ tests/
+│  └─ Python 自动化测试
+│
+├─ PRD.md
+└─ requirements.txt
 ```
 
-同日重复生成使用 `_v2`、`_v3` 递增版本，不覆盖旧报告。多日总结使用
-`YYYY-MM-DD_至_YYYY-MM-DD`。报告 JSON 使用向后兼容的 `report schema 2.2`，并继续读取 2.0/2.1 历史报告；它与 HTML、PNG 和
-SQLite 历史索引共用结构；报告目录和历史库均不保存完整原始消息分片。屏蔽记录进入
-`report_redactions` 表，被屏蔽正文不会写入新版本或 FTS 索引。
+## 版本更新日志
 
-SQLite 历史库位于上述 Windows 用户数据目录的 `history.sqlite3`。数据库使用独立于
-Report Schema 2.2 的 schema migration 版本；群聊每日统计按 `chat + date` 独立保存，不要求
-当天已经生成报告。历史搜索底层采用 FTS5，并在 FTS 无法命中的中文子词场景使用本地子串回退，
-可检索群聊、一句话总结、成员、话题及嵌套细节、资源标题、文件名和 URL。历史 UI 的逻辑模块由
-Schema 2.2 查询层派生，不改变报告 JSON；2.0/2.1 历史报告仍可读取。
+### 当前开发版本
 
-热力图复用 `chat_daily_stats`，不会创建另一套统计表。SQLite 中没有某日记录表示尚未统计；Python
-会把连续缺口合并并按最多 31 天分段读取，只把每日聚合结果写入数据库。成功读取但无消息的日期
-会保存为明确零值，读取失败则继续保持未知。单次范围最多 366 天，软件不会启动后扫描所有群聊或年份。
+- 优化主要话题结构、报告视觉、进度与首次使用指南；
+- 增加群聊活跃热力图；
+- 整理 DeepSeek / OpenAI Compatible Provider，并增加本机 MCP Server；
+- 增加独立关于页、手动检查更新及安装包下载、SHA-256 校验和启动安装程序的更新闭环；
+- 支持在历史报告预览中直接选择并屏蔽完整报告条目。
 
-## 测试
+以上能力已在当前源码中实现，但尚未发布为 GitHub Stable Release。
 
-```powershell
-python -m unittest discover -s tests -v
-python -m compileall -q group_insight tests
-cd desktop
-npm test
-npm run build
-cd src-tauri
-cargo test --lib --locked
-cargo check
-```
+### v0.2.3
 
-## GitHub Actions 构建与发布
+- 增加独立历史中心；
+- 支持历史版本、报告模块、资源和本地搜索；
+- 以 SQLite 历史记录识别并筛选已总结群聊。
 
-仓库提供三个 Windows 工作流：`CI` 只做轻量检查；`Build Windows test installer` 生成
-测试安装包但不创建 Tag 或 Release；`Release Windows installer` 在测试、构建全部成功后，
-同步版本、更新 CHANGELOG、推送 Tag 并创建 GitHub Release。版本以
-`desktop/package.json` 为唯一人工输入源，其余版本文件由脚本同步并在 CI 中校验。
+### v0.2.2
 
-在 GitHub 网页生成测试安装包：
+- 修复多个账号共享同一上游显示名时的成员名称碰撞；
+- 成员名称优先使用群昵称，其次使用微信网名，无法确认时回退到账号 ID。
 
-1. 打开仓库的 **Actions** 页面，选择 **Build Windows test installer**；
-2. 点击 **Run workflow**，选择要构建的分支并确认；
-3. 任务成功后，在该次运行页面底部 **Artifacts** 下载
-   `wechat-chat-summary-v<版本>-windows-test`；压缩包内含安装程序及 `.sha256` 文件。
+### v0.2.1
 
-发布 Prerelease 或 Stable：
+- 完善桌面端 AI 设置、定时生成、真实进度和报告操作体验；
+- 优化 HTML / PNG 报告、资源过滤和人工屏蔽。
 
-1. 打开 **Actions → Release Windows installer → Run workflow**，必须从默认分支运行；
-2. `version` 不要填写 `v`：正式版如 `0.3.0`，预发布版如 `0.3.0-beta.1`，且必须高于当前版本；
-3. `channel` 选择 `prerelease` 或 `stable`；
-4. `release_notes` 填写本次真实的版本亮点正文；工作流会自动添加 `## 版本亮点` 标题，
-   并把同一份内容写入 CHANGELOG 和 GitHub Release；
-5. 勾选真实发布确认；若距上一 Tag 不足 24 小时，还需单独勾选 24 小时内发布确认；
-6. 成功后到仓库 **Releases** 下载安装程序和 SHA-256 校验文件。Prerelease 会明确标记为
-   预发布，不会作为正式 Latest；Stable 会标记为 Latest。
+### v0.2.0
 
-Release 仅在测试和安装包构建通过后提交版本文件。任何步骤失败都不会创建 GitHub Release；
-可打开该次 Actions 运行，展开带红色失败标记的步骤查看完整日志。若失败发生在版本提交和
-Tag 已成功推送之后、Release 创建之前，需要先检查仓库 Tag/Release 状态再重试，禁止覆盖既有 Tag。
+- 建立结构化报告、HTML / PNG / JSON 输出与历史数据基础；
+- 完成桌面端生成报告的基本闭环。
 
-正式安装包把软件自有文件放在安装根目录的 `program` 中。升级和卸载只递归处理该目录；Windows
-App Local Data 中的设置、密钥、SQLite 与统计缓存，以及用户选择的报告目录均不属于安装器删除范围。
+## 项目来源与致谢
 
-## 隐私
+- [wzj042/wechat-auto-insight](https://github.com/wzj042/wechat-auto-insight)：本项目最初参考并基于其部分群聊总结、报告渲染和可选微信发送能力继续开发。当前历史中心、热力图、Provider、MCP Server、更新闭环等能力已在本仓库中独立扩展。
+- [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis)：负责微信数据读取，本仓库通过其本地 API 获取会话、成员和消息。本仓库不包含该工具本体，也不包含用户微信数据库。
 
-- 只处理本人合法持有或已获授权的数据。
-- `.env`、真实消息快照、密钥和报告不得提交到 Git。
-- 本地 API 默认只连接 `127.0.0.1`，不要无必要开放到局域网。
-- 发布前应检查默认群名、发送目标和绝对路径，避免暴露个人信息。
-- 正式 Release 前必须复核依赖、子模块与上游代码的许可证/授权边界。
+可选的微信 UI 自动发送功能继续使用 `pywechat` 子模块；数据读取和报告生成不依赖该功能。
 
-## 授权状态
+## 当前开发状态
 
-本仓库当前不附带 LICENSE，也不宣称整体采用 MIT。两个上游项目当前均未在仓库
-根目录声明许可证；公开可见不等同于授予复制、修改或再分发许可。后续如取得明确
-授权或完成独立重写，再单独确定本项目许可证。
+- 核心 Windows 桌面端已经可以从源码运行；
+- Windows x64 测试安装包构建流程已经建立；
+- GitHub Actions CI、测试安装包与人工触发的 Stable / Prerelease 发布流程已经建立；
+- 用户手动触发的更新检查、下载、SHA-256 完整性校验和启动安装程序已经在源码中实现；
+- 软件启动时不会自动检查更新，也不会后台周期检查；
+- 当前 GitHub Releases 尚无正式 Release；
+- Windows 安装包暂未进行代码签名。
+
+当前仓库没有 `LICENSE` 文件，也不声明整体采用 MIT 或其他开源许可证。公开可见不等同于已经授予复制、修改或再分发许可；正式发布前仍需复核项目及上游依赖的许可边界。
+
+## 免责声明
+
+### 1. 合法使用
+
+使用者应确保自己对所读取、分析和处理的微信聊天数据具有合法权限，并遵守适用法律法规、隐私要求以及第三方合法权益。请勿利用本项目非法获取、分析或传播他人的聊天记录或个人信息。
+
+### 2. 隐私与敏感信息
+
+微信群聊可能包含个人信息、商业秘密、客户信息或其他敏感信息。调用 AI API 或让 MCP Host 获取分析上下文前，应由用户自行判断相关内容是否适合提供给第三方服务或外部 AI 客户端。
+
+### 3. 第三方服务
+
+项目会依赖或连接 WeChatDataAnalysis、AI API、MCP Host 及其他第三方项目或服务。项目作者无法保证第三方服务永久可用、永久兼容、免费，或其数据政策不会发生变化。
+
+### 4. 软件可靠性
+
+本项目仍处于持续开发阶段，不保证不存在错误、中断、数据解析异常、AI 总结错误或其他问题。
+
+### 5. AI 准确性
+
+AI 生成内容仅作为辅助整理结果，不应视为对原始聊天记录的完整、准确或权威还原。重要事项应回到原始聊天记录中核实。
+
+### 6. 数据备份
+
+升级、迁移或修改数据目录前，请自行备份重要报告、历史数据和本机配置。
+
+### 7. 风险承担
+
+使用者应根据自己的数据性质、隐私要求和使用环境，自行判断本项目是否适合相应场景，并承担使用过程中可能产生的风险。
+
+## 反馈
+
+如果发现 Bug，或者对功能有新的建议，可以通过 GitHub Issues 反馈：
+
+https://github.com/bluntvoice/wechat-chat-summary/issues
