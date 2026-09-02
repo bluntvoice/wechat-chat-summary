@@ -13,6 +13,7 @@ from group_insight.history_store import (
     DATABASE_SCHEMA_VERSION,
     HistoryStore,
 )
+from group_insight.redaction import list_redaction_targets
 from group_insight.report_schema import build_report_document
 
 
@@ -171,6 +172,22 @@ class HistoryCenterQueryTests(unittest.TestCase):
                 self.assertNotIn("outcome", topic["content"])
                 self.assertNotIn("quotes", topic["content"])
                 self.assertEqual(len(detail["resources"]), 2)
+                target_ids: dict[str, list[str]] = {}
+                for item in detail["modules"]:
+                    if item.get("redaction_target_id"):
+                        target_ids.setdefault(item["module_key"], []).append(item["redaction_target_id"])
+                self.assertEqual(target_ids["topics"], ["topics:0"])
+                self.assertEqual(target_ids["ai_observations"], ["ai_observations:0"])
+                self.assertEqual(target_ids["outcome"], ["topics:0:outcome"])
+                self.assertEqual(target_ids["action_items"], ["topics:0:action_items:0"])
+                self.assertEqual(target_ids["resources"], ["resources:0:0", "resources:0:1"])
+                valid_target_ids = {item["id"] for item in list_redaction_targets(history_document(root))}
+                self.assertTrue({target_id for values in target_ids.values() for target_id in values}.issubset(valid_target_ids))
+                activity_stats = [
+                    item for item in detail["modules"]
+                    if item["module_key"] == "member_activity" and item["title"] == "活跃统计"
+                ][0]
+                self.assertEqual(activity_stats["redaction_target_id"], "")
 
     def test_history_queries_default_to_latest_and_keep_all_versions(self) -> None:
         with TemporaryDirectory() as temp_dir:

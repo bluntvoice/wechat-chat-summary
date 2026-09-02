@@ -389,6 +389,7 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
         summarized_chat_ids = history.summarized_chat_ids()
     return {
         "completed": True,
+        "report_id": str(redacted.get("metadata", {}).get("report_id") or ""),
         "version": paths.version,
         "redaction_count": len(redacted.get("redactions", []) or []),
         "chat_dir": str(paths.chat_dir),

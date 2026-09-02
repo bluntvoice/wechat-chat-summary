@@ -300,14 +300,19 @@ class HistoryStore:
         cls,
         content: dict[str, Any],
         stats: dict[str, Any] | None = None,
-    ) -> list[tuple[str, int, str, Any]]:
+    ) -> list[tuple[str, int, str, Any, str]]:
         """把不同 Report Schema 派生为历史 UI 的稳定逻辑模块。"""
 
         stats = stats or {}
-        rows: list[tuple[str, int, str, Any]] = []
+        rows: list[tuple[str, int, str, Any, str]] = []
         seen: dict[str, set[str]] = {}
 
-        def add(module_key: str, title: str, value: Any) -> None:
+        def target_id(value: Any, fallback: str) -> str:
+            if isinstance(value, dict) and str(value.get("redaction_id") or "").strip():
+                return str(value["redaction_id"]).strip()
+            return fallback
+
+        def add(module_key: str, title: str, value: Any, redaction_target_id: str = "") -> None:
             if value in (None, "", [], {}):
                 return
             signature = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
@@ -316,7 +321,13 @@ class HistoryStore:
                 return
             bucket.add(signature)
             ordinal = sum(1 for row in rows if row[0] == module_key)
-            rows.append((module_key, ordinal, str(title or HISTORY_MODULE_LABELS[module_key]), value))
+            rows.append((
+                module_key,
+                ordinal,
+                str(title or HISTORY_MODULE_LABELS[module_key]),
+                value,
+                redaction_target_id,
+            ))
 
         summary = {
             key: content.get(key)
@@ -325,8 +336,12 @@ class HistoryStore:
         }
         add("summary", "报告摘要", summary)
 
-        topics = [item for item in content.get("topics", []) or [] if isinstance(item, dict)]
-        for index, topic in enumerate(topics, 1):
+        topics = [
+            (source_index, item)
+            for source_index, item in enumerate(content.get("topics", []) or [])
+            if isinstance(item, dict)
+        ]
+        for display_index, (source_index, topic) in enumerate(topics, 1):
             core = {
                 key: topic.get(key)
                 for key in (
@@ -335,18 +350,38 @@ class HistoryStore:
                 )
                 if topic.get(key) not in (None, "", [], {})
             }
-            add("topics", cls._item_title(topic, f"主要话题 {index}"), core)
+            add(
+                "topics",
+                cls._item_title(topic, f"主要话题 {display_index}"),
+                core,
+                target_id(topic, f"topics:{source_index}"),
+            )
 
         # 2.0/2.1 的速览卡只在没有正式话题时作为主要话题兼容展示，避免重复。
         if not topics:
-            for index, item in enumerate(content.get("themes", []) or [], 1):
-                add("topics", cls._item_title(item, f"主要话题 {index}"), item)
+            for source_index, item in enumerate(content.get("themes", []) or []):
+                add(
+                    "topics",
+                    cls._item_title(item, f"主要话题 {source_index + 1}"),
+                    item,
+                    target_id(item, f"themes:{source_index}"),
+                )
 
-        for item in content.get("ai_observations", []) or []:
-            add("ai_observations", cls._item_title(item, "AI 今日观察"), item)
+        for source_index, item in enumerate(content.get("ai_observations", []) or []):
+            add(
+                "ai_observations",
+                cls._item_title(item, "AI 今日观察"),
+                item,
+                target_id(item, f"ai_observations:{source_index}"),
+            )
 
-        for item in content.get("members", []) or []:
-            add("member_activity", cls._item_title(item, "成员观察"), item)
+        for source_index, item in enumerate(content.get("members", []) or []):
+            add(
+                "member_activity",
+                cls._item_title(item, "成员观察"),
+                item,
+                target_id(item, f"members:{source_index}"),
+            )
         activity = {
             key: stats.get(key)
             for key in (
@@ -357,7 +392,7 @@ class HistoryStore:
         }
         add("member_activity", "活跃统计", activity)
 
-        for topic in topics:
+        for topic_index, topic in topics:
             topic_context = {
                 "topic_id": str(topic.get("id") or ""),
                 "topic_title": str(topic.get("title") or "主要话题"),
@@ -371,28 +406,37 @@ class HistoryStore:
                 value = {**topic_context, **outcome} if isinstance(outcome, dict) else {
                     **topic_context, "content": outcome,
                 }
-                add("outcome", cls._item_title(value, topic_context["topic_title"]), value)
+                outcome_target = target_id(outcome, f"topics:{topic_index}:outcome") if isinstance(topic.get("outcome"), dict) else ""
+                add("outcome", cls._item_title(value, topic_context["topic_title"]), value, outcome_target)
             for module_key in ("action_items", "open_questions", "risk_flags", "quotes"):
-                for item in topic.get(module_key, []) or []:
+                for item_index, item in enumerate(topic.get(module_key, []) or []):
                     value = {**topic_context, **item} if isinstance(item, dict) else {
                         **topic_context, "content": item,
                     }
-                    add(module_key, cls._item_title(value, HISTORY_MODULE_LABELS[module_key]), value)
+                    item_target = target_id(item, f"topics:{topic_index}:{module_key}:{item_index}") if isinstance(item, dict) else ""
+                    add(module_key, cls._item_title(value, HISTORY_MODULE_LABELS[module_key]), value, item_target)
 
         legacy_outcomes = content.get("decisions", []) or []
         if content.get("conclusion") and not any(row[0] == "outcome" for row in rows):
             legacy_outcomes = [*legacy_outcomes, {"content": content["conclusion"]}]
-        for item in legacy_outcomes:
-            add("outcome", cls._item_title(item, "讨论结论"), item)
+        decision_count = len(content.get("decisions", []) or [])
+        for source_index, item in enumerate(legacy_outcomes):
+            item_target = target_id(item, f"decisions:{source_index}") if source_index < decision_count else ""
+            add("outcome", cls._item_title(item, "讨论结论"), item, item_target)
         for module_key in ("action_items", "open_questions", "risk_flags", "quotes"):
-            for item in content.get(module_key, []) or []:
-                add(module_key, cls._item_title(item, HISTORY_MODULE_LABELS[module_key]), item)
+            for source_index, item in enumerate(content.get(module_key, []) or []):
+                add(
+                    module_key,
+                    cls._item_title(item, HISTORY_MODULE_LABELS[module_key]),
+                    item,
+                    target_id(item, f"{module_key}:{source_index}"),
+                )
 
         resources = content.get("resources", {}) if isinstance(content.get("resources"), dict) else {}
-        for group in resources.get("groups", []) or []:
+        for group_index, group in enumerate(resources.get("groups", []) or []):
             if not isinstance(group, dict) or group.get("redacted"):
                 continue
-            for item in group.get("items", []) or []:
+            for item_index, item in enumerate(group.get("items", []) or []):
                 if not isinstance(item, dict) or item.get("redacted"):
                     continue
                 value = {
@@ -400,7 +444,12 @@ class HistoryStore:
                     "topic": str(group.get("topic") or "其他 / 未归类"),
                     **item,
                 }
-                add("resources", cls._item_title(item, "资源"), value)
+                add(
+                    "resources",
+                    cls._item_title(item, "资源"),
+                    value,
+                    target_id(item, f"resources:{group_index}:{item_index}"),
+                )
         return rows
 
     @classmethod
@@ -414,7 +463,7 @@ class HistoryStore:
     ) -> None:
         connection.execute("DELETE FROM report_modules WHERE report_id=?", (report_id,))
         connection.execute("DELETE FROM report_search_fts WHERE report_id=?", (report_id,))
-        for module_key, ordinal, title, value in cls._module_rows(content, stats):
+        for module_key, ordinal, title, value, _target_id in cls._module_rows(content, stats):
             body = json.dumps(value, ensure_ascii=False)
             connection.execute(
                 "INSERT INTO report_modules VALUES(?,?,?,?,?,?)",
@@ -885,6 +934,11 @@ class HistoryStore:
             (report_id,),
         ).fetchall()
         order = {key: index for index, key in enumerate(HISTORY_MODULE_ORDER)}
+        live_target_ids = {
+            (module_key, ordinal): redaction_target_id
+            for module_key, ordinal, _title, _value, redaction_target_id in self._module_rows(content, stats)
+            if redaction_target_id
+        }
         modules = []
         for module_row in sorted(
             module_rows,
@@ -902,6 +956,7 @@ class HistoryStore:
                     "ordinal": int(module_row["ordinal"]),
                     "title": str(module_row["title"]),
                     "content": value,
+                    "redaction_target_id": live_target_ids.get((key, int(module_row["ordinal"])), ""),
                 }
             )
         exports = {}

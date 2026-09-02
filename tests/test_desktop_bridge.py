@@ -148,10 +148,15 @@ class DesktopBridgeTests(unittest.TestCase):
                 )
 
             self.assertEqual(result["version"], 2)
+            self.assertTrue(result["report_id"])
             self.assertFalse(ai_client.called)
             new_payload = Path(result["json_path"]).read_text(encoding="utf-8")
             self.assertNotIn("私密内容", new_payload)
             self.assertIn("已屏蔽，建议在群内查看", new_payload)
+            with ActualHistoryStore(history_path) as history:
+                stored = history.get_report_detail(result["report_id"])
+            self.assertEqual(stored["version"], 2)
+            self.assertEqual(stored["exports"]["json"]["path"], result["json_path"])
 
     def test_chat_list_pins_summarized_ids_and_never_injects_missing_wechat_groups(self) -> None:
         class FakeAPI:
