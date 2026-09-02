@@ -31,18 +31,78 @@ def _resolve(value: Any, names: dict[str, str]) -> str:
     return re.sub(r"\[\[user:([^\]]+)\]\]", lambda match: names.get(match.group(1), "群成员"), text)
 
 
-def _resolve_html(value: Any, names: dict[str, str], *, member_class: str = "") -> str:
+def _plain_member_pattern(names: dict[str, str]) -> re.Pattern[str] | None:
+    """为模型直接写出的唯一成员昵称构造一次受控匹配器。"""
+    counts: dict[str, int] = {}
+    for raw_name in names.values():
+        name = str(raw_name or "").strip()
+        if name and name not in {"我", "群成员", "未知成员"}:
+            counts[name] = counts.get(name, 0) + 1
+
+    aliases = sorted(
+        (name for name, count in counts.items() if count == 1),
+        key=len,
+        reverse=True,
+    )
+    if not aliases:
+        return None
+
+    alternatives: list[str] = []
+    for alias in aliases:
+        escaped = re.escape(alias)
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", alias):
+            escaped = rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
+        alternatives.append(escaped)
+    return re.compile("|".join(alternatives))
+
+
+def _highlight_plain_member_names(
+    value: str,
+    pattern: re.Pattern[str] | None,
+    *,
+    member_class: str,
+) -> str:
+    if pattern is None:
+        return _esc(value)
+
+    output: list[str] = []
+    cursor = 0
+    for match in pattern.finditer(value):
+        output.append(_esc(value[cursor : match.start()]))
+        output.append(f'<strong class="{member_class}">{_esc(match.group(0))}</strong>')
+        cursor = match.end()
+    output.append(_esc(value[cursor:]))
+    return "".join(output)
+
+
+def _resolve_html(
+    value: Any,
+    names: dict[str, str],
+    *,
+    member_class: str = "",
+    plain_member_pattern: re.Pattern[str] | None = None,
+) -> str:
     """转义普通文本，并可对成员占位符施加受控 HTML 样式。"""
 
     text = str(value or "")
     output: list[str] = []
     cursor = 0
     for match in re.finditer(r"\[\[user:([^\]]+)\]\]", text):
-        output.append(_esc(text[cursor : match.start()]))
+        plain = text[cursor : match.start()]
+        output.append(
+            _highlight_plain_member_names(plain, plain_member_pattern, member_class=member_class)
+            if member_class
+            else _esc(plain)
+        )
         name = _esc(names.get(match.group(1), "群成员"))
         output.append(f'<strong class="{member_class}">{name}</strong>' if member_class else name)
         cursor = match.end()
-    output.append(_esc(text[cursor:]))
+    tail = text[cursor:]
+    output.append(
+        _highlight_plain_member_names(tail, plain_member_pattern, member_class=member_class)
+        if member_class
+        else _esc(tail)
+    )
     return "".join(output)
 
 
@@ -138,12 +198,18 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     chat = metadata.get("chat", {})
     period = metadata.get("period", {})
     names = _member_names(stats)
+    plain_member_pattern = _plain_member_pattern(names)
 
     def resolved(value: Any) -> str:
         return _esc(_resolve(value, names))
 
     def topic_resolved(value: Any) -> str:
-        return _resolve_html(value, names, member_class="topic-member")
+        return _resolve_html(
+            value,
+            names,
+            member_class="topic-member",
+            plain_member_pattern=plain_member_pattern,
+        )
 
     themes = content.get("themes", []) or []
     topics = [item for item in content.get("topics", []) or [] if isinstance(item, dict)]

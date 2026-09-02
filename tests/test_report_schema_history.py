@@ -183,7 +183,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
                     "start_time": "09:00",
                     "end_time": "10:00",
                     "time_ranges": [{"start": "09:00", "end": "10:00"}],
-                    "discussion_flow": "[[user:wxid_a]] 请 [[user:wxid_b]] 确认安排。",
+                    "discussion_flow": "[[user:wxid_a]] 请 [[user:wxid_b]] 确认安排，小甲随后补充说明。",
                     "resource_ids": ["r1"],
                 }],
             },
@@ -209,7 +209,30 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertNotIn("time-chip", html)
         self.assertGreaterEqual(html.count('<strong class="topic-member">小甲</strong>'), 2)
         self.assertIn('<strong class="topic-member">小乙</strong>', html)
+        self.assertIn('<strong class="topic-member">小甲</strong>随后补充说明', html)
         self.assertIn(".topic-member{color:#3478bd;font-weight:800}", html)
+
+    def test_plain_duplicate_member_names_are_not_highlighted_ambiguously(self):
+        document = {
+            "schema_version": "2.2",
+            "metadata": {
+                "chat": {"id": "room@chatroom", "name": "测试群"},
+                "period": {"report_date": "2026-08-31"},
+            },
+            "stats": {
+                "member_aliases": [
+                    {"sender_id": "wxid_a", "sender_name": "同名成员"},
+                    {"sender_id": "wxid_b", "sender_name": "同名成员"},
+                ]
+            },
+            "content": {
+                "headline": "测试",
+                "topics": [{"title": "讨论", "discussion_flow": "同名成员补充了意见。"}],
+            },
+        }
+        html = render_html_report(document)
+        self.assertIn("同名成员补充了意见", html)
+        self.assertNotIn('<strong class="topic-member">同名成员</strong>', html)
 
     def test_jokes_do_not_become_serious_items(self):
         report = repair_final_report(
