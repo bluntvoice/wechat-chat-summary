@@ -26,7 +26,7 @@ Unicode true
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
-InstallDir "$LOCALAPPDATA\Programs\WeChat Chat Summary"
+InstallDir "$LOCALAPPDATA\Programs\群聊拾遗"
 InstallDirRegKey HKCU "Software\bluntvoice\WeChatChatSummary" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -35,7 +35,7 @@ ShowInstDetails show
 ShowUninstDetails show
 
 VIProductVersion "${FILE_VERSION}"
-VIAddVersionKey /LANG=2052 "ProductName" "微信群聊总结"
+VIAddVersionKey /LANG=2052 "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey /LANG=2052 "FileDescription" "${FILE_DESCRIPTION}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "FileVersion" "${VERSION}"
@@ -43,8 +43,8 @@ VIAddVersionKey /LANG=2052 "CompanyName" "bluntvoice"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright bluntvoice"
 
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\program\WeChat Chat Summary.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "启动微信群聊总结"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\program\群聊拾遗.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "启动群聊拾遗"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -60,7 +60,7 @@ Section "主程序" SEC_MAIN
   ; program 是安装器唯一拥有并可递归替换的目录。
   RMDir /r "$INSTDIR\program"
   SetOutPath "$INSTDIR\program"
-  File "/oname=WeChat Chat Summary.exe" "${APP_EXE}"
+  File "/oname=群聊拾遗.exe" "${APP_EXE}"
 
   SetOutPath "$INSTDIR\program\engine"
   File /r "${ENGINE_DIR}\*"
@@ -68,29 +68,41 @@ Section "主程序" SEC_MAIN
   SetOutPath "$INSTDIR"
   ; 清理旧测试安装包的单个入口文件，不递归删除旧根目录或用户文件。
   Delete "$INSTDIR\WeChat Chat Summary.exe"
-  WriteUninstaller "$INSTDIR\卸载微信群聊总结.exe"
+  Delete "$INSTDIR\卸载微信群聊总结.exe"
+  Delete "$DESKTOP\微信群聊总结.lnk"
+  Delete "$SMPROGRAMS\微信群聊总结\微信群聊总结.lnk"
+  Delete "$SMPROGRAMS\微信群聊总结\卸载微信群聊总结.lnk"
+  RMDir "$SMPROGRAMS\微信群聊总结"
+  WriteUninstaller "$INSTDIR\卸载群聊拾遗.exe"
   WriteRegStr HKCU "Software\bluntvoice\WeChatChatSummary" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "Publisher" "bluntvoice"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "UninstallString" '"$INSTDIR\卸载微信群聊总结.exe"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "UninstallString" '"$INSTDIR\卸载群聊拾遗.exe"'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatChatSummary" "NoRepair" 1
 
-  CreateDirectory "$SMPROGRAMS\微信群聊总结"
-  CreateShortcut "$SMPROGRAMS\微信群聊总结\微信群聊总结.lnk" "$INSTDIR\program\WeChat Chat Summary.exe"
-  CreateShortcut "$SMPROGRAMS\微信群聊总结\卸载微信群聊总结.lnk" "$INSTDIR\卸载微信群聊总结.exe"
-  CreateShortcut "$DESKTOP\微信群聊总结.lnk" "$INSTDIR\program\WeChat Chat Summary.exe"
+  CreateDirectory "$SMPROGRAMS\群聊拾遗"
+  CreateShortcut "$SMPROGRAMS\群聊拾遗\群聊拾遗.lnk" "$INSTDIR\program\群聊拾遗.exe"
+  CreateShortcut "$SMPROGRAMS\群聊拾遗\卸载群聊拾遗.lnk" "$INSTDIR\卸载群聊拾遗.exe"
+  CreateShortcut "$DESKTOP\群聊拾遗.lnk" "$INSTDIR\program\群聊拾遗.exe"
 SectionEnd
 
 Section "Uninstall"
+  Delete "$DESKTOP\群聊拾遗.lnk"
+  Delete "$SMPROGRAMS\群聊拾遗\群聊拾遗.lnk"
+  Delete "$SMPROGRAMS\群聊拾遗\卸载群聊拾遗.lnk"
+  RMDir "$SMPROGRAMS\群聊拾遗"
+
+  ; 兼容清理更名前的测试安装包快捷方式。
   Delete "$DESKTOP\微信群聊总结.lnk"
   Delete "$SMPROGRAMS\微信群聊总结\微信群聊总结.lnk"
   Delete "$SMPROGRAMS\微信群聊总结\卸载微信群聊总结.lnk"
   RMDir "$SMPROGRAMS\微信群聊总结"
 
   Delete "$INSTDIR\WeChat Chat Summary.exe"
+  Delete "$INSTDIR\卸载群聊拾遗.exe"
   Delete "$INSTDIR\卸载微信群聊总结.exe"
   RMDir /r "$INSTDIR\program"
   RMDir "$INSTDIR"

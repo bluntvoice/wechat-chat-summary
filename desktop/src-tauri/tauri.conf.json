@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "WeChat Chat Summary",
+  "productName": "群聊拾遗",
   "version": "0.2.3",
   "identifier": "com.bluntvoice.wechat-chat-summary",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "微信群聊总结",
+        "title": "群聊拾遗",
         "width": 1180,
         "height": 840,
         "minWidth": 900,

@@ -87,7 +87,7 @@ def run_server(port: int) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the local WeChat Chat Summary MCP Server.")
+    parser = argparse.ArgumentParser(description="Run the local 群聊拾遗 MCP Server.")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     run_server(args.port)

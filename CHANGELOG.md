@@ -9,4 +9,4 @@
 ### 版本亮点
 
 - 完成 v0.2.2 当前稳定版本整理。
-- 保持微信群聊总结、HTML/PNG/JSON 导出和 Windows 桌面端现有能力。
+- 保持群聊拾遗、HTML/PNG/JSON 导出和 Windows 桌面端现有能力。

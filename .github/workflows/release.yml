@@ -240,7 +240,7 @@ jobs:
             "release", "create", $env:RELEASE_TAG,
             $env:INSTALLER, $env:CHECKSUM,
             "--verify-tag",
-            "--title", "微信群聊总结 $env:RELEASE_TAG",
+            "--title", "群聊拾遗 $env:RELEASE_TAG",
             "--notes-file", $env:NOTES_PATH
           )
           if ($env:RELEASE_CHANNEL -eq "prerelease") {
