@@ -58,6 +58,10 @@ jobs:
         shell: pwsh
         run: npm run version:check
 
+      - name: Run updater tests
+        shell: pwsh
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib --locked
+
       - name: Build installer and checksum
         id: package
         shell: pwsh

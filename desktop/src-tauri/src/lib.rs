@@ -9,6 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Manager, State};
 
+mod updater;
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -37,11 +39,22 @@ fn mcp_status_value(child: Option<&Child>, port: u16) -> Value {
 }
 
 fn stop_mcp_process(state: &McpProcessState) -> Result<(), String> {
-    let mut guard = state.child.lock().map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
     if let Some(mut child) = guard.take() {
-        if child.try_wait().map_err(|error| error.to_string())?.is_none() {
-            child.kill().map_err(|error| format!("停止 MCP Server 失败: {error}"))?;
-            child.wait().map_err(|error| format!("等待 MCP Server 退出失败: {error}"))?;
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            child
+                .kill()
+                .map_err(|error| format!("停止 MCP Server 失败: {error}"))?;
+            child
+                .wait()
+                .map_err(|error| format!("等待 MCP Server 退出失败: {error}"))?;
         }
     }
     Ok(())
@@ -165,18 +178,23 @@ async fn bridge_call(
         .path()
         .app_local_data_dir()
         .map_err(|error| format!("无法定位 Windows 用户数据目录: {error}"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        run_bridge(command, payload, app_local_data_dir)
-    })
+    tauri::async_runtime::spawn_blocking(move || run_bridge(command, payload, app_local_data_dir))
         .await
         .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
 fn mcp_server_status(state: State<'_, McpProcessState>, port: u16) -> Result<Value, String> {
-    let mut guard = state.child.lock().map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
     if let Some(child) = guard.as_mut() {
-        if child.try_wait().map_err(|error| error.to_string())?.is_some() {
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
             *guard = None;
         }
     }
@@ -192,9 +210,16 @@ fn mcp_server_start(
     if port < 1024 {
         return Err("MCP 端口必须在 1024 到 65535 之间。".to_string());
     }
-    let mut guard = state.child.lock().map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
     if let Some(child) = guard.as_mut() {
-        if child.try_wait().map_err(|error| error.to_string())?.is_none() {
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
             return Ok(mcp_status_value(guard.as_ref(), port));
         }
         *guard = None;
@@ -265,17 +290,26 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(McpProcessState::default())
+        .manage(updater::UpdateProcessState::default())
         .invoke_handler(tauri::generate_handler![
             bridge_call,
             open_system_path,
             mcp_server_status,
             mcp_server_start,
-            mcp_server_stop
+            mcp_server_stop,
+            updater::check_update,
+            updater::download_update,
+            updater::cancel_update,
+            updater::open_release_page,
+            updater::launch_verified_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building WeChat Chat Summary");
     app.run(|app_handle, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
             let state = app_handle.state::<McpProcessState>();
             let _ = stop_mcp_process(&state);
         }

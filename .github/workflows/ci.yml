@@ -65,9 +65,11 @@ jobs:
           npm test
           npm run build
 
-      - name: Check Rust application
+      - name: Test and check Rust application
         shell: pwsh
-        run: cargo check --manifest-path desktop/src-tauri/Cargo.toml --locked
+        run: |
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib --locked
+          cargo check --manifest-path desktop/src-tauri/Cargo.toml --locked
 
       - name: Check patch whitespace
         shell: pwsh
