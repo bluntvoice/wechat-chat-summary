@@ -33,3 +33,13 @@ test("history resolves member placeholders and avoids internal schema noise", ()
   assert.doesNotMatch(history, /Schema \{detail\.schema_version\}/);
   assert.match(styles, /\.redaction-groups[^\n]+align-items: start/);
 });
+
+test("history preview supports validated inline redaction with an auxiliary target list", () => {
+  assert.match(history, /get_redaction_targets/);
+  assert.match(history, /module\.redaction_target_id/);
+  assert.match(history, /role=\{selectable \? "checkbox"/);
+  assert.match(history, /RedactionTargetGroups/);
+  assert.match(history, /"redact_report"/);
+  assert.match(history, /updated\.report_id/);
+  assert.match(styles, /\.history-module\.redaction-selectable/);
+});

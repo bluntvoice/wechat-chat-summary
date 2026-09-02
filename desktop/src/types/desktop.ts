@@ -96,6 +96,7 @@ export type BridgeResponse<T> = {
 export type GenerationResult = {
   completed: boolean;
   protocol_version?: number;
+  report_id?: string;
   version?: number;
   redaction_count?: number;
   chat_dir?: string;
@@ -141,6 +142,7 @@ export type HistoryModule = {
   ordinal: number;
   title: string;
   content: unknown;
+  redaction_target_id?: string;
 };
 
 export type HistoryExport = { path: string; exists: boolean };

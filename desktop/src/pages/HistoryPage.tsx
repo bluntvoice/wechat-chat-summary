@@ -1,7 +1,10 @@
+import { EyeOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { RedactionTargetGroups } from "../components/RedactionEditor";
 import { bridge, openSystemPath } from "../services/desktopBridge";
 import type {
+  GenerationResult,
   HistoryChat,
   HistoryModule,
   HistoryReport,
@@ -9,6 +12,7 @@ import type {
   HistorySearchHit,
   HistoryNavigationTarget,
   Paginated,
+  RedactionTarget,
 } from "../types/desktop";
 
 type HistoryPageProps = { active: boolean; target?: HistoryNavigationTarget | null };
@@ -63,6 +67,7 @@ const FIELD_LABELS: Record<string, string> = {
 const HIDDEN_FIELDS = new Set([
   "id", "topic_id", "resource_id", "metadata", "redacted", "tone", "confidence",
   "sender_id", "sender_username", "username", "title", "start_time", "end_time",
+  "redaction_id", "redaction_target_id",
 ]);
 
 function datePart(value: string) {
@@ -122,10 +127,40 @@ function ValueView({ value, memberNames, fieldKey = "" }: { value: unknown; memb
   return <dl className="history-value-grid">{entries.map(([key, item]) => <div key={key}><dt>{FIELD_LABELS[key] || key}</dt><dd><ValueView value={item} memberNames={memberNames} fieldKey={key} /></dd></div>)}</dl>;
 }
 
-function ModuleCard({ module, memberNames }: { module: HistoryModule; memberNames: Record<string, string> }) {
+function ModuleCard({
+  module,
+  memberNames,
+  redactionMode,
+  target,
+  selected,
+  onToggle,
+}: {
+  module: HistoryModule;
+  memberNames: Record<string, string>;
+  redactionMode: boolean;
+  target?: RedactionTarget;
+  selected: boolean;
+  onToggle: (target: RedactionTarget) => void;
+}) {
   const redacted = Boolean(module.content && typeof module.content === "object" && !Array.isArray(module.content) && (module.content as Record<string, unknown>).redacted);
-  return <article className={`history-module module-${module.module_key}`}>
-    <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : module.title}</h3></div>
+  const selectable = Boolean(redactionMode && target && !target.redacted);
+  function toggle() {
+    if (selectable && target) onToggle(target);
+  }
+  return <article
+    className={`history-module module-${module.module_key}${redactionMode && target ? " redaction-selectable" : ""}${selected ? " redaction-selected" : ""}${target?.redacted ? " redaction-locked" : ""}`}
+    role={selectable ? "checkbox" : undefined}
+    aria-checked={selectable ? selected : undefined}
+    tabIndex={selectable ? 0 : undefined}
+    onClick={toggle}
+    onKeyDown={(event) => {
+      if (selectable && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault();
+        toggle();
+      }
+    }}
+  >
+    <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : module.title}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
     <ValueView value={module.content} memberNames={memberNames} />
   </article>;
 }
@@ -146,6 +181,11 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
   const [versions, setVersions] = useState<HistoryReport[]>([]);
   const [detailModule, setDetailModule] = useState("all");
   const [busy, setBusy] = useState(false);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [redactionMode, setRedactionMode] = useState(false);
+  const [redactionTargets, setRedactionTargets] = useState<RedactionTarget[]>([]);
+  const [selectedRedactions, setSelectedRedactions] = useState<string[]>([]);
+  const [redactionBusy, setRedactionBusy] = useState(false);
   const [message, setMessage] = useState("历史数据仅来自本机 SQLite，不搜索完整原始聊天正文。");
 
   const visibleChats = useMemo(() => {
@@ -165,6 +205,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       setSelectedChatId((current) => response.items.some((chat) => chat.chat_id === current) ? current : response.items[0]?.chat_id || "");
       const imported = state.history_import?.imported || 0;
       const failed = state.history_import?.failed || 0;
+      setHistoryRevision((current) => current + 1);
       setMessage(failed ? `历史刷新完成，导入 ${imported} 份，${failed} 份无法读取。` : `历史刷新完成${imported ? `，新导入 ${imported} 份报告` : ""}。`);
     } catch (error) {
       setMessage(`历史刷新失败：${error instanceof Error ? error.message : String(error)}`);
@@ -236,7 +277,13 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active, selectedChatId, startDate, endDate, moduleFilter, keyword]);
+  }, [active, selectedChatId, startDate, endDate, moduleFilter, keyword, historyRevision]);
+
+  useEffect(() => {
+    setRedactionMode(false);
+    setRedactionTargets([]);
+    setSelectedRedactions([]);
+  }, [selectedReportId]);
 
   useEffect(() => {
     if (!active || !selectedReportId) {
@@ -267,6 +314,70 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
     }
   }
 
+  async function openRedactionMode() {
+    if (!detail?.exports.json.exists) {
+      setMessage("报告 JSON 已移动或不存在，无法进入屏蔽模式。");
+      return;
+    }
+    setRedactionBusy(true);
+    try {
+      const data = await bridge<{ version: number; targets: RedactionTarget[] }>("get_redaction_targets", {
+        json_path: detail.exports.json.path,
+      });
+      setRedactionTargets(data.targets);
+      setSelectedRedactions(data.targets.filter((target) => target.redacted).map((target) => target.id));
+      setDetailModule("all");
+      setRedactionMode(true);
+      setMessage(`已进入屏蔽模式，可直接选择报告条目；完整列表共 ${data.targets.length} 项。`);
+    } catch (error) {
+      setMessage(`无法进入屏蔽模式：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRedactionBusy(false);
+    }
+  }
+
+  function closeRedactionMode() {
+    setRedactionMode(false);
+    setRedactionTargets([]);
+    setSelectedRedactions([]);
+    setMessage("已退出屏蔽模式，报告未发生变化。");
+  }
+
+  function toggleRedaction(target: RedactionTarget) {
+    if (target.redacted || redactionBusy) return;
+    setSelectedRedactions((current) => current.includes(target.id)
+      ? current.filter((targetId) => targetId !== target.id)
+      : [...current, target.id]);
+  }
+
+  async function applyRedactions() {
+    if (!detail?.exports.json.exists) return;
+    const newSelections = selectedRedactions.filter((targetId) => !redactionTargets.find((target) => target.id === targetId)?.redacted);
+    if (!newSelections.length) {
+      setMessage("请至少新增选择一项需要屏蔽的内容。");
+      return;
+    }
+    setRedactionBusy(true);
+    setMessage("正在本机生成屏蔽版报告，不会读取群聊或调用 AI…");
+    try {
+      const updated = await bridge<GenerationResult>("redact_report", {
+        json_path: detail.exports.json.path,
+        target_ids: selectedRedactions,
+      });
+      setRedactionMode(false);
+      setRedactionTargets([]);
+      setSelectedRedactions([]);
+      await refreshHistory(false);
+      if (updated.report_id) setSelectedReportId(updated.report_id);
+      setDetailModule("all");
+      setMessage(`屏蔽版报告 v${updated.version || "新"} 已生成并加入历史；原报告保持不变。`);
+    } catch (error) {
+      setMessage(`屏蔽版报告生成失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRedactionBusy(false);
+    }
+  }
+
   const visibleModules = (detail?.modules || []).filter((module) => {
     if (module.module_key === "summary") return false;
     return detailModule === "all" || module.module_key === detailModule;
@@ -276,6 +387,8 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       .map((item) => [String(item.sender_id || ""), String(item.sender_name || "")])
       .filter(([senderId, senderName]) => senderId && senderName),
   ), [detail]);
+  const redactionTargetById = useMemo(() => new Map(redactionTargets.map((target) => [target.id, target])), [redactionTargets]);
+  const newSelectionCount = selectedRedactions.filter((targetId) => !redactionTargetById.get(targetId)?.redacted).length;
 
   return <div className="workspace history-workspace">
     <header className="topbar history-topbar"><div><h1>历史中心</h1></div><button className="button secondary" disabled={busy} onClick={() => refreshHistory(true)}>{busy ? "刷新中…" : "刷新与导入"}</button></header>
@@ -317,11 +430,17 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
             <button className="button primary small" disabled={!detail.exports.png.exists} onClick={() => openExport(detail.exports.png.path)}>打开 PNG</button>
             <button className="button secondary" disabled={!detail.exports.html.exists} onClick={() => openExport(detail.exports.html.path)}>打开 HTML</button>
             <button className="button secondary" disabled={!detail.exports.json.exists} onClick={() => openExport(detail.exports.json.path)}>打开 JSON</button>
+            {!redactionMode && <button className="button secondary inline-icon" disabled={redactionBusy || !detail.exports.json.exists} onClick={openRedactionMode}><EyeOff size={15} aria-hidden="true" />{redactionBusy ? "读取中…" : "屏蔽内容"}</button>}
             {Object.values(detail.exports).some((item) => !item.exists) && <small>灰色文件已移动或不存在</small>}
           </div>
           <div className="history-versions"><span>历史版本</span><div>{versions.map((version) => <button key={version.report_id} className={selectedReportId === version.report_id ? "selected" : ""} onClick={() => { setSelectedReportId(version.report_id); setDetailModule("all"); }}>v{version.version}<small>{version.generated_at.slice(5, 16)}</small></button>)}</div></div>
-          {detailModule !== "all" && <div className="history-module-focus"><span>当前模块：{MODULE_OPTIONS.find(([key]) => key === detailModule)?.[1] || detailModule}</span><button onClick={() => setDetailModule("all")}>查看全部</button></div>}
-          <div className="history-module-list">{visibleModules.map((module) => <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} />)}{!visibleModules.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}</div>
+          {redactionMode && <div className="history-redaction-toolbar" aria-live="polite"><div><strong>选择要屏蔽的报告条目</strong><span>点击下方带边框的整项；未直接呈现的条目可在完整列表中补充。</span></div><div><span>已选择 {newSelectionCount} 项</span><button className="button secondary" disabled={redactionBusy} onClick={closeRedactionMode}>取消</button><button className="button primary small" disabled={redactionBusy || !newSelectionCount} onClick={applyRedactions}>{redactionBusy ? "正在生成…" : "生成屏蔽版"}</button></div></div>}
+          {redactionMode && <details className="history-redaction-list"><summary>查看全部可屏蔽项 <span>{redactionTargets.length}</span></summary><RedactionTargetGroups targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onToggle={toggleRedaction} /></details>}
+          {!redactionMode && detailModule !== "all" && <div className="history-module-focus"><span>当前模块：{MODULE_OPTIONS.find(([key]) => key === detailModule)?.[1] || detailModule}</span><button onClick={() => setDetailModule("all")}>查看全部</button></div>}
+          <div className="history-module-list">{visibleModules.map((module) => {
+            const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
+            return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} redactionMode={redactionMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} />;
+          })}{!visibleModules.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}</div>
         </>}
       </section>
     </div>
