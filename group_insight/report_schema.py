@@ -8,10 +8,119 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from .common import normalize_text
 
 SCHEMA_VERSION = "2.2"
 COMPATIBLE_SCHEMA_VERSIONS = {"2.0", "2.1", SCHEMA_VERSION}
+
+REPORT_SCHEMA_2_2 = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["schema_version", "metadata", "stats", "content"],
+    "additionalProperties": False,
+    "properties": {
+        "schema_version": {"const": SCHEMA_VERSION},
+        "metadata": {
+            "type": "object",
+            "required": ["chat", "period"],
+            "additionalProperties": True,
+            "properties": {
+                "chat": {
+                    "type": "object",
+                    "required": ["id", "name"],
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+                    },
+                },
+                "period": {
+                    "type": "object",
+                    "required": ["start", "end"],
+                    "properties": {
+                        "start": {"type": "string", "minLength": 10, "maxLength": 32},
+                        "end": {"type": "string", "minLength": 10, "maxLength": 32},
+                    },
+                },
+            },
+        },
+        "stats": {"type": "object"},
+        "content": {
+            "type": "object",
+            "required": [
+                "headline", "one_line_summary", "lead_summary", "themes", "topics",
+                "ai_observations", "members", "mood", "conclusion", "resources",
+            ],
+            "additionalProperties": False,
+            "properties": {
+                "headline": {"type": "string", "maxLength": 300},
+                "one_line_summary": {"type": "string", "minLength": 1, "maxLength": 300},
+                "lead_summary": {"type": "string", "maxLength": 4000},
+                "themes": {"type": "array", "maxItems": 5, "items": {"type": "object"}},
+                "topics": {
+                    "type": "array",
+                    "maxItems": 30,
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "id", "title", "start_time", "end_time", "time_ranges",
+                            "discussion_flow", "outcome", "action_items", "open_questions",
+                            "risk_flags", "quotes", "resource_ids",
+                        ],
+                        "additionalProperties": False,
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1, "maxLength": 100},
+                            "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                            "start_time": {"type": "string", "maxLength": 32},
+                            "end_time": {"type": "string", "maxLength": 32},
+                            "time_ranges": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
+                            "discussion_flow": {"type": "string", "minLength": 1, "maxLength": 4000},
+                            "outcome": {"type": ["object", "null"]},
+                            "action_items": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+                            "open_questions": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+                            "risk_flags": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+                            "quotes": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+                            "resource_ids": {
+                                "type": "array", "maxItems": 200,
+                                "items": {"type": "string", "maxLength": 100},
+                            },
+                        },
+                    },
+                },
+                "ai_observations": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+                "members": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
+                "mood": {"type": "object"},
+                "conclusion": {"type": "string", "maxLength": 1000},
+                "resources": {
+                    "type": "object",
+                    "required": ["count", "groups"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 0, "maximum": 10000},
+                        "groups": {"type": "array", "maxItems": 500, "items": {"type": "object"}},
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+def validate_report_schema_2_2(document: dict[str, Any]) -> dict[str, Any]:
+    """严格校验 MCP 新报告；旧版字段不得进入新文档。"""
+
+    if not isinstance(document, dict):
+        raise ValueError("Report Schema 2.2 顶层必须是对象。")
+    errors = sorted(
+        Draft202012Validator(REPORT_SCHEMA_2_2).iter_errors(document),
+        key=lambda item: [str(part) for part in item.absolute_path],
+    )
+    if errors:
+        first = errors[0]
+        path = ".".join(str(part) for part in first.absolute_path) or "$"
+        raise ValueError(f"Report Schema 2.2 校验失败（{path}）：{first.message}")
+    return document
 
 
 def make_report_id(chat_id: str, start_time: str, end_time: str, version: int) -> str:

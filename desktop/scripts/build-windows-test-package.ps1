@@ -166,8 +166,12 @@ Write-Host "[2/5] 生成独立 Python 分析引擎"
     --specpath (Join-Path $cacheRoot "pyinstaller\spec") `
     --paths $repoRoot `
     --collect-all playwright `
+    --collect-submodules mcp.server `
+    --collect-submodules mcp.shared `
     --collect-data jieba `
+    --hidden-import mcp.types `
     --hidden-import group_insight.cli `
+    --hidden-import group_insight.mcp_server `
     (Join-Path $desktopRoot "sidecar_entry.py")
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $sidecarExe -PathType Leaf)) {
     throw "生成 Python 分析引擎失败。"

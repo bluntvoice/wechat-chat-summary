@@ -1,10 +1,13 @@
 use serde_json::{json, Value};
 use std::env;
 use std::io::Write;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::{Manager, State};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -15,6 +18,33 @@ struct BridgeProgram {
     executable: PathBuf,
     arguments: Vec<String>,
     working_dir: PathBuf,
+}
+
+#[derive(Default)]
+struct McpProcessState {
+    child: Mutex<Option<Child>>,
+}
+
+fn mcp_status_value(child: Option<&Child>, port: u16) -> Value {
+    json!({
+        "running": child.is_some(),
+        "pid": child.map(Child::id),
+        "transport": "streamable-http",
+        "host": "127.0.0.1",
+        "port": port,
+        "endpoint": format!("http://127.0.0.1:{port}/mcp"),
+    })
+}
+
+fn stop_mcp_process(state: &McpProcessState) -> Result<(), String> {
+    let mut guard = state.child.lock().map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
+    if let Some(mut child) = guard.take() {
+        if child.try_wait().map_err(|error| error.to_string())?.is_none() {
+            child.kill().map_err(|error| format!("停止 MCP Server 失败: {error}"))?;
+            child.wait().map_err(|error| format!("等待 MCP Server 退出失败: {error}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn repository_root() -> Result<PathBuf, String> {
@@ -143,6 +173,85 @@ async fn bridge_call(
 }
 
 #[tauri::command]
+fn mcp_server_status(state: State<'_, McpProcessState>, port: u16) -> Result<Value, String> {
+    let mut guard = state.child.lock().map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
+    if let Some(child) = guard.as_mut() {
+        if child.try_wait().map_err(|error| error.to_string())?.is_some() {
+            *guard = None;
+        }
+    }
+    Ok(mcp_status_value(guard.as_ref(), port))
+}
+
+#[tauri::command]
+fn mcp_server_start(
+    app: tauri::AppHandle,
+    state: State<'_, McpProcessState>,
+    port: u16,
+) -> Result<Value, String> {
+    if port < 1024 {
+        return Err("MCP 端口必须在 1024 到 65535 之间。".to_string());
+    }
+    let mut guard = state.child.lock().map_err(|_| "MCP 进程状态锁已损坏。".to_string())?;
+    if let Some(child) = guard.as_mut() {
+        if child.try_wait().map_err(|error| error.to_string())?.is_none() {
+            return Ok(mcp_status_value(guard.as_ref(), port));
+        }
+        *guard = None;
+    }
+
+    let bridge = bridge_program()?;
+    let app_local_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("无法定位 Windows 用户数据目录: {error}"))?;
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let port_probe = TcpListener::bind(address)
+        .map_err(|error| format!("MCP 本机端口 {port} 不可用: {error}"))?;
+    drop(port_probe);
+    let mut process = Command::new(&bridge.executable);
+    let port_text = port.to_string();
+    process
+        .args(&bridge.arguments)
+        .args(["--run-mcp-server", "--port", port_text.as_str()])
+        .current_dir(&bridge.working_dir)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("WECHAT_CHAT_SUMMARY_APP_LOCAL_DATA_DIR", app_local_data_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    process.creation_flags(CREATE_NO_WINDOW);
+    let mut child = process
+        .spawn()
+        .map_err(|error| format!("无法启动 MCP Server ({:?}): {error}", bridge.executable))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!("MCP Server 启动后立即退出: {status}"));
+        }
+        if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("MCP Server 在 5 秒内未能监听本机端口。".to_string());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    *guard = Some(child);
+    Ok(mcp_status_value(guard.as_ref(), port))
+}
+
+#[tauri::command]
+fn mcp_server_stop(state: State<'_, McpProcessState>, port: u16) -> Result<Value, String> {
+    stop_mcp_process(&state)?;
+    Ok(mcp_status_value(None, port))
+}
+
+#[tauri::command]
 fn open_system_path(path: String) -> Result<(), String> {
     let target = PathBuf::from(path);
     if !target.exists() {
@@ -153,9 +262,22 @@ fn open_system_path(path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![bridge_call, open_system_path])
-        .run(tauri::generate_context!())
-        .expect("error while running WeChat Chat Summary");
+        .manage(McpProcessState::default())
+        .invoke_handler(tauri::generate_handler![
+            bridge_call,
+            open_system_path,
+            mcp_server_status,
+            mcp_server_start,
+            mcp_server_stop
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building WeChat Chat Summary");
+    app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+            let state = app_handle.state::<McpProcessState>();
+            let _ = stop_mcp_process(&state);
+        }
+    });
 }

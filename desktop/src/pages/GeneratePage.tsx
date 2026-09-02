@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-
+import { useEffect, useMemo, useState } from "react";
 import RedactionEditor from "../components/RedactionEditor";
 import { useReportGeneration } from "../hooks/useReportGeneration";
 import { localDate } from "../services/dates";
@@ -14,9 +12,8 @@ import {
   type Settings,
 } from "../types/desktop";
 
-function GeneratePage() {
+function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSettings: () => void }) {
   const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
-  const [apiKey, setApiKey] = useState("");
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatId, setChatId] = useState("");
   const [query, setQuery] = useState("");
@@ -25,13 +22,11 @@ function GeneratePage() {
   const [startDate, setStartDate] = useState(localDate());
   const [endDate, setEndDate] = useState(localDate());
   const [wechatState, setWechatState] = useState<"idle" | "testing" | "ready" | "error">("idle");
-  const [aiState, setAiState] = useState<"idle" | "testing" | "ready" | "error">("idle");
   const [message, setMessage] = useState("先连接 WeChatDataAnalysis，再选择需要总结的群聊。");
   const [redactionTargets, setRedactionTargets] = useState<RedactionTarget[]>([]);
   const [selectedRedactions, setSelectedRedactions] = useState<string[]>([]);
   const [redactionEditorOpen, setRedactionEditorOpen] = useState(false);
   const [redactionBusy, setRedactionBusy] = useState(false);
-  const indexedExportRoot = useRef("");
   const { busy, setBusy, progress, result, setResult, runGeneration } = useReportGeneration({
     settings,
     setSettings,
@@ -45,11 +40,11 @@ function GeneratePage() {
   });
 
   useEffect(() => {
+    if (!active) return;
     bridge<Settings>("get_state").then((saved) => {
-      indexedExportRoot.current = saved.export_root || "";
       setSettings({ ...INITIAL_SETTINGS, ...saved });
     }).catch((error) => setMessage(String(error)));
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (!settings.schedule_enabled) return;
@@ -76,7 +71,7 @@ function GeneratePage() {
     setChatId(filteredChats[0]?.id || "");
   }, [filteredChats, chatId]);
   const selectedChat = chats.find((chat) => chat.id === chatId);
-  const statusSettings = () => ({ ...settings, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}) });
+  const statusSettings = () => ({ ...settings });
 
   async function connectWeChat() {
     setWechatState("testing"); setMessage("正在读取本机群聊列表…");
@@ -93,19 +88,9 @@ function GeneratePage() {
 
   async function saveSettings(showNotice = true) {
     try {
-      const payload: Record<string, unknown> = { ...settings };
-      if (apiKey.trim()) payload.api_key = apiKey.trim();
-      const saved = await bridge<Settings>("save_settings", { settings: payload });
-      let historyState: Partial<Settings> = {};
-      if ((saved.export_root || "") !== indexedExportRoot.current) {
-        historyState = await bridge<Partial<Settings>>("refresh_history_state", {
-          settings: saved,
-          import_reports: true,
-        });
-        indexedExportRoot.current = saved.export_root || "";
-      }
-      setSettings((current) => ({ ...current, ...saved, ...historyState })); setApiKey("");
-      if (showNotice) setMessage(`AI 与导出设置已保存；当前模型：${saved.model}。`);
+      const saved = await bridge<Settings>("save_settings", { settings });
+      setSettings((current) => ({ ...current, ...saved }));
+      if (showNotice) setMessage("生成设置已保存。");
     } catch (error) {
       if (!showNotice) throw error;
       setMessage(`设置保存失败：${error instanceof Error ? error.message : String(error)}`);
@@ -135,21 +120,6 @@ function GeneratePage() {
     } catch (error) {
       setMessage(`定时设置保存失败：${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-
-  async function testAi() {
-    setAiState("testing"); setMessage("正在测试 AI API，仅发送最小测试内容…");
-    try {
-      const data = await bridge<{ model: string; response_model: string; model_verified: boolean }>("test_ai", { settings: statusSettings() });
-      setAiState("ready");
-      setMessage(data.response_model ? `AI API 连接成功，实际响应模型：${data.response_model}。` : `AI API 连接成功，请求模型：${data.model}。`);
-    }
-    catch (error) { setAiState("error"); setMessage(error instanceof Error ? error.message : String(error)); }
-  }
-
-  async function chooseExportRoot() {
-    const selected = await open({ directory: true, multiple: false, defaultPath: settings.export_root || undefined, title: "选择群聊报告根目录" });
-    if (typeof selected === "string") setSettings((current) => ({ ...current, export_root: selected }));
   }
 
   async function generate() {
@@ -247,7 +217,7 @@ function GeneratePage() {
       <div className="grid">
         <section className="panel source-panel">
           <div className="panel-heading"><div><span className="step-tag">01</span><h2>连接微信数据</h2></div><button className="button secondary" onClick={connectWeChat} disabled={wechatState === "testing" || busy}>{wechatState === "testing" ? "连接中…" : "测试并读取群聊"}</button></div>
-          <label><span>WeChatDataAnalysis API</span><input value={settings.wechat_api_url} onChange={(e) => setSettings({ ...settings, wechat_api_url: e.target.value })} /></label>
+          <label><span>WeChatDataAnalysis API</span><input readOnly value={settings.wechat_api_url} /></label>
           <div className="chat-picker"><div className="chat-search-control"><span>搜索群聊</span><div className="chat-search-row"><input aria-label="搜索群聊" placeholder="输入群聊名称" value={query} onChange={(e) => setQuery(e.target.value)} disabled={!chats.length} /><div className="mini-segmented" role="group" aria-label="群聊筛选"><button className={chatFilter === "all" ? "selected" : ""} onClick={() => setChatFilter("all")}>全部</button><button className={chatFilter === "summarized" ? "selected" : ""} onClick={() => setChatFilter("summarized")}>已总结</button></div></div></div><label><span>选择群聊</span><select value={chatId} onChange={(e) => setChatId(e.target.value)} disabled={!filteredChats.length}>{!filteredChats.length && <option value="">没有符合条件的群聊</option>}{filteredChats.map((chat) => <option key={chat.id} value={chat.id}>{chat.name}{summarized.has(chat.id) ? " · 已总结" : ""}</option>)}</select></label></div>
           {selectedChat && <p className="selection-note">本次总结：<strong>{selectedChat.name}</strong>{summarized.has(selectedChat.id) && <em>　已有历史报告</em>}</p>}
         </section>
@@ -258,13 +228,13 @@ function GeneratePage() {
           <div className="quick-dates"><button onClick={() => { setReportDate(localDate()); setStartDate(localDate()); setEndDate(localDate()); }}>今天</button><button onClick={() => { setReportDate(localDate(-1)); setStartDate(localDate(-1)); setEndDate(localDate(-1)); }}>昨天</button></div>
         </section>
         <section className="panel ai-panel">
-          <div className="panel-heading"><div><span className="step-tag">03</span><h2>配置 AI 分析</h2></div><div className="heading-actions"><button className="button secondary" onClick={() => saveSettings()} disabled={busy}>保存设置</button><button className="button secondary" onClick={testAi} disabled={aiState === "testing" || busy}>{aiState === "testing" ? "测试中…" : "测试 API"}</button></div></div>
-          <div className="field-grid"><label><span>服务类型</span><select value={settings.provider} onChange={(e) => { const provider = e.target.value as Settings["provider"]; setSettings({ ...settings, provider, model: provider === "deepseek" ? "deepseek-v4-flash" : settings.model }); }}><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible</option></select></label><label><span>模型</span>{settings.provider === "deepseek" ? <select value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })}><option value="deepseek-v4-flash">DeepSeek V4 Flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro</option></select> : <input value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} />}</label><label className="wide"><span>API URL</span><input value={settings.api_url} onChange={(e) => setSettings({ ...settings, api_url: e.target.value })} /></label><label className="wide"><span>API Key {settings.api_key_configured && !apiKey ? <em>本机已保存</em> : null}</span><input type="password" autoComplete="off" placeholder={settings.api_key_configured ? "留空则继续使用已保存的 Key" : "输入 API Key"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></label></div>
-          <p className="privacy-copy">聊天文本仅在生成时发送给你配置的 AI 服务商；Key 只保存在本机软件数据目录。</p>
+          <div className="panel-heading"><div><span className="step-tag">03</span><h2>当前 AI 分析</h2></div><button className="button secondary" onClick={onOpenSettings}>打开设置</button></div>
+          <div className="mode-summary"><div><span>API Provider</span><strong>{settings.provider === "deepseek" ? "DeepSeek" : "OpenAI Compatible"}</strong></div><div><span>模型</span><strong>{settings.model || "尚未配置"}</strong></div></div>
+          <p className="privacy-copy">软件生成总结时直接调用已配置的 AI API；MCP Server 是独立的外部调用入口。</p>
         </section>
         <section className="panel output-panel">
           <div className="panel-heading compact"><div><span className="step-tag">04</span><h2>报告目录与定时</h2></div></div>
-          <label><span>独立报告根目录</span><div className="path-control"><input readOnly value={settings.export_root} /><button className="button secondary" onClick={chooseExportRoot}>选择目录</button></div></label>
+          <label><span>独立报告根目录</span><div className="path-control"><input readOnly value={settings.export_root || "尚未配置"} /><button className="button secondary" onClick={onOpenSettings}>打开设置</button></div></label>
           <div className="archive-preview"><span>自动归档</span><code>群聊 / 导出图 / 年 / 月</code><code>群聊 / 报告数据 / 日期报告数据</code></div>
           <div className="schedule-box">
             <div className="schedule-title"><div><strong>定时生成当日报告</strong><small>仅软件保持运行时执行，每天最多自动尝试一次</small></div><label className="switch"><input type="checkbox" checked={settings.schedule_enabled} onChange={(e) => setSettings({ ...settings, schedule_enabled: e.target.checked })} /><span /></label></div>

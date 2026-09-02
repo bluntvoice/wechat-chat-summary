@@ -12,34 +12,34 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .settings import DEFAULT_API_URL, DEFAULT_DEEPSEEK_MODEL, DEFAULT_OUTPUT_ROOT, WECHAT_DATA_API_URL
+from .llm import normalize_chat_completions_url, normalize_deepseek_model
+from .settings import (
+    DEFAULT_API_URL,
+    DEFAULT_DEEPSEEK_MODEL,
+    DEFAULT_DEEPSEEK_REASONING_EFFORT,
+    DEFAULT_OUTPUT_ROOT,
+    WECHAT_DATA_API_URL,
+)
 
 
 APP_IDENTIFIER = "com.bluntvoice.wechat-chat-summary"
 LEGACY_DESKTOP_DATA_DIR = Path(r"D:\工具\WeChat Chat Summary\data")
 LEGACY_MIGRATION_MARKER = ".legacy-data-migration-v1.json"
 MIGRATED_DATA_FILES = ("config.json", "secrets.env", "history.sqlite3")
-DEEPSEEK_TEXT_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
-LEGACY_DEEPSEEK_MODELS = {
-    "deepseek-chat": "deepseek-v4-flash",
-    "deepseek-reasoner": "deepseek-v4-flash",
-}
+MCP_DEFAULT_HOST = "127.0.0.1"
+MCP_DEFAULT_PORT = 8765
 
 
 def normalize_desktop_model(provider: str, model: str) -> str:
     """规范化桌面端模型，并阻止 DeepSeek 非法模型名静默保存。"""
 
     normalized_provider = (provider or "deepseek").strip().lower()
-    normalized_model = (model or "").strip().lower()
+    normalized_model = (model or "").strip()
     if normalized_provider != "deepseek":
         if not normalized_model:
             raise ValueError("模型名称不能为空。")
         return normalized_model
-    normalized_model = LEGACY_DEEPSEEK_MODELS.get(normalized_model, normalized_model)
-    if normalized_model not in DEEPSEEK_TEXT_MODELS:
-        choices = "、".join(sorted(DEEPSEEK_TEXT_MODELS))
-        raise ValueError(f"DeepSeek 模型必须选择：{choices}")
-    return normalized_model
+    return normalize_deepseek_model(normalized_model)
 
 
 def _fallback_app_local_data_dir() -> Path:
@@ -157,6 +157,7 @@ def default_settings() -> dict[str, Any]:
         "api_url": DEFAULT_API_URL,
         "model": DEFAULT_DEEPSEEK_MODEL,
         "thinking": False,
+        "reasoning_effort": DEFAULT_DEEPSEEK_REASONING_EFFORT,
         "export_root": str(DEFAULT_OUTPUT_ROOT or ""),
         "image_dpi": 300,
         "range_mode": "single",
@@ -169,6 +170,9 @@ def default_settings() -> dict[str, Any]:
         "schedule_last_attempt_date": "",
         "schedule_last_run_date": "",
         "schedule_last_status": "",
+        "summarized_chat_ids": [],
+        "mcp_enabled": False,
+        "mcp_port": MCP_DEFAULT_PORT,
     }
 
 
@@ -180,6 +184,52 @@ def _secret_path() -> Path:
     return ensure_desktop_data_dir() / "secrets.env"
 
 
+def _load_secrets(legacy_provider: str = "deepseek") -> dict[str, str]:
+    result = {"deepseek": "", "openai-compatible": ""}
+    path = _secret_path()
+    if not path.exists():
+        return result
+    legacy = ""
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in raw_line:
+            continue
+        key, value = raw_line.split("=", 1)
+        if key == "DEEPSEEK_API_KEY":
+            result["deepseek"] = value
+        elif key == "OPENAI_COMPATIBLE_API_KEY":
+            result["openai-compatible"] = value
+        elif key == "AI_API_KEY":
+            legacy = value
+    if legacy and not any(result.values()):
+        target = legacy_provider if legacy_provider in result else "deepseek"
+        result[target] = legacy
+    return result
+
+
+def _write_secrets(secrets: dict[str, str]) -> None:
+    temporary = _secret_path().with_suffix(".env.tmp")
+    temporary.write_text(
+        "\n".join(
+            (
+                f"DEEPSEEK_API_KEY={secrets.get('deepseek', '')}",
+                f"OPENAI_COMPATIBLE_API_KEY={secrets.get('openai-compatible', '')}",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(_secret_path())
+
+
+def load_desktop_api_key(provider: str) -> str:
+    """只供本机受信任进程读取指定 Provider 的私有 Key。"""
+
+    normalized = (provider or "").strip().lower()
+    if normalized not in {"deepseek", "openai-compatible"}:
+        return ""
+    return _load_secrets(normalized).get(normalized, "")
+
+
 def load_desktop_settings(*, include_secret: bool = False) -> dict[str, Any]:
     settings = default_settings()
     path = _config_path()
@@ -187,29 +237,29 @@ def load_desktop_settings(*, include_secret: bool = False) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
             settings.update(payload)
-    secret = ""
-    secret_path = _secret_path()
-    if secret_path.exists():
-        for raw_line in secret_path.read_text(encoding="utf-8").splitlines():
-            if raw_line.startswith("AI_API_KEY="):
-                secret = raw_line.split("=", 1)[1]
-                break
+    provider = str(settings.get("provider") or "deepseek").strip().lower()
+    secrets = _load_secrets(provider)
+    secret = secrets.get(provider, "")
     settings["api_key_configured"] = bool(secret)
+    settings["deepseek_api_key_configured"] = bool(secrets["deepseek"])
+    settings["openai_compatible_api_key_configured"] = bool(secrets["openai-compatible"])
+    settings["mcp_host"] = MCP_DEFAULT_HOST
+    settings["mcp_endpoint"] = f"http://{MCP_DEFAULT_HOST}:{int(settings.get('mcp_port') or MCP_DEFAULT_PORT)}/mcp"
     if include_secret:
         settings["api_key"] = secret
     return settings
 
 
 def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
-    data_dir = ensure_desktop_data_dir()
-    current = load_desktop_settings(include_secret=True)
-    api_key = str(values.get("api_key", current.get("api_key", ""))).strip()
+    current = load_desktop_settings(include_secret=False)
+    secrets = _load_secrets(str(current.get("provider") or "deepseek"))
     allowed = {
         "wechat_api_url",
         "provider",
         "api_url",
         "model",
         "thinking",
+        "reasoning_effort",
         "export_root",
         "image_dpi",
         "range_mode",
@@ -222,19 +272,39 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
         "schedule_last_attempt_date",
         "schedule_last_run_date",
         "schedule_last_status",
+        "summarized_chat_ids",
+        "mcp_enabled",
+        "mcp_port",
     }
     for key in allowed:
         if key in values:
             current[key] = values[key]
     current["provider"] = str(current.get("provider") or "deepseek").strip().lower()
+    if current["provider"] not in {"deepseek", "openai-compatible"}:
+        raise ValueError("AI Provider 仅支持 DeepSeek 或 OpenAI Compatible。")
     current["model"] = normalize_desktop_model(
         current["provider"], str(current.get("model") or "")
     )
+    current["api_url"] = normalize_chat_completions_url(
+        str(current.get("api_url") or ""), current["provider"]
+    )
+    current["thinking"] = bool(current.get("thinking", False)) if current["provider"] == "deepseek" else False
+    effort = str(current.get("reasoning_effort") or DEFAULT_DEEPSEEK_REASONING_EFFORT).strip().lower()
+    if effort not in {"high", "max"}:
+        raise ValueError("DeepSeek Reasoning Effort 只能是 high 或 max。")
+    current["reasoning_effort"] = effort
+    port = int(current.get("mcp_port") or MCP_DEFAULT_PORT)
+    if port < 1024 or port > 65535:
+        raise ValueError("MCP 端口必须在 1024 到 65535 之间。")
+    current["mcp_port"] = port
+    if "api_key" in values:
+        api_key = str(values.get("api_key") or "").strip()
+        if "\n" in api_key or "\r" in api_key:
+            raise ValueError("API Key 必须是单行文本。")
+        secrets[current["provider"]] = api_key
     public = {key: current[key] for key in allowed if key in current}
     temporary = _config_path().with_suffix(".json.tmp")
     temporary.write_text(json.dumps(public, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(_config_path())
-    secret_temporary = _secret_path().with_suffix(".env.tmp")
-    secret_temporary.write_text(f"AI_API_KEY={api_key}\n", encoding="utf-8")
-    secret_temporary.replace(_secret_path())
+    _write_secrets(secrets)
     return load_desktop_settings(include_secret=False)

@@ -12,7 +12,14 @@ from .alerts import maybe_send_alert
 from .chunking import build_analysis_chunks, chunk_payload, estimate_reduce_call_count
 from .common import ensure_dir, normalize_text, slugify, write_json
 from .fetching import fetch_structured_messages
-from .llm import DeepSeekClient, LLMClientProtocol, format_balance_delta, format_balance_snapshot
+from .llm import (
+    DeepSeekClient,
+    LLMClientProtocol,
+    OpenAICompatibleClient,
+    format_balance_delta,
+    format_balance_snapshot,
+    normalize_chat_completions_url,
+)
 from .pipeline import run_final_stage, run_map_stage, run_reduce_stage
 from .progress import ProgressReporter
 from .report_paths import allocate_report_paths, build_report_date_label
@@ -85,10 +92,24 @@ def normalize_reasoning_effort(value: str | None) -> str:
 
 
 def resolve_llm_runtime_config(args: argparse.Namespace) -> tuple[str, str, bool, str]:
-    """根据参数与环境变量解析运行时 DeepSeek 配置。"""
+    """根据 Provider、参数与环境变量解析运行时配置。"""
 
-    api_key = (args.api_key or os.environ.get("DEEPSEEK_API_KEY", "")).strip()
-    model = (args.model or os.environ.get("DEEPSEEK_MODEL", "") or DEFAULT_DEEPSEEK_MODEL).strip()
+    provider = str(args.provider or DEFAULT_PROVIDER)
+    if provider == "deepseek":
+        api_key = (args.api_key or os.environ.get("DEEPSEEK_API_KEY", "")).strip()
+        model = (args.model or os.environ.get("DEEPSEEK_MODEL", "") or DEFAULT_DEEPSEEK_MODEL).strip()
+    else:
+        api_key = (
+            args.api_key
+            or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "")
+            or os.environ.get("AI_API_KEY", "")
+        ).strip()
+        model = (args.model or os.environ.get("OPENAI_COMPATIBLE_MODEL", "")).strip()
+        if not model:
+            if args.dry_run:
+                model = "openai-compatible-dry-run"
+            else:
+                raise SystemExit("OpenAI Compatible 模式必须配置 --model 或 OPENAI_COMPATIBLE_MODEL。")
     thinking_enabled = (
         bool(args.thinking)
         if args.thinking is not None
@@ -113,17 +134,25 @@ def create_llm_client(
     reasoning_effort: str,
     provider: str = "deepseek",
 ) -> LLMClientProtocol:
-    """创建 DeepSeek LLM 客户端。"""
+    """按 Provider 创建互不串字段的 LLM 客户端。"""
 
-    return DeepSeekClient(
-        api_key=api_key,
-        model=model,
-        api_url=api_url,
-        allow_json_repair=allow_json_repair,
-        thinking_enabled=thinking_enabled,
-        reasoning_effort=reasoning_effort,
-        provider=provider,
-    )
+    if provider == "deepseek":
+        return DeepSeekClient(
+            api_key=api_key,
+            model=model,
+            api_url=api_url,
+            allow_json_repair=allow_json_repair,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
+        )
+    if provider == "openai-compatible":
+        return OpenAICompatibleClient(
+            api_key=api_key,
+            model=model,
+            api_url=api_url,
+            allow_json_repair=allow_json_repair,
+        )
+    raise ValueError(f"不支持的 AI Provider: {provider}")
 
 
 def capture_balance_snapshot(client: LLMClientProtocol | None, stage: str) -> dict[str, Any] | None:
@@ -151,10 +180,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wechat-api-url", default=WECHAT_DATA_API_URL, help=f"WeChatDataAnalysis 本地 API 地址，默认 {WECHAT_DATA_API_URL}。")
     parser.add_argument("--wechat-account", default=WECHAT_DATA_ACCOUNT, help="可选微信账号标识；留空时使用 WeChatDataAnalysis 当前默认账号。")
     parser.add_argument("--wechat-source", default=WECHAT_DATA_SOURCE, help="可选数据源标识；留空时由 WeChatDataAnalysis 自动选择。")
-    parser.add_argument("--api-key", default="", help="DeepSeek API Key；若不传则读取环境变量 DEEPSEEK_API_KEY。")
+    parser.add_argument("--api-key", default="", help="AI API Key；建议通过对应 Provider 的环境变量传入。")
     parser.add_argument("--provider", choices=["deepseek", "openai-compatible"], default=DEFAULT_PROVIDER, help="AI 提供方类型。")
-    parser.add_argument("--api-url", default=os.environ.get("DEEPSEEK_API_URL", DEFAULT_API_URL), help=f"DeepSeek chat completions URL，默认 {DEFAULT_API_URL}")
-    parser.add_argument("--model", default="", help=f"DeepSeek 模型名；默认 {DEFAULT_DEEPSEEK_MODEL}。")
+    parser.add_argument("--api-url", default="", help="AI Base URL 或 Chat Completions URL。")
+    parser.add_argument("--model", default="", help=f"模型名；DeepSeek 默认 {DEFAULT_DEEPSEEK_MODEL}。")
     parser.add_argument("--thinking", action=argparse.BooleanOptionalAction, default=None, help="是否启用 DeepSeek 思考模式；默认读取环境变量 THINKING，未设置时关闭。")
     parser.add_argument("--reasoning-effort", choices=["high", "max"], default=None, help=f"DeepSeek 思考强度；默认读取环境变量 THINKING_LEVEL，未设置时为 {DEFAULT_DEEPSEEK_REASONING_EFFORT}。")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAP_MAX_WORKERS, help="map 阶段并行请求数；适当提高可加快速度，但也会增加瞬时并发。")
@@ -217,7 +246,20 @@ def main() -> None:
     provider = args.provider
     api_key, model, thinking_enabled, reasoning_effort = resolve_llm_runtime_config(args)
     if not args.dry_run and not api_key:
-        raise SystemExit("未提供 DeepSeek API Key。请传 --api-key 或设置环境变量 DEEPSEEK_API_KEY。")
+        raise SystemExit("未提供 AI API Key。请配置当前 Provider 的本机环境变量。")
+    api_url = (
+        args.api_url
+        or (
+            os.environ.get("DEEPSEEK_API_URL", DEFAULT_API_URL)
+            if provider == "deepseek"
+            else os.environ.get("OPENAI_COMPATIBLE_API_URL", "")
+        )
+    )
+    if not args.dry_run:
+        try:
+            api_url = normalize_chat_completions_url(api_url, provider)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
 
     progress.update("fetching", 7, "正在从 WeChatDataAnalysis 读取群聊消息…")
     ctx, messages = fetch_structured_messages(
@@ -324,7 +366,7 @@ def main() -> None:
     client = None if args.dry_run else create_llm_client(
         api_key=api_key,
         model=model,
-        api_url=args.api_url,
+        api_url=api_url,
         allow_json_repair=bool(args.allow_json_repair),
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
