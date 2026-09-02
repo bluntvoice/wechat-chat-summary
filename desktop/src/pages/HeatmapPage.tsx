@@ -181,14 +181,14 @@ export default function HeatmapPage({ active, onOpenHistory }: HeatmapPageProps)
 
   return <div className="workspace heatmap-workspace">
     <header className="topbar heatmap-topbar">
-      <div><p className="eyebrow">LOCAL · ACTIVITY CALENDAR</p><h1>热力图分析</h1></div>
+      <div><h1>活跃热力图</h1></div>
       <div className="heatmap-top-actions"><div className={`heatmap-status status-${phase}`}><i />{phase === "scanning" ? "正在补齐统计" : phase === "loading" ? "读取中" : phase === "error" ? "需要处理" : "本地聚合"}</div><button className="button secondary" disabled={phase === "scanning"} onClick={() => setRefreshToken((value) => value + 1)}>重新读取</button></div>
     </header>
     <section className="notice heatmap-notice" aria-live="polite"><strong>数据说明</strong><span>{message}</span></section>
 
     <section className="heatmap-controls">
       <label className="heatmap-chat-search"><span>群聊</span><input disabled={phase === "scanning"} placeholder="筛选群聊" value={chatQuery} onChange={(event) => setChatQuery(event.target.value)} /></label>
-      <label><span>选择群聊</span><select disabled={phase === "scanning"} value={chatId} onChange={(event) => setChatId(event.target.value)}>{visibleChats.map((chat) => <option key={chat.id} value={chat.id}>{chat.summarized ? "● " : ""}{chat.name}</option>)}</select></label>
+      <label><span>选择群聊</span><select disabled={phase === "scanning"} value={chatId} onChange={(event) => setChatId(event.target.value)}>{visibleChats.map((chat) => <option key={chat.id} value={chat.id}>{chat.name}{chat.summarized ? " · 已总结" : ""}</option>)}</select></label>
       <label><span>范围</span><select disabled={phase === "scanning"} value={rangeMode} onChange={(event) => setRangeMode(event.target.value)}><option value="rolling">最近一年</option>{yearOptions.map((year) => <option key={year} value={String(year)}>{year} 年</option>)}<option value="custom">自定义</option></select></label>
       <div className="heatmap-chat-filter" aria-label="群聊筛选"><button disabled={phase === "scanning"} className={chatFilter === "all" ? "selected" : ""} onClick={() => setChatFilter("all")}>全部</button><button disabled={phase === "scanning"} className={chatFilter === "summarized" ? "selected" : ""} onClick={() => setChatFilter("summarized")}>已总结</button></div>
       {rangeMode === "custom" && <div className="heatmap-custom-range"><input disabled={phase === "scanning"} aria-label="热力图开始日期" type="date" max={rolling.end} value={customStart} onChange={(event) => setCustomStart(event.target.value)} /><span>—</span><input disabled={phase === "scanning"} aria-label="热力图结束日期" type="date" max={rolling.end} value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} /></div>}

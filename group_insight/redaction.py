@@ -31,9 +31,29 @@ TOPIC_DETAIL_MODULES = {
 }
 
 
-def _preview(item: Any) -> str:
+def _member_names(document: dict[str, Any]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for item in document.get("stats", {}).get("member_aliases", []) or []:
+        if not isinstance(item, dict):
+            continue
+        sender_id = str(item.get("sender_id") or "").strip()
+        sender_name = str(item.get("sender_name") or "").strip()
+        if sender_id and sender_name:
+            names[sender_id] = sender_name
+    return names
+
+
+def _resolve_members(value: str, names: dict[str, str]) -> str:
+    return re.sub(
+        r"\[\[user:([^\]]+)\]\]",
+        lambda match: names.get(match.group(1), "群成员"),
+        value,
+    )
+
+
+def _preview(item: Any, names: dict[str, str]) -> str:
     if isinstance(item, str):
-        return item[:100]
+        return _resolve_members(item, names)[:100]
     if not isinstance(item, dict):
         return ""
     if item.get("redacted"):
@@ -44,7 +64,7 @@ def _preview(item: Any) -> str:
     ):
         value = str(item.get(key) or "").strip()
         if value:
-            return value[:100]
+            return _resolve_members(value, names)[:100]
     return "未命名条目"
 
 
@@ -87,6 +107,7 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
     """列出桌面端可逐项屏蔽的所有报告条目。"""
 
     content = document.get("content", {})
+    names = _member_names(document)
     targets: list[dict[str, Any]] = []
     for module_key, module_label in REDACTABLE_MODULES.items():
         for index, item in enumerate(content.get(module_key, []) or []):
@@ -96,7 +117,7 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
                     "id": target_id,
                     "module_key": module_key,
                     "module_label": module_label,
-                    "preview": _preview(item),
+                    "preview": _preview(item, names),
                     "time_label": _time_label(item, document),
                     "redacted": bool(isinstance(item, dict) and item.get("redacted")),
                 }
@@ -116,7 +137,7 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
                             "id": detail_id,
                             "module_key": f"topics.{detail_key}",
                             "module_label": detail_label,
-                            "preview": _preview(detail_item),
+                            "preview": _preview(detail_item, names),
                             "time_label": _time_label(detail_item, document) if detail_item.get("time") else _time_label(item, document),
                             "redacted": bool(detail_item.get("redacted")),
                         }
@@ -132,7 +153,7 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
                 "id": group_id,
                 "module_key": "resource_groups",
                 "module_label": "资源主题",
-                "preview": _preview(group),
+                "preview": _preview(group, names),
                 "time_label": _resource_group_time(group, document),
                 "redacted": bool(group.get("redacted")),
             }
@@ -148,7 +169,7 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
                     "id": target_id,
                     "module_key": "resources",
                     "module_label": "资源条目",
-                    "preview": _preview(item),
+                    "preview": _preview(item, names),
                     "time_label": _time_label(item, document),
                     "redacted": bool(item.get("redacted")),
                 }

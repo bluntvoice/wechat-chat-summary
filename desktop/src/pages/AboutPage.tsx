@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { getName, getVersion } from "@tauri-apps/api/app";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import packageInfo from "../../package.json";
 
 const PROJECT_URL = "https://github.com/bluntvoice/wechat-chat-summary";
+const appIcon = new URL("../../src-tauri/icons/icon.png", import.meta.url).href;
 
 type UpdateStatus =
   | "idle"
@@ -64,7 +65,6 @@ function downloadErrorMessage(error: unknown) {
 }
 
 export default function AboutPage() {
-  const [appName, setAppName] = useState("WeChat Chat Summary");
   const [version, setVersion] = useState(packageInfo.version);
   const [copyState, setCopyState] = useState("复制项目地址");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
@@ -75,11 +75,8 @@ export default function AboutPage() {
   const [confirmInstall, setConfirmInstall] = useState(false);
 
   useEffect(() => {
-    Promise.all([getName(), getVersion()])
-      .then(([name, runtimeVersion]) => {
-        setAppName(name || "WeChat Chat Summary");
-        setVersion(runtimeVersion || packageInfo.version);
-      })
+    getVersion()
+      .then((runtimeVersion) => setVersion(runtimeVersion || packageInfo.version))
       .catch(() => {
         // 普通浏览器开发预览没有 Tauri runtime，使用 package.json 构建版本。
       });
@@ -163,12 +160,11 @@ export default function AboutPage() {
   const isBusy = updateStatus === "checking" || updateStatus === "downloading";
 
   return <div className="workspace about-workspace">
-    <header className="topbar about-topbar"><div><p className="eyebrow">APPLICATION · ABOUT</p><h1>关于</h1></div></header>
+    <header className="topbar about-topbar"><div><h1>关于</h1></div></header>
 
     <section className="about-identity" aria-labelledby="about-product-name">
-      <div className="about-monogram">群</div>
+      <div className="about-app-icon"><img src={appIcon} alt="" /></div>
       <div className="about-product">
-        <span>{appName}</span>
         <h2 id="about-product-name">群聊拾遗</h2>
         <p>把本地微信群聊整理成可回顾、可检索、可长期保存的结构化总结。</p>
       </div>
@@ -188,11 +184,11 @@ export default function AboutPage() {
             updateStatus === "latest" ? "已是最新版本" :
               updateStatus === "available" || updateStatus === "downloading" || updateStatus === "verified"
                 ? `发现新版本 v${update?.latest_version ?? verified?.version ?? ""}` :
-                updateStatus === "error" ? "更新未完成" : "检查 Stable Release"}
+                updateStatus === "error" ? "更新未完成" : "检查正式版本"}
         </h3>
         {updateStatus === "idle" && <p>仅在点击检查更新后访问 GitHub，不会在启动时或后台自动联网检查。</p>}
         {updateStatus === "checking" && <p>正在读取本项目官方 GitHub Releases。</p>}
-        {updateStatus === "latest" && <p>普通更新通道只接受正式 Stable Release，不提供降级。</p>}
+        {updateStatus === "latest" && <p>普通更新通道只接受正式版本，不提供降级。</p>}
         {update && update.status === "available" && <div className="about-release-detail">
           <p>{releaseDate(update.published_at)}{update.installer_size ? ` · 安装包 ${megabytes(update.installer_size)}` : ""}</p>
           <p>{update.notes_summary}</p>
