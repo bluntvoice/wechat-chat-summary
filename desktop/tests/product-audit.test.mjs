@@ -57,6 +57,15 @@ test("history activity statistics use a bounded compact renderer", () => {
   assert.match(styles, /\.history-segment-list[^\n]+repeat\(2/);
 });
 
+test("history resources hide internal fields and use a concise preview", () => {
+  assert.match(history, /function ResourcePreview/);
+  assert.match(history, /module\.module_key === "resources"/);
+  assert.match(history, /"message_id", "file_size", "source"/);
+  assert.match(history, /topic !== "其他 \/ 未归类"/);
+  assert.match(styles, /\.history-resource-preview/);
+  assert.match(styles, /\.history-resource-domain[^\n]+text-overflow: ellipsis/);
+});
+
 test("all user-visible desktop product names use 群聊拾遗", () => {
   assert.equal(tauriConfig.productName, "群聊拾遗");
   assert.equal(tauriConfig.app.windows[0].title, "群聊拾遗");
