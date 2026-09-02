@@ -48,6 +48,15 @@ test("history preview supports validated inline redaction with an auxiliary targ
   assert.match(styles, /\.history-module\.redaction-selectable/);
 });
 
+test("history activity statistics use a bounded compact renderer", () => {
+  assert.match(history, /function ActivityStatsView/);
+  assert.match(history, /\.slice\(0, 5\)/);
+  assert.match(history, /\.slice\(0, 12\)/);
+  assert.match(history, /isActivityStatsModule\(module\)/);
+  assert.match(styles, /\.history-activity-metrics[^\n]+repeat\(3/);
+  assert.match(styles, /\.history-segment-list[^\n]+repeat\(2/);
+});
+
 test("all user-visible desktop product names use 群聊拾遗", () => {
   assert.equal(tauriConfig.productName, "群聊拾遗");
   assert.equal(tauriConfig.app.windows[0].title, "群聊拾遗");

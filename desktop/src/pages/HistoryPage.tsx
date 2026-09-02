@@ -127,6 +127,49 @@ function ValueView({ value, memberNames, fieldKey = "" }: { value: unknown; memb
   return <dl className="history-value-grid">{entries.map(([key, item]) => <div key={key}><dt>{FIELD_LABELS[key] || key}</dt><dd><ValueView value={item} memberNames={memberNames} fieldKey={key} /></dd></div>)}</dl>;
 }
 
+function ActivityStatsView({ value, memberNames }: { value: unknown; memberNames: Record<string, string> }) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return <ValueView value={value} memberNames={memberNames} />;
+  }
+  const stats = value as Record<string, unknown>;
+  const speakers = (Array.isArray(stats.top_speakers) ? stats.top_speakers : [])
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    .slice(0, 5);
+  const keywords = (Array.isArray(stats.word_cloud) ? stats.word_cloud : [])
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item) && item.word))
+    .slice(0, 12);
+  const segments = (Array.isArray(stats.time_segment_breakdown) ? stats.time_segment_breakdown : [])
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  const metricCandidates: Array<[string, unknown]> = [
+    ["消息数", stats.message_count],
+    ["有效消息", stats.effective_message_count],
+    ["参与人数", stats.participant_count],
+  ];
+  const metrics = metricCandidates.filter(([, count]) => count !== undefined && count !== null && count !== "");
+  const speakerMax = Math.max(1, ...speakers.map((item) => Number(item.message_count) || 0));
+  const segmentMax = Math.max(1, ...segments.map((item) => Number(item.count) || 0));
+
+  return <div className="history-activity-stats">
+    {metrics.length > 0 && <dl className="history-activity-metrics">{metrics.map(([label, count]) => <div key={String(label)}><dt>{label}</dt><dd>{String(count)}</dd></div>)}</dl>}
+    {speakers.length > 0 && <section className="history-activity-block"><h4>发言排行</h4><ol className="history-speaker-list">{speakers.map((item, index) => {
+      const count = Number(item.message_count) || 0;
+      return <li key={`${String(item.name || "群成员")}-${index}`}><span>{Number(item.rank) || index + 1}</span><strong>{resolveMemberTokens(String(item.name || "群成员"), memberNames)}</strong><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / speakerMax * 100))}%` }} /></i><em>{count} 条</em></li>;
+    })}</ol></section>}
+    {keywords.length > 0 && <section className="history-activity-block"><h4>群关键词</h4><div className="history-keyword-list">{keywords.map((item, index) => <span key={`${String(item.word)}-${index}`}>{resolveMemberTokens(String(item.word), memberNames)}<small>{Number(item.count) || ""}</small></span>)}</div></section>}
+    {segments.length > 0 && <section className="history-activity-block"><h4>活跃时段</h4><div className="history-segment-list">{segments.map((item, index) => {
+      const count = Number(item.count) || 0;
+      return <div key={`${String(item.label || "时段")}-${index}`}><span>{String(item.label || "时段")}</span><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / segmentMax * 100))}%` }} /></i><strong>{count}</strong></div>;
+    })}</div></section>}
+  </div>;
+}
+
+function isActivityStatsModule(module: HistoryModule) {
+  if (module.module_key !== "member_activity" || !module.content || typeof module.content !== "object" || Array.isArray(module.content)) return false;
+  const content = module.content as Record<string, unknown>;
+  return ["top_speakers", "word_cloud", "time_segment_breakdown", "message_count", "participant_count"]
+    .some((key) => key in content);
+}
+
 function ModuleCard({
   module,
   memberNames,
@@ -161,7 +204,9 @@ function ModuleCard({
     }}
   >
     <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : module.title}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
-    <ValueView value={module.content} memberNames={memberNames} />
+    {isActivityStatsModule(module)
+      ? <ActivityStatsView value={module.content} memberNames={memberNames} />
+      : <ValueView value={module.content} memberNames={memberNames} />}
   </article>;
 }
 
