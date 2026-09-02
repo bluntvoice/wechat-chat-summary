@@ -1,3 +1,4 @@
+import { CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import RedactionEditor from "../components/RedactionEditor";
 import { useReportGeneration } from "../hooks/useReportGeneration";
@@ -80,7 +81,7 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
       const summarizedChatIds = data.chats.filter((chat) => chat.summarized).map((chat) => chat.id);
       setChats(data.chats);
       setSettings((current) => ({ ...current, summarized_chat_ids: summarizedChatIds }));
-      setWechatState("ready"); setMessage(`已连接，读取到 ${data.chats.length} 个群聊。`);
+      setWechatState("ready"); setMessage(`已读取 ${data.chats.length} 个群聊，请选择群聊和日期。`);
       const remembered = data.chats.find((chat) => chat.id === settings.last_chat_id);
       if (remembered) setChatId(remembered.id); else if (data.chats.length && !chatId) setChatId(data.chats[0].id);
     } catch (error) { setWechatState("error"); setMessage(error instanceof Error ? error.message : String(error)); }
@@ -212,28 +213,28 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
   const activeEnd = settings.range_mode === "single" ? reportDate : endDate;
 
   return <div className="workspace">
-      <header className="topbar"><div><p className="eyebrow">WECHAT · LOCAL INSIGHT</p><h1>微信群聊总结</h1></div><div className={`system-state ${wechatState}`}><span />{wechatState === "ready" ? "数据源已连接" : "等待连接数据源"}</div></header>
+      <header className="topbar"><div><h1>生成总结</h1></div></header>
       <section className="notice" aria-live="polite"><strong>{busy ? "处理中" : "当前状态"}</strong><span>{message}</span></section>
       <div className="grid">
         <section className="panel source-panel">
-          <div className="panel-heading"><div><span className="step-tag">01</span><h2>连接微信数据</h2></div><button className="button secondary" onClick={connectWeChat} disabled={wechatState === "testing" || busy}>{wechatState === "testing" ? "连接中…" : "测试并读取群聊"}</button></div>
+          <div className="panel-heading"><div><span className="step-tag">1</span><h2>连接微信数据</h2></div><button className="button secondary" onClick={connectWeChat} disabled={wechatState === "testing" || busy}>{wechatState === "testing" ? "连接中…" : "测试并读取群聊"}</button></div>
           <label><span>WeChatDataAnalysis API</span><input readOnly value={settings.wechat_api_url} /></label>
           <div className="chat-picker"><div className="chat-search-control"><span>搜索群聊</span><div className="chat-search-row"><input aria-label="搜索群聊" placeholder="输入群聊名称" value={query} onChange={(e) => setQuery(e.target.value)} disabled={!chats.length} /><div className="mini-segmented" role="group" aria-label="群聊筛选"><button className={chatFilter === "all" ? "selected" : ""} onClick={() => setChatFilter("all")}>全部</button><button className={chatFilter === "summarized" ? "selected" : ""} onClick={() => setChatFilter("summarized")}>已总结</button></div></div></div><label><span>选择群聊</span><select value={chatId} onChange={(e) => setChatId(e.target.value)} disabled={!filteredChats.length}>{!filteredChats.length && <option value="">没有符合条件的群聊</option>}{filteredChats.map((chat) => <option key={chat.id} value={chat.id}>{chat.name}{summarized.has(chat.id) ? " · 已总结" : ""}</option>)}</select></label></div>
           {selectedChat && <p className="selection-note">本次总结：<strong>{selectedChat.name}</strong>{summarized.has(selectedChat.id) && <em>　已有历史报告</em>}</p>}
         </section>
         <section className="panel range-panel">
-          <div className="panel-heading compact"><div><span className="step-tag">02</span><h2>选择统计日期</h2></div></div>
+          <div className="panel-heading compact"><div><span className="step-tag">2</span><h2>选择统计日期</h2></div></div>
           <div className="segmented"><button className={settings.range_mode === "single" ? "selected" : ""} onClick={() => setSettings({ ...settings, range_mode: "single" })}>单日</button><button className={settings.range_mode === "custom" ? "selected" : ""} onClick={() => setSettings({ ...settings, range_mode: "custom" })}>自定义区间</button></div>
           {settings.range_mode === "single" ? <label><span>报告日期</span><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} /></label> : <div className="date-grid"><label><span>开始日期</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><label><span>结束日期</span><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></label></div>}
           <div className="quick-dates"><button onClick={() => { setReportDate(localDate()); setStartDate(localDate()); setEndDate(localDate()); }}>今天</button><button onClick={() => { setReportDate(localDate(-1)); setStartDate(localDate(-1)); setEndDate(localDate(-1)); }}>昨天</button></div>
         </section>
         <section className="panel ai-panel">
-          <div className="panel-heading"><div><span className="step-tag">03</span><h2>当前 AI 分析</h2></div><button className="button secondary" onClick={onOpenSettings}>打开设置</button></div>
-          <div className="mode-summary"><div><span>API Provider</span><strong>{settings.provider === "deepseek" ? "DeepSeek" : "OpenAI Compatible"}</strong></div><div><span>模型</span><strong>{settings.model || "尚未配置"}</strong></div></div>
+          <div className="panel-heading"><div><span className="step-tag">3</span><h2>AI 分析</h2></div><button className="button secondary" onClick={onOpenSettings}>打开设置</button></div>
+          <div className="mode-summary"><div><span>AI 服务</span><strong>{settings.provider === "deepseek" ? "DeepSeek" : "OpenAI Compatible"}</strong></div><div><span>模型</span><strong>{settings.model || "尚未配置"}</strong></div></div>
           <p className="privacy-copy">软件生成总结时直接调用已配置的 AI API；MCP Server 是独立的外部调用入口。</p>
         </section>
         <section className="panel output-panel">
-          <div className="panel-heading compact"><div><span className="step-tag">04</span><h2>报告目录与定时</h2></div></div>
+          <div className="panel-heading compact"><div><span className="step-tag">4</span><h2>报告目录与定时</h2></div></div>
           <label><span>独立报告根目录</span><div className="path-control"><input readOnly value={settings.export_root || "尚未配置"} /><button className="button secondary" onClick={onOpenSettings}>打开设置</button></div></label>
           <div className="archive-preview"><span>自动归档</span><code>群聊 / 导出图 / 年 / 月</code><code>群聊 / 报告数据 / 日期报告数据</code></div>
           <div className="schedule-box">
@@ -247,8 +248,8 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
           </div>
         </section>
       </div>
-      <section className={`action-dock ${result ? "has-result" : ""}`}><div><strong>{selectedChat?.name || "尚未选择群聊"}</strong><span>{activeStart === activeEnd ? activeStart : `${activeStart} 至 ${activeEnd}`} · PNG 300 DPI</span>{progress && <div className="progress-wrap"><i><b style={{ width: `${progress.percent}%` }} /></i><small>{progress.percent}% · {progress.message} · 已用 {Math.round(progress.elapsed_seconds)} 秒</small></div>}</div><button className="button primary" onClick={generate} disabled={busy || !chatId}>{busy ? "正在生成…" : "生成群聊总结"}</button></section>
-      {result && <section className="result-panel"><div className="result-copy"><span className="result-check">✓</span><div><h2>报告生成完成{result.version ? ` · v${result.version}` : ""}</h2><p>摘要长图与完整 HTML 已生成，旧版本不会被覆盖。</p></div></div><div className="result-actions"><button className="button primary small" onClick={() => openPath(result.png_path)}>打开图片</button><button className="button secondary" onClick={() => openPath(result.html_path)}>打开 HTML</button><button className="button secondary" onClick={() => openPath(result.chat_dir || result.data_dir)}>打开报告所在目录</button><button className="button ghost" disabled={redactionBusy} onClick={openRedactionEditor}>{redactionBusy ? "读取中…" : "编辑并屏蔽内容"}</button></div></section>}
+      <section className={`action-dock ${result ? "has-result" : ""}`}><div><strong>{selectedChat?.name || "尚未选择群聊"}</strong><span>{activeStart === activeEnd ? activeStart : `${activeStart} 至 ${activeEnd}`} · PNG {settings.image_dpi} DPI</span>{progress && <div className="progress-wrap"><i><b style={{ width: `${progress.percent}%` }} /></i><small>{progress.percent}% · {progress.message} · 已用 {Math.round(progress.elapsed_seconds)} 秒</small></div>}</div><button className="button primary" onClick={generate} disabled={busy || !chatId}>{busy ? "正在生成…" : "生成群聊总结"}</button></section>
+      {result && <section className="result-panel"><div className="result-copy"><CheckCircle2 className="result-check" size={36} aria-hidden="true" /><div><h2>报告生成完成{result.version ? ` · v${result.version}` : ""}</h2><p>PNG 与 HTML 已生成，旧版本不会被覆盖。</p></div></div><div className="result-actions"><button className="button primary small" onClick={() => openPath(result.png_path)}>打开图片</button><button className="button secondary" onClick={() => openPath(result.html_path)}>打开 HTML</button><button className="button secondary" onClick={() => openPath(result.chat_dir || result.data_dir)}>打开报告所在目录</button><button className="button ghost" disabled={redactionBusy} onClick={openRedactionEditor}>{redactionBusy ? "读取中…" : "编辑并屏蔽内容"}</button></div></section>}
       {result && redactionEditorOpen && <RedactionEditor targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onClose={() => setRedactionEditorOpen(false)} onToggle={toggleRedaction} onApply={applyRedactions} />}
   </div>;
 }

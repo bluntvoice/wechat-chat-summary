@@ -26,6 +26,25 @@ def message(message_id: str, text: str, metadata=None) -> StructuredMessage:
 
 
 class ReportSchemaHistoryTests(unittest.TestCase):
+    def test_redaction_targets_resolve_member_placeholders(self):
+        document = {
+            "metadata": {"period": {"report_date": "2026-08-31"}},
+            "stats": {
+                "member_aliases": [
+                    {"sender_id": "wxid_a", "sender_name": "群昵称甲"},
+                ]
+            },
+            "content": {
+                "members": [
+                    {"name": "[[user:wxid_a]]", "insight": "活跃成员"},
+                    {"name": "[[user:unknown]]", "insight": "未知成员"},
+                ]
+            },
+        }
+        previews = [item["preview"] for item in list_redaction_targets(document)]
+        self.assertEqual(previews, ["群昵称甲", "群成员"])
+        self.assertNotIn("[[user:", " ".join(previews))
+
     def test_resources_merge_links_and_files_under_one_topic(self):
         messages = [
             message("m1", "资料 https://example.com/a"),

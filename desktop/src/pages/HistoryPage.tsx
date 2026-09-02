@@ -60,7 +60,10 @@ const FIELD_LABELS: Record<string, string> = {
   word: "关键词",
 };
 
-const HIDDEN_FIELDS = new Set(["id", "topic_id", "resource_id", "metadata", "redacted", "tone", "confidence"]);
+const HIDDEN_FIELDS = new Set([
+  "id", "topic_id", "resource_id", "metadata", "redacted", "tone", "confidence",
+  "sender_id", "sender_username", "username", "title", "start_time", "end_time",
+]);
 
 function datePart(value: string) {
   return value.slice(0, 10);
@@ -72,11 +75,18 @@ function periodLabel(start: string, end: string) {
   return startDate === endDate ? startDate : `${startDate} 至 ${endDate}`;
 }
 
+function resolveMemberTokens(value: string, memberNames: Record<string, string> = {}) {
+  return value.replace(/\[\[user:([^\]]+)\]\]/g, (_match, senderId: string) => memberNames[senderId] || "群成员");
+}
+
 function flattenText(value: unknown): string {
   if (value == null) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "string") return resolveMemberTokens(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) return value.map(flattenText).filter(Boolean).join(" · ");
-  if (typeof value === "object") return Object.values(value as Record<string, unknown>).map(flattenText).filter(Boolean).join(" · ");
+  if (typeof value === "object") return Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !HIDDEN_FIELDS.has(key))
+    .map(([, item]) => flattenText(item)).filter(Boolean).join(" · ");
   return "";
 }
 
@@ -88,24 +98,35 @@ function searchSnippet(value: string) {
   }
 }
 
-function ValueView({ value }: { value: unknown }) {
+function ValueView({ value, memberNames, fieldKey = "" }: { value: unknown; memberNames: Record<string, string>; fieldKey?: string }) {
   if (value == null || value === "") return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    const text = String(value);
+    const text = resolveMemberTokens(String(value), memberNames);
     return <span className={/^https?:\/\//i.test(text) ? "history-url" : ""}>{text}</span>;
   }
   if (Array.isArray(value)) {
-    return <ul className="history-value-list">{value.map((item, index) => <li key={index}><ValueView value={item} /></li>)}</ul>;
+    if (fieldKey === "time_ranges") {
+      const ranges = value.map((item) => {
+        if (!item || typeof item !== "object") return "";
+        const range = item as Record<string, unknown>;
+        const start = String(range.start || range.start_time || "").trim();
+        const end = String(range.end || range.end_time || start).trim();
+        return start && end && start !== end ? `${start} 至 ${end}` : start || end;
+      }).filter(Boolean);
+      return <div className="history-time-ranges">{ranges.map((range) => <span key={range}>{range}</span>)}</div>;
+    }
+    return <ul className="history-value-list">{value.map((item, index) => <li key={index}><ValueView value={item} memberNames={memberNames} /></li>)}</ul>;
   }
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([key, item]) => !HIDDEN_FIELDS.has(key) && item !== "" && item != null && !(Array.isArray(item) && !item.length));
-  return <dl className="history-value-grid">{entries.map(([key, item]) => <div key={key}><dt>{FIELD_LABELS[key] || key}</dt><dd><ValueView value={item} /></dd></div>)}</dl>;
+  return <dl className="history-value-grid">{entries.map(([key, item]) => <div key={key}><dt>{FIELD_LABELS[key] || key}</dt><dd><ValueView value={item} memberNames={memberNames} fieldKey={key} /></dd></div>)}</dl>;
 }
 
-function ModuleCard({ module }: { module: HistoryModule }) {
+function ModuleCard({ module, memberNames }: { module: HistoryModule; memberNames: Record<string, string> }) {
+  const redacted = Boolean(module.content && typeof module.content === "object" && !Array.isArray(module.content) && (module.content as Record<string, unknown>).redacted);
   return <article className={`history-module module-${module.module_key}`}>
-    <div className="history-module-heading"><span>{module.module_label}</span><h3>{module.title}</h3></div>
-    <ValueView value={module.content} />
+    <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : module.title}</h3></div>
+    <ValueView value={module.content} memberNames={memberNames} />
   </article>;
 }
 
@@ -250,9 +271,14 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
     if (module.module_key === "summary") return false;
     return detailModule === "all" || module.module_key === detailModule;
   });
+  const memberNames = useMemo(() => Object.fromEntries(
+    ((detail?.stats?.member_aliases as Array<Record<string, unknown>> | undefined) || [])
+      .map((item) => [String(item.sender_id || ""), String(item.sender_name || "")])
+      .filter(([senderId, senderName]) => senderId && senderName),
+  ), [detail]);
 
   return <div className="workspace history-workspace">
-    <header className="topbar history-topbar"><div><p className="eyebrow">LOCAL · HISTORY INDEX</p><h1>历史中心</h1></div><button className="button secondary" disabled={busy} onClick={() => refreshHistory(true)}>{busy ? "刷新中…" : "刷新与导入"}</button></header>
+    <header className="topbar history-topbar"><div><h1>历史中心</h1></div><button className="button secondary" disabled={busy} onClick={() => refreshHistory(true)}>{busy ? "刷新中…" : "刷新与导入"}</button></header>
     <section className="notice history-notice" aria-live="polite"><strong>本地历史</strong><span>{message}</span></section>
     <div className="history-layout">
       <aside className="history-chat-pane">
@@ -286,7 +312,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       <section className="history-detail-pane">
         {!detail && <div className="history-empty detail-empty"><strong>选择一份历史报告</strong><span>这里会显示报告模块、全部版本和导出文件。</span></div>}
         {detail && <>
-          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)} · Schema {detail.schema_version}</span><h2>{detail.headline}</h2><p>{detail.one_line_summary}</p></div><div className="history-stat-row"><span>{detail.message_count} 条消息</span><span>{detail.participant_count} 人</span><span>{detail.resource_count} 项资源</span></div></div>
+          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)}</span><h2>{detail.headline}</h2><p>{detail.one_line_summary}</p></div><div className="history-stat-row"><span>{detail.message_count} 条消息</span><span>{detail.participant_count} 人</span><span>{detail.resource_count} 项资源</span></div></div>
           <div className="history-export-row">
             <button className="button primary small" disabled={!detail.exports.png.exists} onClick={() => openExport(detail.exports.png.path)}>打开 PNG</button>
             <button className="button secondary" disabled={!detail.exports.html.exists} onClick={() => openExport(detail.exports.html.path)}>打开 HTML</button>
@@ -295,7 +321,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
           </div>
           <div className="history-versions"><span>历史版本</span><div>{versions.map((version) => <button key={version.report_id} className={selectedReportId === version.report_id ? "selected" : ""} onClick={() => { setSelectedReportId(version.report_id); setDetailModule("all"); }}>v{version.version}<small>{version.generated_at.slice(5, 16)}</small></button>)}</div></div>
           {detailModule !== "all" && <div className="history-module-focus"><span>当前模块：{MODULE_OPTIONS.find(([key]) => key === detailModule)?.[1] || detailModule}</span><button onClick={() => setDetailModule("all")}>查看全部</button></div>}
-          <div className="history-module-list">{visibleModules.map((module) => <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} />)}{!visibleModules.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}</div>
+          <div className="history-module-list">{visibleModules.map((module) => <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} />)}{!visibleModules.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}</div>
         </>}
       </section>
     </div>

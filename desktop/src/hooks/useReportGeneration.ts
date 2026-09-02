@@ -22,10 +22,12 @@ export function useReportGeneration({
   const [progress, setProgress] = useState<Progress | null>(null);
   const [result, setResult] = useState<GenerationResult | null>(null);
   const progressTimer = useRef<number | null>(null);
+  const elapsedTimer = useRef<number | null>(null);
 
   useEffect(
     () => () => {
       if (progressTimer.current) window.clearInterval(progressTimer.current);
+      if (elapsedTimer.current) window.clearInterval(elapsedTimer.current);
     },
     [],
   );
@@ -47,8 +49,17 @@ export function useReportGeneration({
     setMessage(scheduled ? `正在执行 ${targetChatName || "已设群聊"} 的定时日报…` : "正在生成总结，进度会按真实处理阶段更新。");
     try {
       if (!scheduled) await saveSettings(false);
+      elapsedTimer.current = window.setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        setProgress((current) => current ? { ...current, elapsed_seconds: elapsed } : current);
+      }, 500);
       progressTimer.current = window.setInterval(() => {
-        bridge<Progress>("get_progress", { job_id: jobId }).then(setProgress).catch(() => undefined);
+        bridge<Progress>("get_progress", { job_id: jobId }).then((snapshot) => {
+          setProgress({
+            ...snapshot,
+            elapsed_seconds: Math.floor((Date.now() - startedAt) / 1000),
+          });
+        }).catch(() => undefined);
       }, 900);
       const generated = await bridge<GenerationResult>("generate", {
         job_id: jobId,
@@ -84,14 +95,22 @@ export function useReportGeneration({
         last_chat_name: targetChatName,
         summarized_chat_ids: summarizedChatIds,
       }));
-      setMessage(scheduled ? "定时日报已生成，图片与完整 HTML 分别可打开。" : "报告已生成，图片与完整 HTML 分别可打开。");
+      setMessage(scheduled ? "定时日报已生成，PNG 与 HTML 均可直接打开。" : "报告已生成，PNG 与 HTML 均可直接打开。");
       return generated;
     } catch (error) {
+      setProgress((current) => ({
+        stage: "failed",
+        percent: current?.percent || 0,
+        message: "生成失败",
+        elapsed_seconds: Math.floor((Date.now() - startedAt) / 1000),
+      }));
       setMessage(error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
       if (progressTimer.current) window.clearInterval(progressTimer.current);
       progressTimer.current = null;
+      if (elapsedTimer.current) window.clearInterval(elapsedTimer.current);
+      elapsedTimer.current = null;
       setBusy(false);
     }
   }
