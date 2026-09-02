@@ -112,18 +112,18 @@ $fileVersion = "$coreVersion.0"
 switch ($PackageKind) {
     "Test" {
         $installerName = "WeChat-Chat-Summary_${version}-test_x64-setup.exe"
-        $productName = "微信群聊总结（测试版）"
-        $fileDescription = "微信群聊总结 Windows 测试安装包"
+        $productName = "群聊拾遗（测试版）"
+        $fileDescription = "群聊拾遗 Windows 测试安装包"
     }
     "Prerelease" {
         $installerName = "WeChat-Chat-Summary_${version}_x64-setup.exe"
-        $productName = "微信群聊总结（预发布版）"
-        $fileDescription = "微信群聊总结 Windows 预发布安装包"
+        $productName = "群聊拾遗（预发布版）"
+        $fileDescription = "群聊拾遗 Windows 预发布安装包"
     }
     default {
         $installerName = "WeChat-Chat-Summary_${version}_x64-setup.exe"
-        $productName = "微信群聊总结"
-        $fileDescription = "微信群聊总结 Windows 安装包"
+        $productName = "群聊拾遗"
+        $fileDescription = "群聊拾遗 Windows 安装包"
     }
 }
 $outputFile = Join-Path $OutputDirectory $installerName

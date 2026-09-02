@@ -304,7 +304,7 @@ pub fn run() {
             updater::launch_verified_update
         ])
         .build(tauri::generate_context!())
-        .expect("error while building WeChat Chat Summary");
+        .expect("error while building 群聊拾遗");
     app.run(|app_handle, event| {
         if matches!(
             event,

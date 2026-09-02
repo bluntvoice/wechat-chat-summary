@@ -23,6 +23,7 @@ from .settings import (
 
 
 APP_IDENTIFIER = "com.bluntvoice.wechat-chat-summary"
+# 更名前测试安装包的数据迁移入口；属于兼容路径，不是当前产品显示名称。
 LEGACY_DESKTOP_DATA_DIR = Path(r"D:\工具\WeChat Chat Summary\data")
 LEGACY_MIGRATION_MARKER = ".legacy-data-migration-v1.json"
 MIGRATED_DATA_FILES = ("config.json", "secrets.env", "history.sqlite3")

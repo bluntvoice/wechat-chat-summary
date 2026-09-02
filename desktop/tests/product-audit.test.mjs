@@ -7,6 +7,10 @@ const guide = readFileSync(new URL("../src/components/GuideDialog.tsx", import.m
 const history = readFileSync(new URL("../src/pages/HistoryPage.tsx", import.meta.url), "utf8");
 const generation = readFileSync(new URL("../src/hooks/useReportGeneration.ts", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const tauriConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+const installer = readFileSync(new URL("../installer/test-installer.nsi", import.meta.url), "utf8");
+const buildScript = readFileSync(new URL("../scripts/build-windows-test-package.ps1", import.meta.url), "utf8");
 
 test("primary navigation uses a unified icon library and resets page scroll", () => {
   assert.match(app, /from "lucide-react"/);
@@ -42,4 +46,16 @@ test("history preview supports validated inline redaction with an auxiliary targ
   assert.match(history, /"redact_report"/);
   assert.match(history, /updated\.report_id/);
   assert.match(styles, /\.history-module\.redaction-selectable/);
+});
+
+test("all user-visible desktop product names use 群聊拾遗", () => {
+  assert.equal(tauriConfig.productName, "群聊拾遗");
+  assert.equal(tauriConfig.app.windows[0].title, "群聊拾遗");
+  assert.match(html, /<title>群聊拾遗<\/title>/);
+  assert.match(installer, /InstallDir "\$LOCALAPPDATA\\Programs\\群聊拾遗"/);
+  assert.match(installer, /File "\/oname=群聊拾遗\.exe"/);
+  assert.match(installer, /CreateShortcut "\$DESKTOP\\群聊拾遗\.lnk"/);
+  assert.match(installer, /WriteUninstaller "\$INSTDIR\\卸载群聊拾遗\.exe"/);
+  assert.doesNotMatch(buildScript, /微信群聊总结/);
+  assert.doesNotMatch(buildScript, /WeChat Chat Summary/);
 });

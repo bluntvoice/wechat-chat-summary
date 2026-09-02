@@ -69,7 +69,7 @@ Draft/Prerelease，使用 SemVer 比较，并只接受精确命名的 Windows x6
 ```
 
 默认产物目录为仓库根目录下 `artifacts\windows`，安装向导默认安装到当前用户的
-`%LOCALAPPDATA%\Programs\WeChat Chat Summary` 并允许改选其他目录。卸载脚本只移除主程序、
+`%LOCALAPPDATA%\Programs\群聊拾遗` 并允许改选其他目录。卸载脚本只移除主程序、
 分析引擎和快捷方式，不删除用户自定义报告目录。软件文件统一位于安装根目录的 `program`，升级和
 卸载只递归处理该目录；App Local Data、SQLite、API/MCP 设置、热力图缓存及安装根目录中的其他文件
 不在递归删除范围。脚本会从参数、`MAKENSIS_PATH`、PATH 和
