@@ -18,6 +18,16 @@ REDPACKET_URL_MARKERS = (
     "/hongbao/",
     "sendid=",
 )
+RESOURCE_PLATFORMS = (
+    ("xiaohongshu", "小红书", ("xiaohongshu.com", "xhslink.com")),
+    ("taobao", "淘宝 / 天猫", ("taobao.com", "tmall.com", "tb.cn")),
+    ("wechat", "公众号", ("mp.weixin.qq.com",)),
+    ("zhihu", "知乎", ("zhihu.com",)),
+    ("jd", "京东", ("jd.com", "3.cn")),
+    ("douyin", "抖音", ("douyin.com", "iesdouyin.com")),
+    ("bilibili", "哔哩哔哩", ("bilibili.com", "b23.tv")),
+    ("weibo", "微博", ("weibo.com", "weibo.cn")),
+)
 
 
 def _clean_url(value: str) -> str:
@@ -29,6 +39,21 @@ def _clean_url(value: str) -> str:
     except ValueError:
         return ""
     return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+
+def classify_resource_platform(value: str, kind: str = "link") -> dict[str, str]:
+    """仅按资源类型和 URL 主机名确定平台，不依赖模型猜测。"""
+
+    if str(kind or "").casefold() == "file":
+        return {"platform": "file", "platform_label": "文件"}
+    url = _clean_url(value)
+    if not url:
+        return {"platform": "web", "platform_label": "网页"}
+    host = urllib.parse.urlsplit(url).netloc.casefold().split(":", 1)[0].rstrip(".")
+    for platform, label, domains in RESOURCE_PLATFORMS:
+        if any(host == domain or host.endswith(f".{domain}") for domain in domains):
+            return {"platform": platform, "platform_label": label}
+    return {"platform": "web", "platform_label": "网页"}
 
 
 def _resource_id(message: StructuredMessage, kind: str, identity: str) -> str:
@@ -111,6 +136,7 @@ def extract_resources(messages: list[StructuredMessage]) -> list[dict[str, Any]]
                         "file_size": int(metadata.get("file_size") or 0),
                         "source": normalize_text(metadata.get("source", ""), max_len=80),
                         "context_summary": context or normalize_text(metadata.get("summary", ""), max_len=180),
+                        **classify_resource_platform(url, kind),
                     }
                 )
 
@@ -138,6 +164,7 @@ def extract_resources(messages: list[StructuredMessage]) -> list[dict[str, Any]]
                     "file_size": 0,
                     "source": "普通 URL",
                     "context_summary": context,
+                    **classify_resource_platform(url),
                 }
             )
     return resources

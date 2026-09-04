@@ -166,6 +166,7 @@ def default_settings() -> dict[str, Any]:
         "export_root": str(DEFAULT_OUTPUT_ROOT or ""),
         "image_dpi": 300,
         "range_mode": "single",
+        "range_output_mode": "daily",
         "last_chat_id": "",
         "last_chat_name": "",
         "schedule_enabled": False,
@@ -271,6 +272,7 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
         "export_root",
         "image_dpi",
         "range_mode",
+        "range_output_mode",
         "last_chat_id",
         "last_chat_name",
         "schedule_enabled",
@@ -310,6 +312,10 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
     if schedule_date_mode not in {"today", "yesterday"}:
         raise ValueError("定时报告日期仅支持 today 或 yesterday。")
     current["schedule_date_mode"] = schedule_date_mode
+    range_output_mode = str(current.get("range_output_mode") or "daily").strip().lower()
+    if range_output_mode not in {"daily", "combined"}:
+        raise ValueError("自定义日期生成方式仅支持 daily 或 combined。")
+    current["range_output_mode"] = range_output_mode
     port = int(current.get("mcp_port") or MCP_DEFAULT_PORT)
     if port < 1024 or port > 65535:
         raise ValueError("MCP 端口必须在 1024 到 65535 之间。")

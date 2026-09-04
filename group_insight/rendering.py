@@ -10,10 +10,46 @@ from pathlib import Path
 from typing import Any
 
 from .redaction import REDACTION_NOTICE
+from .report_model import BLOCKED_OBSERVATION_PHRASES
+from .resources import classify_resource_platform
 
 
 def _esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
+
+
+def _discussion_segments(value: Any, limit: int = 5) -> list[str]:
+    """把讨论脉络整理为少量可读段落；只分段，不改写内容。"""
+
+    text = str(value or "").strip()
+    if not text:
+        return []
+    explicit = [
+        re.sub(r"^\s*(?:[-*•]|\d+[.、）)])\s*", "", part).strip()
+        for part in re.split(r"[\r\n]+", text)
+        if part.strip()
+    ]
+    if len(explicit) > 1:
+        if len(explicit) <= limit:
+            return explicit
+        return [*explicit[: limit - 1], " ".join(explicit[limit - 1 :])]
+    if len(text) <= 120:
+        return [text]
+
+    sentences = [part.strip() for part in re.findall(r".*?(?:[。！？!?]+|$)", text) if part.strip()]
+    if len(sentences) < 2:
+        return [text]
+    segments: list[str] = []
+    current = ""
+    for sentence in sentences:
+        if current and len(current) + len(sentence) > 105 and len(segments) < limit - 1:
+            segments.append(current)
+            current = sentence
+        else:
+            current += sentence
+    if current:
+        segments.append(current)
+    return segments
 
 
 def _member_names(stats: dict[str, Any]) -> dict[str, str]:
@@ -219,7 +255,17 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     top_speakers = [item for item in stats.get("top_speakers", []) or [] if isinstance(item, dict)]
     resources = content.get("resources", {}) if isinstance(content.get("resources"), dict) else {}
     groups = [item for item in resources.get("groups", []) or [] if isinstance(item, dict)]
-    observations = list(content.get("ai_observations", []) or [])
+    observations = [
+        item for item in content.get("ai_observations", []) or []
+        if not any(
+            phrase in (
+                str(item)
+                if not isinstance(item, dict)
+                else " ".join(str(item.get(key) or "") for key in ("title", "content", "summary"))
+            )
+            for phrase in BLOCKED_OBSERVATION_PHRASES
+        )
+    ]
     if not observations and isinstance(content.get("mood"), dict):
         mood = content["mood"]
         if mood.get("label") or mood.get("reason"):
@@ -242,7 +288,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     theme_html = "".join(
         _redacted_html(item)
         if _is_redacted(item)
-        else f'<article class="brief-card"><h3>{resolved(_text(item, "title"))}</h3><p>{resolved(_text(item, "summary"))}</p></article>'
+        else f'<article class="brief-card"><h3>{topic_resolved(_text(item, "title"))}</h3><p>{topic_resolved(_text(item, "summary"))}</p></article>'
         for item in themes[:5]
         if _is_redacted(item) or _text(item, "title", "summary")
     )
@@ -324,11 +370,16 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
                 return resolve_value(f"[[user:{sender_id}]]")
             return resolve_value(item.get("sender", ""))
 
+        def resource_platform(item: dict[str, Any]) -> dict[str, str]:
+            return classify_resource_platform(
+                str(item.get("url") or ""), str(item.get("type") or "link")
+            )
+
         items_html = "".join(
             _redacted_html(item, "div")
             if _is_redacted(item)
             else '<div class="resource-item">'
-            f'<span class="resource-kind">{"文件" if item.get("type") == "file" else "链接"}</span>'
+            f'<span class="resource-kind platform-{_esc(resource_platform(item)["platform"])}">{_esc(resource_platform(item)["platform_label"])}</span>'
             f'<div><strong>{resolve_value(item.get("title") or item.get("file_name") or item.get("url"))}</strong>'
             f'<p>{resolve_value(item.get("context_summary", ""))}</p>'
             f'<small>{resource_sender(item)} · {resolved(item.get("sent_at", ""))}</small>'
@@ -346,7 +397,6 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
 
     legacy_serious_specs = (
         ("明确结论", content.get("decisions", []) or [], ("content",)),
-        ("行动事项", content.get("action_items", []) or [], ("task",)),
         ("开放问题", content.get("open_questions", []) or [], ("question", "content")),
         ("风险提示", content.get("risk_flags", []) or [], ("content",)),
     )
@@ -360,6 +410,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
                 f'<div class="section-body">{_redacted_html(topic)}</div></article>'
             )
         flow = topic.get("discussion_flow") or topic.get("summary") or ""
+        flow_segments = _discussion_segments(flow)
         outcome = topic.get("outcome") if isinstance(topic.get("outcome"), dict) else {}
         legacy_result = topic.get("result") if isinstance(topic.get("result"), dict) else {}
         outcome_text = outcome.get("content") or legacy_result.get("summary") or topic.get("takeaway") or ""
@@ -367,7 +418,6 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
         if legacy_status in {"pending", "no_conclusion"}:
             outcome_text = ""
         extras = [
-            render_simple_items("行动事项", topic.get("action_items", []) or [], "task", resolve_value=topic_resolved),
             render_simple_items("开放问题", topic.get("open_questions", []) or [], "question", "content", resolve_value=topic_resolved),
             render_simple_items("风险提示", topic.get("risk_flags", []) or [], "content", resolve_value=topic_resolved),
         ]
@@ -390,7 +440,11 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             f'<article class="main-topic"><div class="section-index">{index}</div><div class="section-body">'
             + f'<h3>{topic_resolved(topic.get("title", "主要话题"))}</h3>'
             + time_ranges_html(topic)
-            + (f'<p class="discussion-flow">{topic_resolved(flow)}</p>' if flow else "")
+            + (
+                f'<ul class="discussion-flow discussion-points">{"".join(f"<li>{topic_resolved(segment)}</li>" for segment in flow_segments)}</ul>'
+                if len(flow_segments) > 1
+                else (f'<p class="discussion-flow">{topic_resolved(flow)}</p>' if flow else "")
+            )
             + (_redacted_html(outcome) if _is_redacted(outcome) else (f'<div class="topic-result concluded"><span>讨论落点</span><p>{topic_resolved(outcome_text)}</p></div>' if outcome_text else ""))
             + "".join(extras)
             + (f'<div class="topic-extra"><h4>相关原话</h4>{quote_html}</div>' if quote_html else "")
@@ -484,16 +538,16 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
 .eyebrow{{display:inline-flex;padding:3px 10px;border-radius:99px;background:#efffe9aa;font-size:12px;font-weight:800;letter-spacing:.12em}} h1{{font-size:25px;line-height:1.3;margin:13px 0 9px;letter-spacing:-.02em}} .one-line{{font-size:14px;margin:0;color:#314b37}}
 .metrics{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}} .metric{{background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.65);border-radius:8px;padding:10px;min-width:0}} .metric span{{display:block;font-size:10px;color:var(--muted)}} .metric strong{{font-size:20px;margin-right:2px}} .metric small{{font-size:10px}}
 .card{{background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:10px;padding:14px 12px;box-shadow:var(--shadow)}} .card>h2{{font-size:17px;margin:0 0 10px;font-weight:900}} h3{{font-size:16px;margin:0 0 5px}} h4{{font-size:13px;margin:0 0 5px}} p{{margin:0;font-size:14px;color:#526159}}
-.brief-grid{{display:grid;gap:8px}} .brief-card{{padding:12px;border-radius:8px;background:linear-gradient(180deg,#fffdf5,#fff7fb);border:1px solid rgba(225,106,151,.15)}} .brief-card h3{{font-size:16px;color:#e16a97}} .brief-card p{{font-size:14px}}
-.main-topic{{display:grid;grid-template-columns:32px 1fr;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}} .main-topic:last-child{{border-bottom:0;padding-bottom:0}} .section-index{{width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-top:1px}} .section-body{{min-width:0}} .topic-time{{margin:-1px 0 6px;color:var(--muted);font-size:11px;line-height:1.55}} .topic-member{{color:#3478bd;font-weight:800}} .discussion-flow{{line-height:1.72;font-size:14px}} .topic-extra{{margin-top:8px;padding:8px 9px;border-radius:8px;background:#f8fbf6}} .topic-extra ul{{margin:0;padding-left:18px;font-size:12px;color:#526159;line-height:1.65}} .topic-result{{display:flex;gap:7px;align-items:flex-start;margin-top:8px;padding:7px 9px;border-left:3px solid #78b889;border-radius:6px;background:#f2f9f2}} .topic-result span{{flex:0 0 auto;padding:1px 6px;border-radius:99px;background:#dff0df;font-size:10px;color:#477557}} .topic-result p{{font-size:12px}}
+.brief-grid{{display:grid;gap:8px}} .brief-card{{padding:12px;border-radius:8px;background:linear-gradient(180deg,#fffdf5,#fff7fb);border:1px solid rgba(225,106,151,.15)}} .brief-card h3{{font-size:16px;color:#e16a97}} .brief-card p{{font-size:14px}} .topic-member{{color:#3478bd;font-weight:800}}
+.main-topic{{display:grid;grid-template-columns:32px 1fr;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}} .main-topic:last-child{{border-bottom:0;padding-bottom:0}} .section-index{{width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-top:1px}} .section-body{{min-width:0}} .topic-time{{margin:-1px 0 6px;color:var(--muted);font-size:11px;line-height:1.55}} .discussion-flow{{line-height:1.72;font-size:14px}} .discussion-points{{margin:7px 0 0;padding-left:19px;color:#526159}} .discussion-points li+li{{margin-top:6px}} .topic-extra{{margin-top:8px;padding:8px 9px;border-radius:8px;background:#f8fbf6}} .topic-extra ul{{margin:0;padding-left:18px;font-size:12px;color:#526159;line-height:1.65}} .topic-result{{display:flex;gap:7px;align-items:flex-start;margin-top:8px;padding:7px 9px;border-left:3px solid #78b889;border-radius:6px;background:#f2f9f2}} .topic-result span{{flex:0 0 auto;padding:1px 6px;border-radius:99px;background:#dff0df;font-size:10px;color:#477557}} .topic-result p{{font-size:12px}}
 .observation{{padding:12px 13px;border-radius:11px;background:#f5faf2;margin-top:8px}} .observation:first-of-type{{margin-top:0}} .observation:nth-child(2n){{background:#fff9e8}} .supplement{{background:#f7f5fb}}
 .member-list{{list-style:none;padding:0;margin:0;display:grid;gap:6px}} .member-list li{{display:flex;align-items:center;gap:10px;padding:9px 10px;background:#f7fbf5;border-radius:10px}} .rank{{display:inline-flex;align-items:center;justify-content:center;flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:#dff0df;color:#3f8757;font:700 12px ui-monospace}} .member-list strong{{font-size:13px}} .member-list p{{font-size:12px}}
 .activity-block{{padding:12px 0;border-top:1px dashed #dfe8da}} .activity-block:first-of-type{{border-top:0;padding-top:0}} .speaker-list{{list-style:none;padding:0;margin:0;display:grid;gap:6px}} .speaker-row{{display:grid;grid-template-columns:28px minmax(90px,.8fr) 1fr 48px;align-items:center;gap:9px;padding:8px 10px;background:#f7fbf5;border-radius:10px}} .speaker-row strong{{font-size:12px;overflow-wrap:anywhere}} .speaker-row i{{height:8px;border-radius:8px;background:#e7efe2;overflow:hidden}} .speaker-row i b{{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,#8bd092,#5eae79)}} .speaker-count{{font-size:11px;color:var(--muted);text-align:right;white-space:nowrap}}
 .words{{display:flex;gap:8px 11px;align-items:baseline;flex-wrap:wrap;padding:6px 2px}} .word{{color:#4b8e60;font-weight:700;font-size:calc(11px + var(--w) * 1.5px)}} .time-row{{display:grid;grid-template-columns:58px 1fr 28px;align-items:center;gap:8px;font-size:11px;margin:7px 0}} .time-row i{{height:8px;border-radius:8px;background:#edf2e9;overflow:hidden}} .time-row b{{display:block;height:100%;background:linear-gradient(90deg,#8bd092,#5eae79);border-radius:8px}} .time-row strong{{text-align:right}}
-.resource-group{{border:1px solid rgba(225,106,151,.15);border-radius:8px;padding:11px;margin-top:8px;background:linear-gradient(180deg,#fffdf5,#fff7fb)}} .resource-group header{{display:flex;justify-content:space-between;gap:10px}} .resource-group header span{{font-size:11px;color:var(--muted)}} .group-note{{font-size:12px;margin-bottom:7px}} .resource-item{{display:grid;grid-template-columns:36px 1fr;gap:8px;border-top:1px dashed #e8e6d7;padding:9px 0}} .resource-kind{{font-size:10px;color:#48775a;background:#dff0df;border-radius:6px;height:max-content;text-align:center;padding:2px}} .resource-item strong{{font-size:12px;display:block}} .resource-item p,.resource-item small,.resource-item a{{display:block;font-size:10px;color:var(--muted)}} .resource-item a{{color:#3b79bb}}
+.resource-group{{border:1px solid rgba(225,106,151,.15);border-radius:8px;padding:11px;margin-top:8px;background:linear-gradient(180deg,#fffdf5,#fff7fb)}} .resource-group header{{display:flex;justify-content:space-between;gap:10px}} .resource-group header span{{font-size:11px;color:var(--muted)}} .group-note{{font-size:12px;margin-bottom:7px}} .resource-item{{display:grid;grid-template-columns:62px 1fr;gap:8px;border-top:1px dashed #e8e6d7;padding:9px 0}} .resource-kind{{font-size:10px;color:#48775a;background:#dff0df;border-radius:6px;height:max-content;text-align:center;padding:2px 4px;font-weight:800}} .platform-xiaohongshu{{background:#ffe8e8;color:#a9343c}} .platform-taobao{{background:#fff0dd;color:#a65314}} .platform-wechat{{background:#e2f4e5;color:#267044}} .platform-zhihu{{background:#e6f1ff;color:#2767a3}} .platform-jd{{background:#ffe8e8;color:#ad2d2d}} .platform-douyin{{background:#ecebed;color:#443d49}} .platform-bilibili{{background:#e5f5fb;color:#28738f}} .platform-weibo{{background:#fff0de;color:#9b541d}} .platform-web{{background:#edf1ef;color:#56645c}} .platform-file{{background:#e7f1e8;color:#3f704c}} .resource-item strong{{font-size:13px;display:block}} .resource-item p{{font-size:12px;line-height:1.55}} .resource-item small,.resource-item a{{display:block;font-size:11px;color:var(--muted)}} .resource-item a{{color:#3b79bb}}
 .quote-item{{padding:8px 0}} blockquote{{margin:5px 0 0;padding:12px;border-radius:8px;background:linear-gradient(180deg,#fffdf5,#fdf2f8);border:1px solid rgba(225,106,151,.15);font-size:13px;color:#526159}} .quote-item p{{font-size:11px;margin:6px 9px 0}} .quote-meta{{font-size:10px;color:var(--green-dark);font-weight:700}}
 .redacted-card{{display:flex!important;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 13px!important;margin:6px 0;border:1px dashed #d5b96a!important;border-radius:10px;background:#fff9e5!important;list-style:none}} .redacted-card span{{font-size:10px;color:#91783a}} .redacted-card strong{{font-size:12px;color:#6b5a32}}
-.report-end{{text-align:center}} .report-end p{{font-size:13px;color:#43584a}} .footer{{text-align:center;padding:14px 6px 0;font-size:10px;color:#8b978f}} .empty{{font-size:12px;color:#87928b}}
+.report-end{{text-align:center}} .report-end p{{font-size:13px;color:#43584a}} .footer{{display:grid;gap:2px;text-align:center;padding:14px 6px 0;font-size:11px;line-height:1.6;color:#8b978f}} .empty{{font-size:12px;color:#87928b}}
 @media(max-width:520px){{.metrics{{grid-template-columns:repeat(2,1fr)}}}}
 </style></head><body><main class="page">
 <header class="hero"><span class="eyebrow">群聊拾遗</span><h1>{resolved(content.get('headline'))}</h1><p class="one-line">{resolved(content.get('one_line_summary'))}</p><div class="metrics">{metric_html}</div></header>
@@ -502,7 +556,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
 {observation_section}
 {activity_section}
 <section class="card report-end"><h2>报告结尾</h2><p>{resolved(conclusion)}</p></section>
-<footer class="footer">报告由群聊拾遗生成 · {_esc(chat.get('name'))} · {_esc(period.get('report_date'))}{(' · ' + _esc(generated_at)) if generated_at else ''}</footer>
+<footer class="footer"><span>报告由群聊拾遗生成 · {_esc(chat.get('name'))} · {_esc(period.get('report_date'))}</span>{(f'<span>生成时间：{_esc(generated_at)}</span>' if generated_at else '')}</footer>
 </main></body></html>"""
 
 

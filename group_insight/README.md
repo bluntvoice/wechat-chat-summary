@@ -116,11 +116,13 @@ $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 
 当前使用向后兼容的统一 `report schema 2.2`：PNG 与 HTML 呈现相同的完整信息，按
 “今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 → 今日活跃情况 → 报告结尾”组织；
-同一语义话题可合并多个不连续时间区间，结论、行动、问题、风险、引用和资源嵌入对应话题。
+同一语义话题可合并多个不连续时间区间，结论、问题、风险、引用和资源嵌入对应话题。
 无法可靠关联的补充信息进入 AI 今日观察，未归类资源保留为其他资源；JSON 与 SQLite 历史索引
-保存同一套结构。链接卡片、普通
+保存同一套结构。较长讨论脉络保留换行并在渲染时形成 2–5 个短段；今日速览和主要话题中的唯一成员昵称
+使用蓝色加粗。新报告不提取行动事项，Schema 2.2 兼容字段固定为空，旧数据保留但不展示或索引。链接卡片、普通
 URL 与文件元数据会先确定性提取，再由 AI 按当日主题归类；模型遗漏或不可靠归类会本地回退
-到相近主题或“其他 / 未归类”。红包消息、疑似红包领取页和红包素材链接在提取阶段过滤。
+到相近主题或“其他 / 未归类”。小红书、淘宝 / 天猫、公众号、知乎、京东、抖音、哔哩哔哩、微博等
+平台通过 URL 主机名确定性标记；红包消息、疑似红包领取页和红包素材链接在提取阶段过滤。
 成员显示名按群昵称、微信网名、账号 ID 的顺序解析，并排除本机联系人备注；名称字段中的
 `U+007F`（DEL）占位字符会在匹配前自动移除。同一显示名同时
 对应两个及以上不同账号，或显示名精确命中另一成员账号 ID 时，会判定为上游昵称异常。配置
@@ -148,7 +150,7 @@ Tauri 解析的 Windows 用户数据目录，只保存报告结构、独立每�
 历史中心通过 JSONL Bridge 调用 `list_history_chats`、`list_history_reports`、
 `get_history_report`、`search_history`、`get_report_versions`、`list_history_resources` 和
 `refresh_history_state`，React 不直接访问 SQLite。HistoryStore 从 Schema 2.2 的
-`content.topics[*]` 派生主要话题、讨论结论、行动事项、开放问题、风险提示、代表性原话和资源等
+`content.topics[*]` 派生主要话题、讨论结论、开放问题、风险提示、代表性原话和资源等
 逻辑模块，并保留 FTS5 + 中文子串回退。报告列表默认显示最新版本，旧版本始终保留。
 
 生成页的“已总结”状态按 WeChatDataAnalysis 返回的 `chat.id` 与 SQLite 有效报告匹配。SQLite 是
@@ -182,7 +184,8 @@ MCP Server 也不读取 DeepSeek Key。
 原始消息单次最多读取 31 天、2000 条和 100 万字符，不长期持久化。`submit_report` 的输入上限为
 2 MiB；旧 2.1 顶层 `decisions`、`action_items`、`open_questions`、`risk_flags`、`quotes` 不能作为
 新报告主存储结构。新报告只能使用 `content.topics[*]` 下的 `discussion_flow`、`outcome`、
-`action_items`、`open_questions`、`risk_flags`、`quotes` 与 `resource_ids`。
+`open_questions`、`risk_flags`、`quotes` 与 `resource_ids`；其中 Schema 2.2 要求的 `action_items`
+仅作为兼容字段保留并固定为空数组。
 
 桌面端的“定时生成报告”使用软件内置定时器，可选择生成触发当日或昨日的报告，并可随时关闭；软件关闭时不执行，
 并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划注册模块相互独立。

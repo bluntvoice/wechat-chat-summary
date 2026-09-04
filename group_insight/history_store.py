@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .desktop_config import ensure_desktop_data_dir
+from .report_model import BLOCKED_OBSERVATION_PHRASES
 from .report_schema import SCHEMA_VERSION, upgrade_legacy_report
 
 
@@ -20,7 +21,6 @@ HISTORY_MODULE_ORDER = (
     "ai_observations",
     "member_activity",
     "outcome",
-    "action_items",
     "open_questions",
     "risk_flags",
     "quotes",
@@ -33,7 +33,6 @@ HISTORY_MODULE_LABELS = {
     "ai_observations": "AI 今日观察",
     "member_activity": "成员 / 活跃情况",
     "outcome": "讨论结论",
-    "action_items": "行动事项",
     "open_questions": "开放问题",
     "risk_flags": "风险提示",
     "quotes": "代表性原话",
@@ -368,6 +367,9 @@ class HistoryStore:
                 )
 
         for source_index, item in enumerate(content.get("ai_observations", []) or []):
+            observation_text = json.dumps(item, ensure_ascii=False, default=str)
+            if any(phrase in observation_text for phrase in BLOCKED_OBSERVATION_PHRASES):
+                continue
             add(
                 "ai_observations",
                 cls._item_title(item, "AI 今日观察"),
@@ -408,7 +410,7 @@ class HistoryStore:
                 }
                 outcome_target = target_id(outcome, f"topics:{topic_index}:outcome") if isinstance(topic.get("outcome"), dict) else ""
                 add("outcome", cls._item_title(value, topic_context["topic_title"]), value, outcome_target)
-            for module_key in ("action_items", "open_questions", "risk_flags", "quotes"):
+            for module_key in ("open_questions", "risk_flags", "quotes"):
                 for item_index, item in enumerate(topic.get(module_key, []) or []):
                     value = {**topic_context, **item} if isinstance(item, dict) else {
                         **topic_context, "content": item,
@@ -423,7 +425,7 @@ class HistoryStore:
         for source_index, item in enumerate(legacy_outcomes):
             item_target = target_id(item, f"decisions:{source_index}") if source_index < decision_count else ""
             add("outcome", cls._item_title(item, "讨论结论"), item, item_target)
-        for module_key in ("action_items", "open_questions", "risk_flags", "quotes"):
+        for module_key in ("open_questions", "risk_flags", "quotes"):
             for source_index, item in enumerate(content.get(module_key, []) or []):
                 add(
                     module_key,
@@ -876,6 +878,8 @@ class HistoryStore:
             module_search = ""
             if module_key != "all":
                 module_search = " AND f.module_key = ?"
+            else:
+                module_search = " AND f.module_key <> 'action_items'"
             clauses.append(
                 "EXISTS (SELECT 1 FROM report_search_fts AS f "
                 f"WHERE f.report_id = ranked.report_id{module_search} "
@@ -930,7 +934,7 @@ class HistoryStore:
             raise ValueError(f"历史报告结构化数据损坏: {exc}") from exc
         module_rows = self.connection.execute(
             """SELECT module_key, ordinal, title, content_json
-               FROM report_modules WHERE report_id=?""",
+               FROM report_modules WHERE report_id=? AND module_key <> 'action_items'""",
             (report_id,),
         ).fetchall()
         order = {key: index for index, key in enumerate(HISTORY_MODULE_ORDER)}
@@ -1089,6 +1093,8 @@ class HistoryStore:
         if module_key != "all":
             clauses.append("f.module_key = ?")
             parameters.append(module_key)
+        else:
+            clauses.append("f.module_key <> 'action_items'")
         if version_strategy == "latest":
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM reports AS newer "

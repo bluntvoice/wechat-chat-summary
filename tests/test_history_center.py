@@ -135,7 +135,7 @@ class HistoryCenterMigrationTests(unittest.TestCase):
                 modules = store._module_keys(metadata["report_id"])
                 self.assertIn("topics", modules)
                 self.assertIn("outcome", modules)
-                self.assertIn("action_items", modules)
+                self.assertNotIn("action_items", modules)
                 self.assertIn("resources", modules)
                 self.assertFalse(store.search_reports("旧索引"))
 
@@ -164,7 +164,7 @@ class HistoryCenterQueryTests(unittest.TestCase):
                 self.assertTrue(
                     {
                         "topics", "ai_observations", "member_activity", "outcome",
-                        "action_items", "open_questions", "risk_flags", "quotes", "resources",
+                        "open_questions", "risk_flags", "quotes", "resources",
                     }.issubset(module_keys)
                 )
                 topic = next(item for item in detail["modules"] if item["module_key"] == "topics")
@@ -179,7 +179,7 @@ class HistoryCenterQueryTests(unittest.TestCase):
                 self.assertEqual(target_ids["topics"], ["topics:0"])
                 self.assertEqual(target_ids["ai_observations"], ["ai_observations:0"])
                 self.assertEqual(target_ids["outcome"], ["topics:0:outcome"])
-                self.assertEqual(target_ids["action_items"], ["topics:0:action_items:0"])
+                self.assertNotIn("action_items", target_ids)
                 self.assertEqual(target_ids["resources"], ["resources:0:0", "resources:0:1"])
                 valid_target_ids = {item["id"] for item in list_redaction_targets(history_document(root))}
                 self.assertTrue({target_id for values in target_ids.values() for target_id in values}.issubset(valid_target_ids))
@@ -211,10 +211,8 @@ class HistoryCenterQueryTests(unittest.TestCase):
             root = Path(temp_dir)
             with HistoryStore(root / "history.sqlite3") as store:
                 store.upsert_report(history_document(root))
-                self.assertEqual(
-                    store.list_reports(module_filter="action_items", keyword="准备")["total"],
-                    1,
-                )
+                with self.assertRaisesRegex(ValueError, "未知历史模块筛选"):
+                    store.list_reports(module_filter="action_items", keyword="准备")
                 self.assertEqual(
                     store.list_reports(module_filter="resources", keyword="准备")["total"],
                     0,
@@ -234,7 +232,6 @@ class HistoryCenterQueryTests(unittest.TestCase):
                     "张三",
                     "美国尾程清关",
                     "采用新清关渠道",
-                    "准备尾程清关资料",
                     "海关编码",
                     "资料缺失",
                     "先把清单核完",
@@ -273,9 +270,11 @@ class HistoryCenterQueryTests(unittest.TestCase):
                 detail = store.get_report_detail(report_id)
                 keys = {item["module_key"] for item in detail["modules"]}
                 self.assertIn("outcome", keys)
-                self.assertIn("action_items", keys)
+                self.assertNotIn("action_items", keys)
                 self.assertGreater(store.search_history("旧版讨论结论")["total"], 0)
-                self.assertGreater(store.search_history("旧版行动事项")["total"], 0)
+                self.assertEqual(store.search_history("旧版行动事项")["total"], 0)
+                self.assertEqual(store.list_reports(keyword="旧版行动事项")["total"], 0)
+                self.assertEqual(detail["content"]["action_items"], [{"task": "旧版行动事项"}])
 
 
 if __name__ == "__main__":

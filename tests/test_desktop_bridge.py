@@ -216,7 +216,7 @@ class DesktopBridgeTests(unittest.TestCase):
             report_id = reports["items"][0]["report_id"]
             detail = handle("get_history_report", {"report_id": report_id})
             self.assertEqual(detail["chat_id"], "history@chatroom")
-            self.assertIn("action_items", {item["module_key"] for item in detail["modules"]})
+            self.assertNotIn("action_items", {item["module_key"] for item in detail["modules"]})
             versions = handle("get_report_versions", {"report_id": report_id})["items"]
             self.assertEqual([item["version"] for item in versions], [1])
             search = handle("search_history", {"keyword": "尾程清关"})

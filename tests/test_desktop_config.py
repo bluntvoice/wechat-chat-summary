@@ -130,6 +130,18 @@ class DesktopConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 save_desktop_settings({"schedule_date_mode": "two-days-ago"})
 
+    def test_custom_range_defaults_to_daily_and_rejects_invalid_output_mode(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            self.assertEqual(load_desktop_settings()["range_output_mode"], "daily")
+            self.assertEqual(
+                save_desktop_settings({"range_output_mode": "combined"})["range_output_mode"],
+                "combined",
+            )
+            with self.assertRaises(ValueError):
+                save_desktop_settings({"range_output_mode": "weekly"})
+
 
 if __name__ == "__main__":
     unittest.main()

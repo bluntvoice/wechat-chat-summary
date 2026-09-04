@@ -2,7 +2,7 @@ import { CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import RedactionEditor from "../components/RedactionEditor";
 import { useReportGeneration } from "../hooks/useReportGeneration";
-import { localDate, scheduledReportDate } from "../services/dates";
+import { inclusiveDateRange, localDate, scheduledReportDate } from "../services/dates";
 import { filterAndSortChats, type ChatListFilter } from "../services/chatList";
 import { bridge, openSystemPath } from "../services/desktopBridge";
 import {
@@ -28,7 +28,7 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
   const [selectedRedactions, setSelectedRedactions] = useState<string[]>([]);
   const [redactionEditorOpen, setRedactionEditorOpen] = useState(false);
   const [redactionBusy, setRedactionBusy] = useState(false);
-  const { busy, setBusy, progress, result, setResult, runGeneration } = useReportGeneration({
+  const { busy, setBusy, progress, result, setResult, batchResults, runGeneration, runBatchGeneration } = useReportGeneration({
     settings,
     setSettings,
     setMessage,
@@ -130,7 +130,24 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
     const start = settings.range_mode === "single" ? reportDate : startDate;
     const end = settings.range_mode === "single" ? reportDate : endDate;
     if (end < start) return setMessage("结束日期不能早于开始日期。");
-    try { await runGeneration(chatId, selectedChat?.name || "", start, end, settings.range_mode); } catch { /* 状态已在 runGeneration 中展示 */ }
+    try {
+      if (settings.range_mode === "custom" && settings.range_output_mode === "daily") {
+        await runBatchGeneration(chatId, selectedChat?.name || "", inclusiveDateRange(start, end, 7));
+      } else {
+        await runGeneration(chatId, selectedChat?.name || "", start, end, settings.range_mode);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function retryBatchDate(date: string) {
+    if (!chatId) return;
+    try {
+      await runBatchGeneration(chatId, selectedChat?.name || "", [date], true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function runScheduledGeneration(triggerDate: string) {
@@ -173,11 +190,12 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
     return data;
   }
 
-  async function openRedactionEditor() {
-    if (!result?.json_path) return;
+  async function openRedactionEditor(targetResult = result) {
+    if (!targetResult?.json_path) return;
     setRedactionBusy(true);
     try {
-      const data = await loadRedactionTargets(result.json_path);
+      setResult(targetResult);
+      const data = await loadRedactionTargets(targetResult.json_path);
       setRedactionEditorOpen(true);
       setMessage(`已读取 ${data.targets.length} 个可屏蔽条目；屏蔽仅在本机重排报告，不会再次调用 AI。`);
     } catch (error) {
@@ -214,6 +232,11 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
 
   const activeStart = settings.range_mode === "single" ? reportDate : startDate;
   const activeEnd = settings.range_mode === "single" ? reportDate : endDate;
+  let selectedDayCount = 1;
+  if (settings.range_mode === "custom" && settings.range_output_mode === "daily") {
+    try { selectedDayCount = inclusiveDateRange(startDate, endDate, 7).length; } catch { selectedDayCount = 0; }
+  }
+  const isDailyBatch = settings.range_mode === "custom" && settings.range_output_mode === "daily";
 
   return <div className="workspace">
       <header className="topbar"><div><h1>生成总结</h1></div></header>
@@ -228,7 +251,7 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
         <section className="panel range-panel">
           <div className="panel-heading compact"><div><span className="step-tag">2</span><h2>选择统计日期</h2></div></div>
           <div className="segmented"><button className={settings.range_mode === "single" ? "selected" : ""} onClick={() => setSettings({ ...settings, range_mode: "single" })}>单日</button><button className={settings.range_mode === "custom" ? "selected" : ""} onClick={() => setSettings({ ...settings, range_mode: "custom" })}>自定义区间</button></div>
-          {settings.range_mode === "single" ? <label><span>报告日期</span><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} /></label> : <div className="date-grid"><label><span>开始日期</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><label><span>结束日期</span><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></label></div>}
+          {settings.range_mode === "single" ? <label><span>报告日期</span><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} /></label> : <><div className="date-grid"><label><span>开始日期</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><label><span>结束日期</span><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></label></div><div className="range-output-mode"><span>生成方式</span><div className="mini-segmented" role="group" aria-label="区间生成方式"><button className={settings.range_output_mode === "daily" ? "selected" : ""} onClick={() => setSettings({ ...settings, range_output_mode: "daily" })}>每日分别生成</button><button className={settings.range_output_mode === "combined" ? "selected" : ""} onClick={() => setSettings({ ...settings, range_output_mode: "combined" })}>合并成一份</button></div><small>{settings.range_output_mode === "daily" ? "按自然日依次生成，单次最多 7 天" : "将整个区间的消息合并分析"}</small></div></>}
           <div className="quick-dates"><button onClick={() => { setReportDate(localDate()); setStartDate(localDate()); setEndDate(localDate()); }}>今天</button><button onClick={() => { setReportDate(localDate(-1)); setStartDate(localDate(-1)); setEndDate(localDate(-1)); }}>昨天</button></div>
         </section>
         <section className="panel ai-panel">
@@ -252,8 +275,9 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
           </div>
         </section>
       </div>
-      <section className={`action-dock ${result ? "has-result" : ""}`}><div><strong>{selectedChat?.name || "尚未选择群聊"}</strong><span>{activeStart === activeEnd ? activeStart : `${activeStart} 至 ${activeEnd}`} · PNG {settings.image_dpi} DPI</span>{progress && <div className="progress-wrap"><i><b style={{ width: `${progress.percent}%` }} /></i><small>{progress.percent}% · {progress.message} · 已用 {Math.round(progress.elapsed_seconds)} 秒</small></div>}</div><button className="button primary" onClick={generate} disabled={busy || !chatId}>{busy ? "正在生成…" : "生成群聊总结"}</button></section>
-      {result && <section className="result-panel"><div className="result-copy"><CheckCircle2 className="result-check" size={36} aria-hidden="true" /><div><h2>报告生成完成{result.version ? ` · v${result.version}` : ""}</h2><p>PNG 与 HTML 已生成，旧版本不会被覆盖。</p></div></div><div className="result-actions"><button className="button primary small" onClick={() => openPath(result.png_path)}>打开图片</button><button className="button secondary" onClick={() => openPath(result.html_path)}>打开 HTML</button><button className="button secondary" onClick={() => openPath(result.chat_dir || result.data_dir)}>打开报告所在目录</button><button className="button ghost" disabled={redactionBusy} onClick={openRedactionEditor}>{redactionBusy ? "读取中…" : "编辑并屏蔽内容"}</button></div></section>}
+      <section className={`action-dock ${result || batchResults.length ? "has-result" : ""}`}><div><strong>{selectedChat?.name || "尚未选择群聊"}</strong><span>{activeStart === activeEnd ? activeStart : `${activeStart} 至 ${activeEnd}`}{isDailyBatch && selectedDayCount ? ` · ${selectedDayCount} 份单日报告` : ""} · PNG {settings.image_dpi} DPI</span>{progress && <div className="progress-wrap"><i><b style={{ width: `${progress.percent}%` }} /></i><small>{progress.percent}% · {progress.message} · 已用 {Math.round(progress.elapsed_seconds)} 秒</small></div>}</div><button className="button primary" onClick={generate} disabled={busy || !chatId}>{busy ? "正在生成…" : isDailyBatch && selectedDayCount ? `生成 ${selectedDayCount} 份单日报告` : "生成群聊总结"}</button></section>
+      {batchResults.length > 0 && <section className="batch-result-panel"><div className="batch-result-heading"><div><h2>逐日生成结果</h2><p>每个日期均独立归档；失败日期可单独重试。</p></div><strong>{batchResults.filter((item) => item.status === "success").length}/{batchResults.length} 成功</strong></div><div className="batch-result-list">{batchResults.map((item) => <article key={item.date} className={`batch-result-row status-${item.status}`}><div><strong>{item.date}</strong><span>{item.status === "success" ? `已生成${item.result?.version ? ` · v${item.result.version}` : ""}` : item.status === "skipped" ? "无消息，已跳过" : "生成失败"}</span>{item.status === "failed" && item.message && <small title={item.message}>{item.message}</small>}</div><div>{item.status === "success" && <><button className="button secondary small" onClick={() => openPath(item.result?.png_path)}>打开图片</button><button className="button ghost small" onClick={() => openPath(item.result?.html_path)}>打开 HTML</button><button className="button ghost small" disabled={redactionBusy} onClick={() => openRedactionEditor(item.result)}>编辑内容</button></>}{item.status === "failed" && <button className="button secondary small" disabled={busy} onClick={() => retryBatchDate(item.date)}>重试</button>}</div></article>)}</div></section>}
+      {result && batchResults.length === 0 && <section className="result-panel"><div className="result-copy"><CheckCircle2 className="result-check" size={36} aria-hidden="true" /><div><h2>报告生成完成{result.version ? ` · v${result.version}` : ""}</h2><p>PNG 与 HTML 已生成，旧版本不会被覆盖。</p></div></div><div className="result-actions"><button className="button primary small" onClick={() => openPath(result.png_path)}>打开图片</button><button className="button secondary" onClick={() => openPath(result.html_path)}>打开 HTML</button><button className="button secondary" onClick={() => openPath(result.chat_dir || result.data_dir)}>打开报告所在目录</button><button className="button ghost" disabled={redactionBusy} onClick={() => openRedactionEditor()}>{redactionBusy ? "读取中…" : "编辑并屏蔽内容"}</button></div></section>}
       {result && redactionEditorOpen && <RedactionEditor targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onClose={() => setRedactionEditorOpen(false)} onToggle={toggleRedaction} onApply={applyRedactions} />}
   </div>;
 }

@@ -1,6 +1,7 @@
 Unicode true
 
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 
 !ifndef APP_EXE
   !error "APP_EXE is required"
@@ -56,7 +57,41 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright bluntvoice"
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
+Function EnsureAppClosed
+check_app:
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "Local\bluntvoice.wechat-chat-summary.app-running") p .r0'
+  ${If} $0 != 0
+    System::Call 'kernel32::CloseHandle(p r0)'
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "检测到群聊拾遗正在运行。$\r$\n$\r$\n请先关闭软件，再点击重试继续安装；点击取消将退出安装。" IDRETRY check_app IDCANCEL cancel_install
+  ${EndIf}
+  Return
+cancel_install:
+  Abort
+FunctionEnd
+
+Function .onInit
+  Call EnsureAppClosed
+FunctionEnd
+
+Function un.EnsureAppClosed
+check_app:
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "Local\bluntvoice.wechat-chat-summary.app-running") p .r0'
+  ${If} $0 != 0
+    System::Call 'kernel32::CloseHandle(p r0)'
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "检测到群聊拾遗正在运行。$\r$\n$\r$\n请先关闭软件，再点击重试继续卸载；点击取消将退出卸载。" IDRETRY check_app IDCANCEL cancel_uninstall
+  ${EndIf}
+  Return
+cancel_uninstall:
+  Abort
+FunctionEnd
+
+Function un.onInit
+  Call un.EnsureAppClosed
+FunctionEnd
+
 Section "主程序" SEC_MAIN
+  ; 用户可能在欢迎页停留期间重新启动软件，替换 program 前再次确认。
+  Call EnsureAppClosed
   ; program 是安装器唯一拥有并可递归替换的目录。
   RMDir /r "$INSTDIR\program"
   SetOutPath "$INSTDIR\program"

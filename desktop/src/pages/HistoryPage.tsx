@@ -23,7 +23,6 @@ const MODULE_OPTIONS = [
   ["ai_observations", "AI 今日观察"],
   ["member_activity", "成员 / 活跃情况"],
   ["outcome", "讨论结论"],
-  ["action_items", "行动事项"],
   ["open_questions", "开放问题"],
   ["risk_flags", "风险提示"],
   ["quotes", "代表性原话"],
@@ -178,12 +177,28 @@ function resourceDomain(value: string) {
   }
 }
 
+function resourcePlatform(value: string, type: string) {
+  if (type === "file") return { key: "file", label: "文件" };
+  let host = "";
+  try { host = new URL(value).hostname.replace(/^www\./, "").toLowerCase(); } catch { return { key: "web", label: "网页" }; }
+  const matches = (...domains: string[]) => domains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+  if (matches("xiaohongshu.com", "xhslink.com")) return { key: "xiaohongshu", label: "小红书" };
+  if (matches("taobao.com", "tmall.com", "tb.cn")) return { key: "taobao", label: "淘宝 / 天猫" };
+  if (matches("mp.weixin.qq.com")) return { key: "wechat", label: "公众号" };
+  if (matches("zhihu.com")) return { key: "zhihu", label: "知乎" };
+  if (matches("jd.com", "3.cn")) return { key: "jd", label: "京东" };
+  if (matches("douyin.com", "iesdouyin.com")) return { key: "douyin", label: "抖音" };
+  if (matches("bilibili.com", "b23.tv")) return { key: "bilibili", label: "哔哩哔哩" };
+  if (matches("weibo.com", "weibo.cn")) return { key: "weibo", label: "微博" };
+  return { key: "web", label: "网页" };
+}
+
 function ResourcePreview({ value, memberNames }: { value: unknown; memberNames: Record<string, string> }) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return <ValueView value={value} memberNames={memberNames} />;
   }
   const resource = value as Record<string, unknown>;
-  const type = String(resource.type || "").toLowerCase() === "file" ? "文件" : "链接";
+  const type = String(resource.type || "").toLowerCase() === "file" ? "file" : "link";
   const topic = String(resource.topic || "").trim();
   const context = resolveMemberTokens(String(resource.context_summary || "").trim(), memberNames);
   const senderId = String(resource.sender_id || "").trim();
@@ -192,11 +207,12 @@ function ResourcePreview({ value, memberNames }: { value: unknown; memberNames: 
     : resolveMemberTokens(String(resource.sender || "").trim(), memberNames);
   const sentAt = String(resource.sent_at || "").trim().slice(0, 16);
   const url = String(resource.url || "").trim();
+  const platform = resourcePlatform(url, type);
   const metadata = [sender, sentAt].filter(Boolean);
   const showTopic = topic && topic !== "其他 / 未归类" && topic !== "其他/未归类";
 
   return <div className="history-resource-preview">
-    <div className="history-resource-tags"><span>{type}</span>{showTopic && <small>{topic}</small>}</div>
+    <div className="history-resource-tags"><span className={`platform-${platform.key}`}>{platform.label}</span>{showTopic && <small>{topic}</small>}</div>
     {context && <p>{context}</p>}
     {metadata.length > 0 && <div className="history-resource-meta">{metadata.join(" · ")}</div>}
     {url && <div className="history-resource-domain" title={url}>{resourceDomain(url)}</div>}
@@ -236,7 +252,7 @@ function ModuleCard({
       }
     }}
   >
-    <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : module.title}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
+    <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : resolveMemberTokens(module.title, memberNames)}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
     {isActivityStatsModule(module)
       ? <ActivityStatsView value={module.content} memberNames={memberNames} />
       : module.module_key === "resources"

@@ -13,7 +13,7 @@ from group_insight.report_model import dedupe_sections, repair_final_report
 from group_insight.report_schema import build_report_document, upgrade_legacy_report
 from group_insight.redaction import REDACTION_NOTICE, list_redaction_targets, redact_report_document
 from group_insight.rendering import render_html_report
-from group_insight.resources import build_resource_catalog, extract_resources
+from group_insight.resources import build_resource_catalog, classify_resource_platform, extract_resources
 from group_insight.stats import extract_word_cloud_terms
 
 
@@ -54,6 +54,21 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         catalog = build_resource_catalog(resources, [{"topic": "项目资料", "resource_ids": [item["id"] for item in resources]}], [])
         self.assertEqual(catalog["count"], 2)
         self.assertEqual({item["type"] for item in catalog["groups"][0]["items"]}, {"link", "file"})
+
+    def test_resource_platforms_are_classified_by_hostname(self):
+        cases = {
+            "https://www.xiaohongshu.com/explore/1": ("xiaohongshu", "小红书"),
+            "https://e.tb.cn/h.abc": ("taobao", "淘宝 / 天猫"),
+            "https://mp.weixin.qq.com/s/abc": ("wechat", "公众号"),
+            "https://zhuanlan.zhihu.com/p/1": ("zhihu", "知乎"),
+            "https://item.jd.com/1.html": ("jd", "京东"),
+            "https://example.com/a": ("web", "网页"),
+        }
+        for url, expected in cases.items():
+            with self.subTest(url=url):
+                result = classify_resource_platform(url)
+                self.assertEqual((result["platform"], result["platform_label"]), expected)
+        self.assertEqual(classify_resource_platform("", "file"), {"platform": "file", "platform_label": "文件"})
 
     def test_resource_assignment_requires_semantic_match(self):
         resources = [
@@ -257,7 +272,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         topic = report["sections"][0]
         self.assertIsNone(topic["outcome"])
         self.assertEqual(topic["risk_flags"], [])
-        self.assertEqual(len(topic["action_items"]), 1)
+        self.assertEqual(topic["action_items"], [])
         self.assertEqual(
             [item["question"] for item in topic["open_questions"]],
             ["正式排期是否确认", "旧报告兼容问题"],
@@ -411,7 +426,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertIn("上午提出项目排期", topics[0]["discussion_flow"])
         self.assertIn("下午补充了交付顺序", topics[0]["discussion_flow"])
         self.assertEqual(topics[0]["outcome"]["content"], "先完成清单，再分批交付。")
-        self.assertEqual(len(topics[0]["action_items"]), 1)
+        self.assertEqual(topics[0]["action_items"], [])
         self.assertNotIn("key_points", topics[0])
         self.assertNotIn("turning_points", topics[0])
 
@@ -459,12 +474,78 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("先提出清单，再补充交付顺序。", html)
         self.assertIn("先把清单定下来。", html)
-        self.assertIn("整理最终清单", html)
+        self.assertNotIn("整理最终清单", html)
         self.assertIn("项目清单", html)
         self.assertNotIn("详细讨论脉络", html)
         self.assertNotIn("今日有趣内容", html)
         self.assertNotIn("最早消息", html)
         self.assertNotIn("最晚消息", html)
+
+    def test_quick_view_highlights_members_and_discussion_flow_is_segmented(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-09-03 00:00:00", end_time="2026-09-03 23:59:59", version=1,
+            stats={
+                "message_count": 3, "participant_count": 2,
+                "member_aliases": [
+                    {"sender_id": "wxid_a", "sender_name": "小甲"},
+                    {"sender_id": "wxid_b", "sender_name": "小乙"},
+                ],
+            },
+            report={
+                "theme_cards": [{
+                    "title": "[[user:wxid_a]]提出方案",
+                    "summary": "小乙补充了风险。",
+                }],
+                "sections": [{
+                    "title": "分段讨论",
+                    "discussion_flow": "[[user:wxid_a]]先说明背景。\n[[user:wxid_b]]随后提出两个选择。\n大家最后确认继续验证。",
+                }],
+            },
+            resources={"count": 0, "groups": []},
+            exports={"json": "a", "html": "b", "png": "c"},
+            provider="deepseek", model="test", dry_run=False, chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        self.assertIn('<h3><strong class="topic-member">小甲</strong>提出方案</h3>', html)
+        self.assertIn('<strong class="topic-member">小乙</strong>补充了风险', html)
+        self.assertIn('class="discussion-flow discussion-points"', html)
+        self.assertEqual(html.count('<li><strong class="topic-member">'), 2)
+        self.assertIn("报告由群聊拾遗生成 · 测试群 · 2026-09-03", html)
+        self.assertIn("生成时间：", html)
+
+    def test_weakness_observations_are_removed(self):
+        report = repair_final_report(
+            {
+                "sections": [],
+                "ai_observations": [
+                    {"title": "讨论弱点", "content": "内容太散。"},
+                    {"title": "今日特点", "content": "讨论推进清晰。"},
+                    "讨论不足：信息不完整",
+                ],
+            },
+            "测试群", "2026-09-03 00:00:00", "2026-09-03 23:59:59",
+            {"message_count": 1, "participant_count": 1}, [],
+        )
+        self.assertEqual(len(report["ai_observations"]), 1)
+        self.assertEqual(report["ai_observations"][0]["title"], "今日特点")
+        self.assertEqual(report["ai_observations"][0]["content"], "讨论推进清晰。")
+
+        legacy_document = {
+            "schema_version": "2.1",
+            "metadata": {"chat": {"id": "room", "name": "测试群"}, "period": {"report_date": "2026-09-03"}},
+            "stats": {},
+            "content": {
+                "headline": "旧报告", "one_line_summary": "旧摘要", "themes": [], "topics": [],
+                "ai_observations": [
+                    {"title": "讨论短板", "content": "不应继续展示。"},
+                    {"title": "今日特点", "content": "应继续展示。"},
+                ],
+            },
+        }
+        html = render_html_report(legacy_document)
+        self.assertNotIn("讨论短板", html)
+        self.assertIn("应继续展示", html)
 
     def test_schema_20_document_remains_readable_without_reinterpretation(self):
         payload = {
@@ -506,6 +587,8 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertIn("resource_ids", system_prompt)
         self.assertIn("时间相邻只是弱线索", system_prompt)
         self.assertIn("暂无结论", system_prompt)
+        self.assertIn("action_items 固定返回空数组", system_prompt)
+        self.assertIn("讨论弱点", system_prompt)
 
 
 if __name__ == "__main__":

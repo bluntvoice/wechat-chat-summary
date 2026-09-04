@@ -167,6 +167,15 @@ class MCPServiceTests(unittest.TestCase):
                 service.submit_report(document)
         messages.assert_not_called()
 
+    def test_new_schema_rejects_nonempty_action_items(self):
+        service = MCPService()
+        document = valid_external_document()
+        document["content"]["topics"][0]["action_items"] = [{"task": "不应进入新报告"}]
+        with patch.object(service, "_messages") as messages:
+            with self.assertRaisesRegex(ValueError, "Report Schema 2.2"):
+                service.submit_report(document)
+        messages.assert_not_called()
+
     def test_submit_report_rejects_unresolved_member_names(self):
         service = MCPService()
         document = valid_external_document()

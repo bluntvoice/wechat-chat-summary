@@ -238,7 +238,7 @@ class ChineseSearchTests(unittest.TestCase):
                     "跨境清关讨论群",
                     "张三",
                     "美国尾程清关风险",
-                    "准备尾程清关资料",
+                    "海关编码是否需要调整",
                     "清关资料清单.xlsx",
                     "美国海关政策说明",
                     "https://example.com/customs-guide",
@@ -247,6 +247,7 @@ class ChineseSearchTests(unittest.TestCase):
                 for query in queries:
                     with self.subTest(query=query):
                         self.assertTrue(store.search_reports(query), query)
+                self.assertFalse(store.search_reports("准备尾程清关资料"))
 
 
 class StructuredResultProtocolTests(unittest.TestCase):

@@ -14,6 +14,42 @@ mod updater;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+#[cfg(windows)]
+struct RunningInstanceMutex(*mut std::ffi::c_void);
+
+#[cfg(windows)]
+impl RunningInstanceMutex {
+    fn create() -> Option<Self> {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn CreateMutexW(
+                mutex_attributes: *mut std::ffi::c_void,
+                initial_owner: i32,
+                name: *const u16,
+            ) -> *mut std::ffi::c_void;
+        }
+        let name: Vec<u16> = "Local\\bluntvoice.wechat-chat-summary.app-running"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
+        (!handle.is_null()).then_some(Self(handle))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RunningInstanceMutex {
+    fn drop(&mut self) {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        }
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct BridgeProgram {
@@ -287,6 +323,8 @@ fn open_system_path(path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    let _running_instance_mutex = RunningInstanceMutex::create();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(McpProcessState::default())

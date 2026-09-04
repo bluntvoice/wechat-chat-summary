@@ -12,11 +12,16 @@
   --line: #d8e2dc;
   --amber: #a45f16;
   --danger: #b33b39;
+  --font-caption: 11px;
+  --font-meta: 12px;
+  --font-body: 14px;
+  --font-card-title: 15px;
+  --font-section-title: 18px;
 }
 
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; }
-body { margin: 0; min-width: 900px; min-height: 100vh; overflow-x: hidden; background: #eef3f0; }
+body { margin: 0; min-width: 900px; min-height: 100vh; overflow-x: hidden; background: #eef3f0; font-size: var(--font-body); line-height: 1.5; }
 button, input, select { font: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(23, 133, 72, .22); outline-offset: 2px; }
 button:disabled { cursor: not-allowed; opacity: .55; }
@@ -416,6 +421,91 @@ button.heatmap-cell:hover, button.heatmap-cell:focus-visible { z-index: 4; trans
 .guide-steps strong { color: #314a3c; font-size: 12px; }
 .guide-steps p { margin: 3px 0 0; color: #718078; font-size: 10px; line-height: 1.55; }
 .guide-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 17px; padding-top: 15px; border-top: 1px solid var(--line); }
+
+/* 桌面端统一字号层级：保持紧凑，但不再使用难以辨认的 7–10px 正文。 */
+.app-nav button small, .rail-help small { font-size: var(--font-caption); }
+.eyebrow { font-size: 12px; }
+.system-state { font-size: 13px; }
+.panel h2, .redaction-heading h2, .settings-section h2 { font-size: var(--font-section-title); }
+label, .chat-search-control, .selection-note, .segmented button, .quick-dates button, .button { font-size: 13px; }
+label em, .mini-segmented button, .archive-preview span, .schedule-date-mode > span { font-size: 12px; }
+.privacy-copy, .schedule-title small, .schedule-status, .result-copy p, .redaction-heading p, .mcp-explanation { font-size: 12px; }
+.mode-summary span, .progress-wrap small, .redaction-group h3 span, .redaction-row small, .redaction-footer span { font-size: var(--font-caption); }
+.mode-summary strong, .schedule-title strong, .redaction-group h3, .redaction-row strong { font-size: 13px; }
+.action-dock strong { font-size: 15px; }
+.action-dock span { font-size: 12px; }
+.result-copy h2 { font-size: 17px; }
+
+.range-output-mode { display: grid; gap: 7px; margin-top: 12px; padding: 10px 11px; border-radius: 6px; background: #f1f5f2; }
+.range-output-mode > span { color: #526159; font-size: 13px; font-weight: 650; }
+.range-output-mode .mini-segmented { width: max-content; max-width: 100%; }
+.range-output-mode .mini-segmented button { min-height: 28px; padding: 4px 11px; }
+.range-output-mode small { color: #748179; font-size: var(--font-caption); line-height: 1.55; }
+.batch-result-panel { margin-top: 14px; padding: 18px; border: 1px solid #cbd9d0; border-radius: 8px; background: rgba(251,253,251,.97); box-shadow: 0 7px 24px rgba(27,53,39,.045); }
+.batch-result-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.batch-result-heading h2 { margin: 0; font-size: 18px; }
+.batch-result-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.batch-result-heading > strong { padding: 4px 8px; border-radius: 5px; background: #e5f1e9; color: var(--green-dark); font-size: 12px; }
+.batch-result-list { display: grid; }
+.batch-result-row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 2px; border-top: 1px dashed #dce5df; }
+.batch-result-row:first-child { border-top: 0; }
+.batch-result-row > div:first-child { min-width: 0; display: grid; grid-template-columns: 105px auto; align-items: baseline; gap: 3px 10px; }
+.batch-result-row strong { color: #30493a; font-size: 13px; }
+.batch-result-row span { color: #65746c; font-size: 12px; }
+.batch-result-row small { grid-column: 1 / -1; overflow: hidden; color: var(--danger); font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
+.batch-result-row > div:last-child { flex: 0 0 auto; display: flex; gap: 5px; }
+.batch-result-row.status-skipped strong, .batch-result-row.status-skipped span { color: #7f8b84; }
+.batch-result-row.status-failed { background: #fffafa; }
+
+.history-layout { grid-template-columns: 240px 350px minmax(420px, 1fr); }
+.history-pane-heading > div { font-size: 13px; }
+.history-pane-heading strong { font-size: var(--font-caption); }
+.history-chat-list strong, .history-report-list strong { font-size: 13px; }
+.history-chat-list span, .history-chat-list small, .history-report-list em, .history-report-list span, .history-result-count { font-size: var(--font-caption); }
+.history-filters input, .history-filters select { font-size: 12px; }
+.history-report-list p { font-size: 12px; line-height: 1.55; }
+.history-detail-head > div:first-child > span { font-size: var(--font-caption); }
+.history-detail-head h2 { font-size: 20px; }
+.history-detail-head p { font-size: 13px; line-height: 1.65; }
+.history-stat-row span, .history-export-row small, .history-versions > span, .history-versions button, .history-versions small, .history-module-focus, .history-module-focus button { font-size: var(--font-caption); }
+.history-redaction-toolbar strong { font-size: 13px; }
+.history-redaction-toolbar span, .history-redaction-list > summary { font-size: 12px; }
+.history-module-heading span, .history-module-heading .history-redaction-state { font-size: var(--font-caption); }
+.history-module-heading h3 { font-size: var(--font-card-title); }
+.history-value-grid dt, .history-activity-metrics dt, .history-activity-block h4 { font-size: var(--font-caption); }
+.history-value-grid dd { font-size: 13px; line-height: 1.65; }
+.history-activity-metrics dd { font-size: 17px; }
+.history-speaker-list li { grid-template-columns: 22px minmax(82px,.7fr) minmax(80px,1fr) 42px; gap: 7px; }
+.history-speaker-list li > span, .history-speaker-list em, .history-keyword-list small, .history-segment-list span, .history-segment-list strong { font-size: var(--font-caption); }
+.history-speaker-list strong, .history-keyword-list > span { font-size: 12px; }
+.history-resource-tags span, .history-resource-tags small, .history-resource-meta { font-size: var(--font-caption); }
+.history-resource-preview p { font-size: 12px; line-height: 1.65; }
+.history-resource-domain { font-size: var(--font-caption); }
+.history-resource-tags .platform-xiaohongshu { background: #ffe8e8; color: #a9343c; }
+.history-resource-tags .platform-taobao { background: #fff0dd; color: #a65314; }
+.history-resource-tags .platform-wechat { background: #e2f4e5; color: #267044; }
+.history-resource-tags .platform-zhihu { background: #e6f1ff; color: #2767a3; }
+.history-resource-tags .platform-jd { background: #ffe8e8; color: #ad2d2d; }
+.history-resource-tags .platform-douyin { background: #ecebed; color: #443d49; }
+.history-resource-tags .platform-bilibili { background: #e5f5fb; color: #28738f; }
+.history-resource-tags .platform-weibo { background: #fff0de; color: #9b541d; }
+.history-resource-tags .platform-web { background: #edf1ef; color: #56645c; }
+
+.heatmap-top-actions .button, .heatmap-status, .heatmap-controls label, .heatmap-chat-filter button, .heatmap-card-head span, .heatmap-metrics button { font-size: var(--font-caption); }
+.heatmap-summary-row span, .heatmap-months, .heatmap-weekdays, .heatmap-legend, .heatmap-day-head > span, .heatmap-day-head em, .heatmap-day-stats dt, .heatmap-no-report { font-size: var(--font-caption); }
+.heatmap-unknown-copy, .heatmap-empty { font-size: 12px; }
+
+.about-product > span, .about-version small, .about-label, .settings-section-head > div:first-child > span, .mcp-status-grid span { font-size: var(--font-caption) !important; }
+.about-product p, .about-row p, .about-author small, .about-text-action, .about-notes p, .switch-row small, .mcp-status-grid strong, .mcp-status-grid code { font-size: 12px; }
+.about-row h3 { font-size: 16px; }
+.about-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.about-action svg { flex: 0 0 auto; }
+.spinning { animation: icon-spin .9s linear infinite; }
+.switch-row strong { font-size: 13px; }
+.guide-heading p, .guide-steps p { font-size: 12px; line-height: 1.65; }
+.guide-steps strong { font-size: 13px; }
+
+@keyframes icon-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1040px) {
   .workspace { padding-inline: 26px; }

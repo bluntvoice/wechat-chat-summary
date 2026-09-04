@@ -47,6 +47,21 @@ def normalize_text(value: str, max_len: int | None = None) -> str:
     return value
 
 
+def normalize_multiline_text(value: str, max_len: int | None = None) -> str:
+    """规范化可分段正文，同时保留有意义的换行。"""
+
+    lines = [normalize_text(line) for line in re.split(r"[\r\n]+", value or "")]
+    normalized = "\n".join(line for line in lines if line)
+    if max_len and len(normalized) > max_len:
+        cut = max(0, max_len - 3)
+        open_pos = normalized.rfind("[[user:", 0, cut)
+        close_pos = normalized.find("]]", open_pos + 7) if open_pos >= 0 else -1
+        if open_pos >= 0 and (close_pos < 0 or close_pos + 2 > cut):
+            cut = open_pos
+        return normalized[:cut].rstrip() + "..."
+    return normalized
+
+
 def strip_wechat_emoji_shortcodes(value: str) -> str:
     """移除微信表情短码，避免低信息噪声进入词频统计。"""
     return WECHAT_EMOJI_SHORTCODE_PATTERN.sub(" ", value or "")

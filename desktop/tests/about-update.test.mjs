@@ -28,6 +28,10 @@ test("update checks are manual and expose all user-facing states", () => {
 });
 
 test("About uses matching lightweight actions and states the network boundary", () => {
+  assert.match(aboutPage, /import \{ Copy, RefreshCw \} from "lucide-react"/);
+  assert.match(aboutPage, /<Copy size=\{15\}/);
+  assert.match(aboutPage, /<RefreshCw size=\{15\}/);
+  assert.match(aboutPage, /className="spinning"/);
   assert.match(aboutPage, /secondary about-action[^>]+onClick=\{copyProjectUrl\}/);
   assert.match(aboutPage, /secondary about-action[^>]+onClick=\{checkForUpdates\}/);
   assert.match(aboutPage, /仅在点击检查更新后访问 GitHub/);

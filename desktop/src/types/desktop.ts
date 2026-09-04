@@ -10,6 +10,7 @@ export type Settings = {
   export_root: string;
   image_dpi: number;
   range_mode: "single" | "custom";
+  range_output_mode: "daily" | "combined";
   last_chat_id: string;
   last_chat_name: string;
   schedule_enabled: boolean;
@@ -111,6 +112,13 @@ export type GenerationResult = {
   summarized_chat_ids?: string[];
 };
 
+export type BatchGenerationItem = {
+  date: string;
+  status: "success" | "skipped" | "failed";
+  result?: GenerationResult;
+  message?: string;
+};
+
 export type HistoryChat = {
   chat_id: string;
   display_name: string;
@@ -210,6 +218,7 @@ export const INITIAL_SETTINGS: Settings = {
   export_root: "",
   image_dpi: 300,
   range_mode: "single",
+  range_output_mode: "daily",
   last_chat_id: "",
   last_chat_name: "",
   schedule_enabled: false,

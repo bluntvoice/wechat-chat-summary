@@ -10,7 +10,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .common import normalize_text
+from .common import normalize_multiline_text, normalize_text
 
 SCHEMA_VERSION = "2.2"
 COMPATIBLE_SCHEMA_VERSIONS = {"2.0", "2.1", SCHEMA_VERSION}
@@ -77,7 +77,7 @@ REPORT_SCHEMA_2_2 = {
                             "time_ranges": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
                             "discussion_flow": {"type": "string", "minLength": 1, "maxLength": 4000},
                             "outcome": {"type": ["object", "null"]},
-                            "action_items": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+                            "action_items": {"type": "array", "maxItems": 0, "items": {"type": "object"}},
                             "open_questions": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
                             "risk_flags": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
                             "quotes": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
@@ -164,9 +164,11 @@ def _canonical_topic(item: dict[str, Any], index: int) -> dict[str, Any]:
         "start_time": str(item.get("start_time") or ""),
         "end_time": str(item.get("end_time") or ""),
         "time_ranges": item.get("time_ranges", []) if isinstance(item.get("time_ranges"), list) else [],
-        "discussion_flow": normalize_text(item.get("discussion_flow", "") or item.get("summary", ""), max_len=360),
+        "discussion_flow": normalize_multiline_text(
+            item.get("discussion_flow", "") or item.get("summary", ""), max_len=360
+        ),
         "outcome": outcome,
-        "action_items": item.get("action_items", []) if isinstance(item.get("action_items"), list) else [],
+        "action_items": [],
         "open_questions": item.get("open_questions", []) if isinstance(item.get("open_questions"), list) else [],
         "risk_flags": item.get("risk_flags", []) if isinstance(item.get("risk_flags"), list) else [],
         "quotes": item.get("quotes", []) if isinstance(item.get("quotes"), list) else [],
@@ -212,7 +214,7 @@ def build_report_document(
         return topics[0] if len(topics) == 1 else None
 
     # 兼容尚未经过 repair_final_report 的 2.1 形态调用方；新文档只写嵌套结构。
-    for key in ("action_items", "open_questions", "risk_flags", "quotes"):
+    for key in ("open_questions", "risk_flags", "quotes"):
         for item in report.get(key, []) if isinstance(report.get(key), list) else []:
             target = target_topic(item)
             if target is not None:

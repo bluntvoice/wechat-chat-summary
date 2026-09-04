@@ -9,7 +9,13 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
-from .common import extract_topic_tokens, make_user_placeholder, normalize_text, topic_similarity
+from .common import (
+    extract_topic_tokens,
+    make_user_placeholder,
+    normalize_multiline_text,
+    normalize_text,
+    topic_similarity,
+)
 from .models import MessageChunk
 from .settings import MAX_REPORT_SECTIONS, SECTION_TOPIC_COVERAGE_THRESHOLD
 
@@ -25,6 +31,7 @@ EMPTY_OUTCOME_TEXTS = {
     "仍在讨论",
     "仍在讨论。",
 }
+BLOCKED_OBSERVATION_PHRASES = ("讨论弱点", "讨论不足", "讨论短板")
 
 
 def filter_serious_items(items: Any, *, content_key: str = "content", threshold: float = 0.72) -> list[Any]:
@@ -246,15 +253,18 @@ def normalize_ai_observations(items: Any, mood: Any) -> list[dict[str, Any]]:
     for item in source:
         if isinstance(item, str):
             content = normalize_text(item, max_len=420)
-            if content:
+            if content and not any(phrase in content for phrase in BLOCKED_OBSERVATION_PHRASES):
                 result.append({"title": "今日观察", "content": content, "kind": "observation"})
         elif isinstance(item, dict):
+            title = normalize_text(item.get("title", ""), max_len=80) or "今日观察"
             content = normalize_text(item.get("content", ""), max_len=420)
-            if not content:
+            if not content or any(
+                phrase in f"{title} {content}" for phrase in BLOCKED_OBSERVATION_PHRASES
+            ):
                 continue
             result.append(
                 {
-                    "title": normalize_text(item.get("title", ""), max_len=80) or "今日观察",
+                    "title": title,
                     "content": content,
                     "kind": normalize_text(item.get("kind", ""), max_len=40) or "observation",
                 }
@@ -278,7 +288,7 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         title = normalize_text(section.get("title", ""), max_len=140)
         topic_id = normalize_text(section.get("id", "") or section.get("topic_key", ""), max_len=80)
-        discussion_flow = normalize_text(
+        discussion_flow = normalize_multiline_text(
             section.get("discussion_flow", "") or section.get("summary", ""), max_len=360
         )
         outcome = _normalized_topic_outcome(
@@ -297,9 +307,8 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "time_ranges": time_ranges,
             "discussion_flow": discussion_flow,
             "outcome": outcome,
-            "action_items": _merge_serious_items(
-                section.get("action_items", []), content_key="task", limit=4
-            ),
+            # Schema 2.2 为兼容旧报告继续保留字段；新报告不再生成行动事项。
+            "action_items": [],
             "open_questions": _merge_serious_items(
                 section.get("open_questions", []), content_key="question", limit=2
             ),
@@ -321,14 +330,12 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             existing["start_time"] = existing["time_ranges"][0]["start"]
             existing["end_time"] = existing["time_ranges"][-1]["end"]
         if discussion_flow and discussion_flow not in existing["discussion_flow"]:
-            existing["discussion_flow"] = normalize_text(
-                f"{existing['discussion_flow']} {discussion_flow}", max_len=360
+            existing["discussion_flow"] = normalize_multiline_text(
+                f"{existing['discussion_flow']}\n{discussion_flow}", max_len=360
             )
         if not existing.get("outcome") and outcome:
             existing["outcome"] = outcome
-        existing["action_items"] = _merge_serious_items(
-            existing.get("action_items", []), item.get("action_items", []), content_key="task", limit=4
-        )
+        existing["action_items"] = []
         existing["open_questions"] = _merge_serious_items(
             existing.get("open_questions", []), item.get("open_questions", []), content_key="question", limit=2
         )
@@ -509,7 +516,6 @@ def repair_final_report(
 
     # 兼容模型偶尔返回的 2.1 顶层模块，并在写入新报告前收进 topic。
     legacy_specs = (
-        ("action_items", "task", 4),
         ("open_questions", "question", 2),
         ("risk_flags", "content", 3),
     )

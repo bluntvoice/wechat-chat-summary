@@ -33,7 +33,9 @@ test("elapsed time uses the local clock while percent remains backend-owned", ()
 
 test("history resolves member placeholders and avoids internal schema noise", () => {
   assert.match(history, /resolveMemberTokens/);
+  assert.match(history, /resolveMemberTokens\(module\.title, memberNames\)/);
   assert.match(history, /member_aliases/);
+  assert.doesNotMatch(history, /value: "action_items"/);
   assert.doesNotMatch(history, /Schema \{detail\.schema_version\}/);
   assert.match(styles, /\.redaction-groups[^\n]+align-items: start/);
 });
@@ -64,6 +66,27 @@ test("history resources hide internal fields and use a concise preview", () => {
   assert.match(history, /topic !== "其他 \/ 未归类"/);
   assert.match(styles, /\.history-resource-preview/);
   assert.match(styles, /\.history-resource-domain[^\n]+text-overflow: ellipsis/);
+  assert.match(history, /小红书/);
+  assert.match(history, /淘宝 \/ 天猫/);
+  assert.match(history, /公众号/);
+  assert.match(history, /知乎/);
+});
+
+test("desktop typography uses readable tokens across history and helper text", () => {
+  assert.match(styles, /--font-body:\s*14px/);
+  assert.match(styles, /--font-meta:\s*12px/);
+  assert.match(styles, /--font-caption:\s*11px/);
+  assert.match(styles, /\.history-module-heading h3\s*\{[^}]*font-size:\s*var\(--font-card-title\)/s);
+  assert.match(styles, /\.privacy-copy[^}]*font-size:\s*12px/s);
+});
+
+test("installer blocks install and uninstall while the app mutex is present", () => {
+  assert.match(installer, /OpenMutexW/);
+  assert.match(installer, /Local\\bluntvoice\.wechat-chat-summary\.app-running/);
+  assert.match(installer, /MB_RETRYCANCEL/);
+  assert.match(installer, /Function EnsureAppClosed/);
+  assert.match(installer, /Function un\.EnsureAppClosed/);
+  assert.doesNotMatch(installer, /taskkill/i);
 });
 
 test("all user-visible desktop product names use 群聊拾遗", () => {

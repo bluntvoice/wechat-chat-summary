@@ -18,13 +18,11 @@ REDACTABLE_MODULES = {
     "members": "活跃成员",
     "quotes": "引用原话",
     "decisions": "明确结论",
-    "action_items": "行动事项",
     "open_questions": "开放问题",
     "risk_flags": "风险提示",
 }
 TOPIC_DETAIL_MODULES = {
     "outcome": "讨论落点",
-    "action_items": "行动事项",
     "open_questions": "开放问题",
     "risk_flags": "风险提示",
     "quotes": "相关原话",

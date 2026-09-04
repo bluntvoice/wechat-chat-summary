@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { Copy, RefreshCw } from "lucide-react";
 
 import packageInfo from "../../package.json";
 
@@ -173,7 +174,7 @@ export default function AboutPage() {
 
     <section className="about-row" aria-labelledby="project-heading">
       <div><p className="about-label">开源项目</p><h3 id="project-heading">bluntvoice/wechat-chat-summary</h3><p className="about-url">{PROJECT_URL}</p></div>
-      <button className="button secondary about-action" onClick={copyProjectUrl}>{copyState}</button>
+      <button className="button secondary about-action" onClick={copyProjectUrl}><Copy size={15} aria-hidden="true" />{copyState}</button>
     </section>
 
     <section className="about-row about-update" aria-labelledby="update-heading">
@@ -208,8 +209,8 @@ export default function AboutPage() {
         </div>}
       </div>
       <div className="about-update-actions">
-        {(updateStatus === "idle" || updateStatus === "latest" || updateStatus === "error") && <button className="button secondary about-action" disabled={isBusy} onClick={checkForUpdates}>检查更新</button>}
-        {updateStatus === "checking" && <button className="button secondary about-action" disabled>正在检查…</button>}
+        {(updateStatus === "idle" || updateStatus === "latest" || updateStatus === "error") && <button className="button secondary about-action" disabled={isBusy} onClick={checkForUpdates}><RefreshCw size={15} aria-hidden="true" />检查更新</button>}
+        {updateStatus === "checking" && <button className="button secondary about-action" disabled><RefreshCw size={15} className="spinning" aria-hidden="true" />正在检查…</button>}
         {updateStatus === "available" && <button className="button secondary about-action" onClick={downloadUpdate}>下载更新</button>}
         {updateStatus === "downloading" && <button className="button secondary about-action" onClick={cancelDownload}>取消下载</button>}
         {updateStatus === "verified" && !confirmInstall && <button className="button secondary about-action" onClick={() => setConfirmInstall(true)}>启动安装</button>}
