@@ -1,5 +1,13 @@
 # 群聊拾遗（wechat-chat-summary）
 
+<!--
+首次正式 Stable Release 发布后启用以下徽章：
+
+![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)
+
+![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)
+-->
+
 一个基于本地微信聊天数据的微信群聊统计、AI 总结与历史回顾工具。
 
 项目通过 [WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) 提供的本地 API 读取微信聊天数据。选择指定群聊和日期后，可以自动完成消息统计、AI 内容分析，并生成适合电脑查看和手机分享的 PNG 长图、HTML 报告及结构化 JSON。
