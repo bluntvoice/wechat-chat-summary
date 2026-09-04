@@ -1,5 +1,7 @@
 export type Settings = {
   wechat_api_url: string;
+  wechat_local_source_dir: string;
+  wechat_local_source_port: number;
   provider: "deepseek" | "openai-compatible";
   api_url: string;
   model: string;
@@ -198,6 +200,8 @@ export type RedactionTarget = {
 
 export const INITIAL_SETTINGS: Settings = {
   wechat_api_url: "http://127.0.0.1:10392",
+  wechat_local_source_dir: "",
+  wechat_local_source_port: 10393,
   provider: "deepseek",
   api_url: "https://api.deepseek.com/chat/completions",
   model: "deepseek-v4-flash",

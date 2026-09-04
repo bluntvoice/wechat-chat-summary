@@ -11,7 +11,7 @@ from typing import Any
 from .alerts import maybe_send_alert
 from .chunking import build_analysis_chunks, chunk_payload, estimate_reduce_call_count
 from .common import ensure_dir, normalize_text, slugify, write_json
-from .fetching import fetch_structured_messages
+from .fetching import fetch_structured_messages, require_resolved_report_member_names
 from .llm import (
     DeepSeekClient,
     LLMClientProtocol,
@@ -56,6 +56,8 @@ from .settings import (
     DEFAULT_TOPIC_SIM_THRESHOLD,
     WECHAT_DATA_ACCOUNT,
     WECHAT_DATA_API_URL,
+    WECHAT_DATA_LOCAL_SOURCE_DIR,
+    WECHAT_DATA_LOCAL_SOURCE_PORT,
     WECHAT_DATA_SOURCE,
 )
 from .stats import build_chat_daily_stats, build_local_stats
@@ -180,6 +182,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wechat-api-url", default=WECHAT_DATA_API_URL, help=f"WeChatDataAnalysis 本地 API 地址，默认 {WECHAT_DATA_API_URL}。")
     parser.add_argument("--wechat-account", default=WECHAT_DATA_ACCOUNT, help="可选微信账号标识；留空时使用 WeChatDataAnalysis 当前默认账号。")
     parser.add_argument("--wechat-source", default=WECHAT_DATA_SOURCE, help="可选数据源标识；留空时由 WeChatDataAnalysis 自动选择。")
+    parser.add_argument("--wechat-local-source-dir", default=WECHAT_DATA_LOCAL_SOURCE_DIR, help="检测到成员昵称异常时用于复读的 WeChatDataAnalysis 本地源码目录。")
+    parser.add_argument("--wechat-local-source-port", type=int, default=WECHAT_DATA_LOCAL_SOURCE_PORT, help="临时源码后端的仅本机端口，默认 10393。")
     parser.add_argument("--api-key", default="", help="AI API Key；建议通过对应 Provider 的环境变量传入。")
     parser.add_argument("--provider", choices=["deepseek", "openai-compatible"], default=DEFAULT_PROVIDER, help="AI 提供方类型。")
     parser.add_argument("--api-url", default="", help="AI Base URL 或 Chat Completions URL。")
@@ -269,7 +273,13 @@ def main() -> None:
         api_url=args.wechat_api_url,
         account=args.wechat_account,
         source=args.wechat_source,
+        local_source_dir=args.wechat_local_source_dir,
+        local_source_port=args.wechat_local_source_port,
     )
+    try:
+        require_resolved_report_member_names(ctx)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if not messages:
         raise SystemExit("指定时间范围内没有消息。")
 

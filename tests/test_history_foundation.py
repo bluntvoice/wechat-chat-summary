@@ -255,8 +255,10 @@ class StructuredResultProtocolTests(unittest.TestCase):
             os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": str(Path(temp_dir) / "data")}
         ):
             export_root = Path(temp_dir) / "reports"
+            captured_command: list[str] = []
 
             def fake_run(command: list[str], **_kwargs: object):
+                captured_command.extend(command)
                 result_path = Path(command[command.index("--result-file") + 1])
                 output_dir = export_root / "测试群" / "报告数据" / "2026-08-31报告数据"
                 image_dir = export_root / "测试群" / "导出图" / "2026" / "08"
@@ -298,6 +300,8 @@ class StructuredResultProtocolTests(unittest.TestCase):
                 "api_url": "https://api.deepseek.com/chat/completions",
                 "model": "deepseek-v4-flash",
                 "wechat_api_url": "http://127.0.0.1:10392",
+                "wechat_local_source_dir": "D:/tools/WeChatDataAnalysis-source",
+                "wechat_local_source_port": 10493,
                 "image_dpi": 300,
                 "export_root": str(export_root),
             }
@@ -317,6 +321,14 @@ class StructuredResultProtocolTests(unittest.TestCase):
             self.assertEqual(result["protocol_version"], 1)
             self.assertTrue(Path(result["png_path"]).is_file())
             self.assertIn("日志文案已经完全变化", result["log"])
+            self.assertEqual(
+                captured_command[captured_command.index("--wechat-local-source-dir") + 1],
+                "D:/tools/WeChatDataAnalysis-source",
+            )
+            self.assertEqual(
+                captured_command[captured_command.index("--wechat-local-source-port") + 1],
+                "10493",
+            )
 
 
 if __name__ == "__main__":

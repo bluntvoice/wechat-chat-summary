@@ -13,11 +13,14 @@ from .settings import (
     MAX_LINE_TEXT_LEN,
     WECHAT_DATA_ACCOUNT,
     WECHAT_DATA_API_URL,
+    WECHAT_DATA_LOCAL_SOURCE_DIR,
+    WECHAT_DATA_LOCAL_SOURCE_PORT,
     WECHAT_DATA_SOURCE,
 )
 from .wechat_data_api import WeChatDataAPIClient, WeChatDataAPIError
 
 _GROUP_NICKNAME_CACHE: dict[str, dict[str, str]] = {}
+_IGNORED_MEMBER_NAME_CHARACTERS = "\x7f"
 
 
 def get_group_nickname_map(chat_id: str) -> dict[str, str]:
@@ -25,10 +28,19 @@ def get_group_nickname_map(chat_id: str) -> dict[str, str]:
     return dict(_GROUP_NICKNAME_CACHE.get(chat_id, {}))
 
 
+def normalize_member_display_text(value: Any) -> str:
+    """移除 WeChatDataAnalysis 可能写入昵称的 DEL 占位字符。"""
+
+    text = str(value or "")
+    for character in _IGNORED_MEMBER_NAME_CHARACTERS:
+        text = text.replace(character, "")
+    return text.strip()
+
+
 def is_resolved_member_display(username: str, display_name: str) -> bool:
     """判断显示名是否已经脱离原始账号占位。"""
     username = (username or "").strip()
-    display_name = (display_name or "").strip()
+    display_name = normalize_member_display_text(display_name)
     if not username or not display_name or display_name == username:
         return False
     if display_name.startswith(("wxid_", "gh_")) or display_name.endswith("@chatroom"):
@@ -44,11 +56,11 @@ def resolve_sender_display(
     """按群昵称、微信网名、账号 ID 的顺序选择名称，并排除个人备注。"""
 
     username = (username or "").strip()
-    sender_display = (sender_display or "").strip()
+    sender_display = normalize_member_display_text(sender_display)
     profile = contact_profile or {}
-    remark = str(profile.get("remark") or "").strip()
-    nickname = str(profile.get("nickname") or "").strip()
-    profile_display = str(profile.get("displayName") or "").strip()
+    remark = normalize_member_display_text(profile.get("remark"))
+    nickname = normalize_member_display_text(profile.get("nickname"))
+    profile_display = normalize_member_display_text(profile.get("displayName"))
 
     # WeChatDataAnalysis 的 senderDisplayName 优先给群昵称；没有群昵称时可能
     # 回落到用户自己的联系人备注。只有与 remark 相同的值才明确排除。
@@ -78,9 +90,9 @@ def _contact_fallback_display(
 
     username = (username or "").strip()
     profile = contact_profile or {}
-    remark = str(profile.get("remark") or "").strip()
-    nickname = str(profile.get("nickname") or "").strip()
-    profile_display = str(profile.get("displayName") or "").strip()
+    remark = normalize_member_display_text(profile.get("remark"))
+    nickname = normalize_member_display_text(profile.get("nickname"))
+    profile_display = normalize_member_display_text(profile.get("displayName"))
     if nickname and is_resolved_member_display(username, nickname):
         return nickname
     if (
@@ -102,7 +114,7 @@ def find_member_display_collisions(
     accounts_by_display: dict[str, set[str]] = {}
     for raw_username, raw_display_name in sender_displays:
         username = (raw_username or "").strip()
-        display_name = (raw_display_name or "").strip()
+        display_name = normalize_member_display_text(raw_display_name)
         if not username or not is_resolved_member_display(username, display_name):
             continue
         accounts_by_display.setdefault(display_name.casefold(), set()).add(username)
@@ -119,16 +131,51 @@ def find_member_display_collisions(
     }
 
 
+def find_member_display_account_misbindings(
+    sender_displays: list[tuple[str, str]],
+    known_account_ids: set[str] | None = None,
+) -> set[str]:
+    """返回把另一成员账号 ID 错当成显示名的发送者账号。
+
+    WeChatDataAnalysis 的群资料解析可能把同一 ``ext_buffer`` 子记录中的
+    关联成员账号误认为群昵称。这里仅在显示名精确命中另一个已知账号时
+    判定异常，避免把普通英文群昵称一概视为账号占位。
+    """
+
+    account_keys = {
+        str(account_id or "").strip().casefold()
+        for account_id in (known_account_ids or set())
+        if str(account_id or "").strip()
+    }
+    for raw_username, _ in sender_displays:
+        username = str(raw_username or "").strip()
+        if username:
+            account_keys.add(username.casefold())
+
+    misbound_usernames: set[str] = set()
+    for raw_username, raw_display_name in sender_displays:
+        username = str(raw_username or "").strip()
+        display_name = normalize_member_display_text(raw_display_name)
+        if (
+            username
+            and is_resolved_member_display(username, display_name)
+            and display_name.casefold() != username.casefold()
+            and display_name.casefold() in account_keys
+        ):
+            misbound_usernames.add(username)
+    return misbound_usernames
+
+
 def repair_member_display_collisions(
     messages: list[StructuredMessage],
     contact_profiles: dict[str, dict[str, Any]],
     collision_usernames: set[str] | None = None,
 ) -> set[str]:
-    """修复上游把同一显示名错误分配给多个群成员的情况。
+    """修复上游碰撞或跨成员误绑定产生的异常显示名。
 
-    用户已确认从两个不同账号共用同一显示名起即视为碰撞。碰撞后不再
-    信任消息接口的 ``senderDisplayName``，改用联系人微信网名；没有可靠
-    联系人资料时显示账号 ID，避免多个成员继续冒用同一个错误名称。
+    调用方传入需要修复的账号集合。修复后不再信任消息接口的
+    ``senderDisplayName``，改用联系人微信网名；没有可靠联系人资料时显示
+    账号 ID，避免成员继续冒用同一个错误名称。
     """
 
     if collision_usernames is None:
@@ -187,6 +234,126 @@ def collect_member_aliases_from_messages(messages: list[StructuredMessage]) -> d
         ):
             add_alias(str(metadata.get(username_key, "")), str(metadata.get(name_key, "")))
     return aliases
+
+
+def find_unresolved_member_usernames(messages: list[StructuredMessage]) -> set[str]:
+    """返回仍只能显示账号 ID、不能安全进入报告的成员。"""
+
+    known_accounts = {
+        str(message.sender_username or "").strip().casefold()
+        for message in messages
+        if str(message.sender_username or "").strip()
+    }
+    unresolved: set[str] = set()
+    for message in messages:
+        username = str(message.sender_username or "").strip()
+        display = str(message.sender or "").strip()
+        if not username:
+            continue
+        if (
+            not is_resolved_member_display(username, display)
+            or (
+                display.casefold() in known_accounts
+                and display.casefold() != username.casefold()
+            )
+        ):
+            unresolved.add(username)
+    return unresolved
+
+
+def require_resolved_report_member_names(ctx: dict[str, Any]) -> None:
+    """阻止仍含账号 ID 占位的消息范围进入报告生成。"""
+
+    unresolved = [
+        str(username).strip()
+        for username in (ctx.get("unresolved_member_usernames") or [])
+        if str(username).strip()
+    ]
+    if unresolved:
+        raise ValueError(
+            f"仍有 {len(unresolved)} 名参与成员无法取得可靠群昵称或微信网名，"
+            "已停止生成报告；请刷新 WeChatDataAnalysis 实时数据或修复上游昵称映射。"
+        )
+
+
+def disambiguate_duplicate_member_names(messages: list[StructuredMessage]) -> dict[str, str]:
+    """把可靠但重名的成员稳定显示为 ``昵称（01）``、``昵称（02）``。"""
+
+    names_by_key: dict[str, dict[str, str]] = {}
+    for message in messages:
+        username = str(message.sender_username or "").strip()
+        display = str(message.sender or "").strip()
+        if username and is_resolved_member_display(username, display):
+            names_by_key.setdefault(display.casefold(), {})[username] = display
+
+    replacements: dict[str, str] = {}
+    for members in names_by_key.values():
+        if len(members) < 2:
+            continue
+        for index, username in enumerate(sorted(members, key=str.casefold), 1):
+            replacements[username] = f"{members[username]}（{index:02d}）"
+    if not replacements:
+        return {}
+
+    for message in messages:
+        username = str(message.sender_username or "").strip()
+        if username in replacements:
+            message.sender = replacements[username]
+        metadata = message.metadata or {}
+        for username_key, name_key in (
+            ("reply_to_username", "reply_to_name"),
+            ("pat_from_username", "pat_from_name"),
+            ("pat_to_username", "pat_to_name"),
+            ("redpacket_sender_username", "redpacket_sender_name"),
+            ("redpacket_receiver_username", "redpacket_receiver_name"),
+        ):
+            referenced = str(metadata.get(username_key, "")).strip()
+            if referenced in replacements:
+                metadata[name_key] = replacements[referenced]
+    return replacements
+
+
+def _repair_unresolved_members_from_profiles(
+    messages: list[StructuredMessage],
+    *,
+    api_url: str,
+    account: str,
+    source: str,
+) -> set[str]:
+    """按账号调用实时资料接口，修复群昵称错绑后的微信网名。"""
+
+    unresolved = find_unresolved_member_usernames(messages)
+    if not unresolved:
+        return set()
+    client = WeChatDataAPIClient(
+        api_url,
+        account=account,
+        source=source or "realtime",
+        timeout=15.0,
+    )
+    profiles: dict[str, dict[str, Any]] = {}
+    for username in sorted(unresolved, key=str.casefold):
+        try:
+            profile = client.get_contact_profile(username)
+        except (WeChatDataAPIError, AttributeError):
+            continue
+        if profile:
+            profiles[username] = profile
+    repair_member_display_collisions(messages, profiles, set(profiles))
+    return find_unresolved_member_usernames(messages)
+
+
+def has_same_message_coverage(
+    primary_messages: list[StructuredMessage],
+    retry_messages: list[StructuredMessage],
+) -> bool:
+    """确认源码复读没有因快照滞后而遗漏或替换消息。"""
+
+    if len(primary_messages) != len(retry_messages):
+        return False
+    primary_ids = {message.id for message in primary_messages}
+    retry_ids = {message.id for message in retry_messages}
+    return len(primary_ids) == len(primary_messages) and primary_ids == retry_ids
 
 
 def _parse_local_time(value: str, *, is_end: bool = False) -> int:
@@ -315,7 +482,7 @@ def _build_metadata(row: dict[str, Any], raw_content: str, local_type: int) -> d
     return metadata
 
 
-def fetch_structured_messages(
+def _fetch_structured_messages_once(
     chat_ref: str,
     start_time: str,
     end_time: str,
@@ -324,8 +491,8 @@ def fetch_structured_messages(
     api_url: str = WECHAT_DATA_API_URL,
     account: str = WECHAT_DATA_ACCOUNT,
     source: str = WECHAT_DATA_SOURCE,
-) -> tuple[dict[str, Any], list[StructuredMessage]]:
-    """读取指定群聊与时间窗，并转换为分析流程使用的消息结构。"""
+) -> tuple[dict[str, Any], list[StructuredMessage], set[str]]:
+    """从单个 API 读取消息，并返回原始显示名异常账号。"""
     start_ts = _parse_local_time(start_time)
     end_ts = _parse_local_time(end_time, is_end=True)
     client = WeChatDataAPIClient(api_url, account=account, source=source)
@@ -359,13 +526,22 @@ def fetch_structured_messages(
         text = str(metadata.get("analysis_text") or _analysis_text(row, msg_type))
         text = normalize_text(text or "(无内容)", max_len=MAX_LINE_TEXT_LEN)
         sender_username = str(row.get("senderUsername") or "").strip()
-        upstream_sender_display = str(row.get("senderDisplayName") or "").strip()
+        upstream_sender_display = normalize_member_display_text(row.get("senderDisplayName"))
         upstream_sender_displays.append((sender_username, upstream_sender_display))
         sender_display = resolve_sender_display(
             sender_username,
             upstream_sender_display,
             contact_profiles.get(sender_username),
         )
+        for name_key in (
+            "reply_to_name",
+            "pat_from_name",
+            "pat_to_name",
+            "redpacket_sender_name",
+            "redpacket_receiver_name",
+        ):
+            if name_key in metadata:
+                metadata[name_key] = normalize_member_display_text(metadata.get(name_key))
         fingerprint = (timestamp, sender_username or sender_display, msg_type, text)
         if fingerprint in fingerprints:
             continue
@@ -396,9 +572,14 @@ def fetch_structured_messages(
             )
         )
 
-    collision_usernames = find_member_display_collisions(upstream_sender_displays)
-    repair_member_display_collisions(collected, contact_profiles, collision_usernames)
-    _GROUP_NICKNAME_CACHE[chat.username] = collect_member_aliases_from_messages(collected)
+    invalid_display_usernames = find_member_display_collisions(upstream_sender_displays)
+    invalid_display_usernames.update(
+        find_member_display_account_misbindings(
+            upstream_sender_displays,
+            known_account_ids=set(contact_profiles),
+        )
+    )
+    repair_member_display_collisions(collected, contact_profiles, invalid_display_usernames)
     collected.sort(key=lambda item: (item.timestamp, item.local_id, item.id))
     ctx = {
         "username": chat.username,
@@ -408,4 +589,92 @@ def fetch_structured_messages(
         "source": chat.source,
         "data_source": "wechat_data_analysis_api",
     }
-    return ctx, collected
+    return ctx, collected, invalid_display_usernames
+
+
+def fetch_structured_messages(
+    chat_ref: str,
+    start_time: str,
+    end_time: str,
+    batch_size: int = 500,
+    *,
+    api_url: str = WECHAT_DATA_API_URL,
+    account: str = WECHAT_DATA_ACCOUNT,
+    source: str = WECHAT_DATA_SOURCE,
+    local_source_dir: str = WECHAT_DATA_LOCAL_SOURCE_DIR,
+    local_source_port: int = WECHAT_DATA_LOCAL_SOURCE_PORT,
+) -> tuple[dict[str, Any], list[StructuredMessage]]:
+    """读取消息；发现昵称异常时优先用本地上游修复分支复读。"""
+
+    primary_ctx, primary_messages, invalid_usernames = _fetch_structured_messages_once(
+        chat_ref,
+        start_time,
+        end_time,
+        batch_size,
+        api_url=api_url,
+        account=account,
+        source=source,
+    )
+    primary_ctx["nickname_anomaly_detected"] = bool(invalid_usernames)
+    primary_ctx["nickname_source"] = "local_contact_fallback" if invalid_usernames else "upstream"
+
+    configured_source_dir = str(local_source_dir or "").strip()
+    if invalid_usernames and configured_source_dir:
+        try:
+            from .local_upstream_service import LocalUpstreamService, derive_upstream_output_dir
+
+            primary_client = WeChatDataAPIClient(api_url, account=account, source=source)
+            output_dir = derive_upstream_output_dir(
+                primary_client.list_accounts(),
+                primary_ctx.get("account", account),
+            )
+            with LocalUpstreamService(
+                configured_source_dir,
+                output_dir=output_dir,
+                port=local_source_port,
+            ) as local_service:
+                source_ctx, source_messages, source_invalid = _fetch_structured_messages_once(
+                    primary_ctx["username"],
+                    start_time,
+                    end_time,
+                    batch_size,
+                    api_url=local_service.base_url,
+                    account=primary_ctx.get("account", account),
+                    source=str(primary_ctx.get("source") or source or "realtime"),
+                )
+            if not source_invalid and has_same_message_coverage(primary_messages, source_messages):
+                source_ctx["nickname_anomaly_detected"] = True
+                source_ctx["nickname_source"] = "local_upstream_branch"
+                source_ctx["local_upstream_attempted"] = True
+                disambiguate_duplicate_member_names(source_messages)
+                source_ctx["unresolved_member_usernames"] = sorted(
+                    find_unresolved_member_usernames(source_messages), key=str.casefold
+                )
+                _GROUP_NICKNAME_CACHE[source_ctx["username"]] = collect_member_aliases_from_messages(
+                    source_messages
+                )
+                return source_ctx, source_messages
+            if source_invalid:
+                primary_ctx["local_upstream_error"] = "本地上游复读结果仍存在昵称异常。"
+            else:
+                primary_ctx["local_upstream_error"] = "本地上游快照未覆盖正式服务返回的同一批消息。"
+        except Exception as exc:
+            primary_ctx["local_upstream_error"] = str(exc)
+        primary_ctx["local_upstream_attempted"] = True
+
+    unresolved_before_profiles = find_unresolved_member_usernames(primary_messages)
+    unresolved = _repair_unresolved_members_from_profiles(
+        primary_messages,
+        api_url=api_url,
+        account=str(primary_ctx.get("account") or account),
+        source=str(primary_ctx.get("source") or source or "realtime"),
+    )
+    if len(unresolved) < len(unresolved_before_profiles):
+        primary_ctx["nickname_source"] = "realtime_contact_repair"
+    disambiguate_duplicate_member_names(primary_messages)
+    primary_ctx["unresolved_member_usernames"] = sorted(unresolved, key=str.casefold)
+
+    _GROUP_NICKNAME_CACHE[primary_ctx["username"]] = collect_member_aliases_from_messages(
+        primary_messages
+    )
+    return primary_ctx, primary_messages
