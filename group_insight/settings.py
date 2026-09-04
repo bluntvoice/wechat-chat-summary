@@ -73,6 +73,8 @@ DEFAULT_OUTPUT_ROOT: Path | None = None
 WECHAT_DATA_API_URL = "http://127.0.0.1:10392"
 WECHAT_DATA_ACCOUNT = ""
 WECHAT_DATA_SOURCE = ""
+WECHAT_DATA_LOCAL_SOURCE_DIR = ""
+WECHAT_DATA_LOCAL_SOURCE_PORT = 10393
 STAGE_CACHE_VERSION = 3
 MAX_LINE_TEXT_LEN = 1200
 APPMSG_XML_MAX_LEN = 120000
@@ -159,6 +161,10 @@ DEFAULT_OUTPUT_ROOT = Path(_configured_output_root).expanduser() if _configured_
 WECHAT_DATA_API_URL = os.environ.get("WECHAT_DATA_API_URL", WECHAT_DATA_API_URL).rstrip("/")
 WECHAT_DATA_ACCOUNT = os.environ.get("WECHAT_DATA_ACCOUNT", "").strip()
 WECHAT_DATA_SOURCE = os.environ.get("WECHAT_DATA_SOURCE", "").strip()
+WECHAT_DATA_LOCAL_SOURCE_DIR = os.environ.get("WECHAT_DATA_LOCAL_SOURCE_DIR", "").strip()
+WECHAT_DATA_LOCAL_SOURCE_PORT = int(
+    os.environ.get("WECHAT_DATA_LOCAL_SOURCE_PORT", str(WECHAT_DATA_LOCAL_SOURCE_PORT))
+)
 
 # 异常告警邮件配置（可选；留空时静默跳过告警）。
 # 必须放在 load_local_env() 之后，否则 .env 中的变量来不及进入 os.environ。
