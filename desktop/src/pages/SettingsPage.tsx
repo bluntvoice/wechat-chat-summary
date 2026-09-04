@@ -100,6 +100,18 @@ export default function SettingsPage({ active }: { active: boolean }) {
     if (typeof selected === "string") setSettings((current) => ({ ...current, export_root: selected }));
   }
 
+  async function chooseWeChatLocalSource() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: settings.wechat_local_source_dir || undefined,
+      title: "选择 WeChatDataAnalysis 本地源码目录",
+    });
+    if (typeof selected === "string") {
+      setSettings((current) => ({ ...current, wechat_local_source_dir: selected }));
+    }
+  }
+
   async function setMcpEnabled(enabled: boolean) {
     setBusy(true);
     try {
@@ -147,6 +159,11 @@ export default function SettingsPage({ active }: { active: boolean }) {
       <section className="settings-section">
         <div className="settings-section-head"><div><span>1</span><h2>微信数据源</h2></div><button className="button secondary" disabled={busy} onClick={testWeChat}>测试连接</button></div>
         <label><span>WeChatDataAnalysis API</span><input value={settings.wechat_api_url} onChange={(event) => setSettings({ ...settings, wechat_api_url: event.target.value })} /></label>
+        <div className="field-grid">
+          <label className="wide"><span>昵称异常时使用的本地上游源码</span><div className="path-control"><input readOnly placeholder="可选；留空时直接按账号读取实时资料" value={settings.wechat_local_source_dir} /><button className="button secondary" onClick={chooseWeChatLocalSource}>选择目录</button></div></label>
+          <label><span>临时服务端口</span><input type="number" min="1024" max="65535" value={settings.wechat_local_source_port} onChange={(event) => setSettings({ ...settings, wechat_local_source_port: Number(event.target.value) })} /></label>
+        </div>
+        <p className="privacy-copy">仅在检测到群成员昵称异常时启动本地源码后端复读；服务只监听 127.0.0.1，读取完成后自动退出。源码复读不可用时按账号读取实时微信名；仍无法确认的成员会阻止报告生成。真实同名成员按账号排序显示为昵称（01）、昵称（02）。</p>
       </section>
 
       <section className="settings-section">

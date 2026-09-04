@@ -9,7 +9,7 @@ from typing import Any
 
 from .common import make_user_placeholder, normalize_text
 from .desktop_config import load_desktop_settings, save_desktop_settings
-from .fetching import fetch_structured_messages
+from .fetching import fetch_structured_messages, require_resolved_report_member_names
 from .history_store import HistoryStore
 from .rendering import render_html_report
 from .report_paths import allocate_report_paths
@@ -104,6 +104,8 @@ class MCPService:
             start_at,
             end_at,
             api_url=str(settings.get("wechat_api_url") or ""),
+            local_source_dir=str(settings.get("wechat_local_source_dir") or ""),
+            local_source_port=int(settings.get("wechat_local_source_port") or 10393),
         )
         if len(messages) > MAX_ANALYSIS_MESSAGES:
             raise ValueError(
@@ -274,6 +276,7 @@ class MCPService:
         chat = metadata["chat"]
         period = metadata["period"]
         ctx, messages, start_at, end_at = self._messages(chat["id"], period["start"], period["end"])
+        require_resolved_report_member_names(ctx)
         if str(chat.get("name") or "") != str(ctx["display_name"]):
             raise ValueError("报告 chat.name 与当前数据源不一致。")
         stats = build_local_stats(messages)

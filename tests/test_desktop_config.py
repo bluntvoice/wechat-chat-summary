@@ -23,6 +23,26 @@ class DesktopConfigTests(unittest.TestCase):
             self.assertFalse(loaded["mcp_enabled"])
             self.assertEqual(loaded["mcp_host"], "127.0.0.1")
             self.assertEqual(loaded["mcp_endpoint"], "http://127.0.0.1:8765/mcp")
+            self.assertEqual(loaded["wechat_local_source_dir"], "")
+            self.assertEqual(loaded["wechat_local_source_port"], 10393)
+
+    def test_local_upstream_source_settings_are_saved_and_port_is_validated(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            saved = save_desktop_settings(
+                {
+                    "wechat_local_source_dir": "D:/tools/WeChatDataAnalysis-source",
+                    "wechat_local_source_port": 10493,
+                }
+            )
+            self.assertEqual(
+                saved["wechat_local_source_dir"],
+                "D:/tools/WeChatDataAnalysis-source",
+            )
+            self.assertEqual(saved["wechat_local_source_port"], 10493)
+            with self.assertRaises(ValueError):
+                save_desktop_settings({"wechat_local_source_port": 80})
 
     def test_provider_keys_are_private_and_stored_separately(self):
         with TemporaryDirectory() as temp_dir, patch.dict(

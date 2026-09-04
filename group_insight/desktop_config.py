@@ -19,6 +19,8 @@ from .settings import (
     DEFAULT_DEEPSEEK_REASONING_EFFORT,
     DEFAULT_OUTPUT_ROOT,
     WECHAT_DATA_API_URL,
+    WECHAT_DATA_LOCAL_SOURCE_DIR,
+    WECHAT_DATA_LOCAL_SOURCE_PORT,
 )
 
 
@@ -154,6 +156,8 @@ def ensure_desktop_data_dir() -> Path:
 def default_settings() -> dict[str, Any]:
     return {
         "wechat_api_url": WECHAT_DATA_API_URL,
+        "wechat_local_source_dir": WECHAT_DATA_LOCAL_SOURCE_DIR,
+        "wechat_local_source_port": WECHAT_DATA_LOCAL_SOURCE_PORT,
         "provider": "deepseek",
         "api_url": DEFAULT_API_URL,
         "model": DEFAULT_DEEPSEEK_MODEL,
@@ -257,6 +261,8 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
     secrets = _load_secrets(str(current.get("provider") or "deepseek"))
     allowed = {
         "wechat_api_url",
+        "wechat_local_source_dir",
+        "wechat_local_source_port",
         "provider",
         "api_url",
         "model",
@@ -296,6 +302,10 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
     if effort not in {"high", "max"}:
         raise ValueError("DeepSeek Reasoning Effort 只能是 high 或 max。")
     current["reasoning_effort"] = effort
+    local_source_port = int(current.get("wechat_local_source_port") or WECHAT_DATA_LOCAL_SOURCE_PORT)
+    if local_source_port < 1024 or local_source_port > 65535:
+        raise ValueError("本地上游源码服务端口必须在 1024 到 65535 之间。")
+    current["wechat_local_source_port"] = local_source_port
     schedule_date_mode = str(current.get("schedule_date_mode") or "today").strip().lower()
     if schedule_date_mode not in {"today", "yesterday"}:
         raise ValueError("定时报告日期仅支持 today 或 yesterday。")

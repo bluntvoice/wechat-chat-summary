@@ -167,6 +167,18 @@ class MCPServiceTests(unittest.TestCase):
                 service.submit_report(document)
         messages.assert_not_called()
 
+    def test_submit_report_rejects_unresolved_member_names(self):
+        service = MCPService()
+        document = valid_external_document()
+        unresolved_ctx = {**CHAT, "unresolved_member_usernames": ["wxid_unknown"]}
+        with patch.object(
+            service,
+            "_messages",
+            return_value=(unresolved_ctx, sample_messages(), START, END),
+        ):
+            with self.assertRaisesRegex(ValueError, "停止生成报告"):
+                service.submit_report(document)
+
     def test_submit_versions_renders_and_updates_history_and_summary_cache(self):
         with TemporaryDirectory() as temp_dir, patch.dict(
             os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}

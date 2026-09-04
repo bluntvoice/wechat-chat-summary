@@ -25,6 +25,9 @@ DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
 # OPENAI_COMPATIBLE_MODEL=<MODEL_NAME>
 # OPENAI_COMPATIBLE_API_URL=https://example.com/v1
 WECHAT_DATA_API_URL=http://127.0.0.1:10392
+# 可选：昵称异常时使用本地 WeChatDataAnalysis 修复分支复读
+# WECHAT_DATA_LOCAL_SOURCE_DIR=D:\path\to\WeChatDataAnalysis-source
+# WECHAT_DATA_LOCAL_SOURCE_PORT=10393
 GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 ```
 
@@ -118,9 +121,16 @@ $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 保存同一套结构。链接卡片、普通
 URL 与文件元数据会先确定性提取，再由 AI 按当日主题归类；模型遗漏或不可靠归类会本地回退
 到相近主题或“其他 / 未归类”。红包消息、疑似红包领取页和红包素材链接在提取阶段过滤。
-成员显示名按群昵称、微信网名、账号 ID 的顺序解析，并排除本机联系人备注；同一显示名同时
-对应两个及以上不同账号时会判定为上游名称碰撞，忽略该显示名并分别回退到微信网名或账号
-ID。群关键词会合并重复短语，并移除与高频长词重复的二字切片。
+成员显示名按群昵称、微信网名、账号 ID 的顺序解析，并排除本机联系人备注；名称字段中的
+`U+007F`（DEL）占位字符会在匹配前自动移除。同一显示名同时
+对应两个及以上不同账号，或显示名精确命中另一成员账号 ID 时，会判定为上游昵称异常。配置
+`WECHAT_DATA_LOCAL_SOURCE_DIR` 后，程序会在异常发生时校验上游固定源码运行时、仅监听
+`127.0.0.1` 启动临时源码后端，并使用与正式服务相同的数据源复读同一范围；复读结果通过相同
+异常校验且消息 ID 与数量完全覆盖正式服务结果后才会采用，读取完成即关闭服务。启动失败、
+快照缺失消息或复读仍异常时，程序会按发送者账号逐一读取实时联系人资料并使用微信网名；若
+仍只能得到账号 ID，则允许统计和诊断继续，但停止报告生成。确认属于真实同名时，按账号 ID
+稳定排序并在当次报告中显示为“昵称（01）”“昵称（02）”。群关键词会合并重复短语，并移除
+与高频长词重复的二字切片。
 
 桌面端生成后的人工屏蔽由 `redaction.py` 在本机完成：它读取既有 schema 2.x JSON，将选中
 条目替换为只含所属时间和屏蔽提示的占位对象，再通过同一渲染器生成递增新版本。这个流程
