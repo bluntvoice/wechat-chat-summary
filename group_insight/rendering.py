@@ -18,8 +18,61 @@ def _esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
-def _discussion_segments(value: Any, limit: int = 5) -> list[str]:
-    """把讨论脉络整理为少量可读段落；只分段，不改写内容。"""
+def _discussion_speaker(value: str, names: dict[str, str] | None = None) -> str:
+    """识别段首发言人；仅使用成员占位符或可唯一确认的成员名。"""
+
+    text = str(value or "").lstrip()
+    token_match = re.match(r"^\[\[user:([^\]]+)\]\]", text)
+    if token_match:
+        return f"user:{token_match.group(1)}"
+    if re.match(r"^(?:大家|群友们?|群内|众人)(?:[：:，,、]|先|随后|接着|最后|一致|共同)", text):
+        return "group"
+
+    counts: dict[str, int] = {}
+    for raw_name in (names or {}).values():
+        name = str(raw_name or "").strip()
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    for name in sorted((item for item, count in counts.items() if count == 1), key=len, reverse=True):
+        if not text.startswith(name):
+            continue
+        remainder = text[len(name):]
+        if not remainder or re.match(
+            r"^(?:[：:，,、]|说|认为|表示|提到|提出|补充|回应|建议|先|随后|接着|又|则|进一步)",
+            remainder,
+        ):
+            return f"name:{name}"
+    return ""
+
+
+def _limit_discussion_segments(segments: list[str], limit: int) -> list[str]:
+    if len(segments) <= limit:
+        return segments
+    return [*segments[: limit - 1], " ".join(segments[limit - 1 :])]
+
+
+def _merge_same_speaker_segments(
+    segments: list[str], names: dict[str, str] | None = None
+) -> list[str]:
+    merged: list[str] = []
+    speakers: list[str] = []
+    for segment in segments:
+        speaker = _discussion_speaker(segment, names)
+        if speaker and merged and speakers[-1] == speaker:
+            merged[-1] = f"{merged[-1]} {segment}".strip()
+            continue
+        merged.append(segment)
+        speakers.append(speaker)
+    return merged
+
+
+def _discussion_segments(
+    value: Any,
+    limit: int = 5,
+    *,
+    names: dict[str, str] | None = None,
+) -> list[str]:
+    """按发言人或讨论阶段整理段落；同一成员的连续表达不拆段。"""
 
     text = str(value or "").strip()
     if not text:
@@ -30,15 +83,33 @@ def _discussion_segments(value: Any, limit: int = 5) -> list[str]:
         if part.strip()
     ]
     if len(explicit) > 1:
-        if len(explicit) <= limit:
-            return explicit
-        return [*explicit[: limit - 1], " ".join(explicit[limit - 1 :])]
+        return _limit_discussion_segments(
+            _merge_same_speaker_segments(explicit, names), limit
+        )
     if len(text) <= 120:
         return [text]
 
     sentences = [part.strip() for part in re.findall(r".*?(?:[。！？!?]+|$)", text) if part.strip()]
     if len(sentences) < 2:
         return [text]
+    speaker_blocks: list[str] = []
+    speaker_keys: list[str] = []
+    current_speaker = ""
+    saw_speaker = False
+    for sentence in sentences:
+        detected = _discussion_speaker(sentence, names)
+        if detected:
+            current_speaker = detected
+            saw_speaker = True
+        effective_speaker = current_speaker
+        if effective_speaker and speaker_blocks and speaker_keys[-1] == effective_speaker:
+            speaker_blocks[-1] += sentence
+        else:
+            speaker_blocks.append(sentence)
+            speaker_keys.append(effective_speaker)
+    if saw_speaker:
+        return _limit_discussion_segments(speaker_blocks, limit)
+
     segments: list[str] = []
     current = ""
     for sentence in sentences:
@@ -410,7 +481,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
                 f'<div class="section-body">{_redacted_html(topic)}</div></article>'
             )
         flow = topic.get("discussion_flow") or topic.get("summary") or ""
-        flow_segments = _discussion_segments(flow)
+        flow_segments = _discussion_segments(flow, names=names)
         outcome = topic.get("outcome") if isinstance(topic.get("outcome"), dict) else {}
         legacy_result = topic.get("result") if isinstance(topic.get("result"), dict) else {}
         outcome_text = outcome.get("content") or legacy_result.get("summary") or topic.get("takeaway") or ""
@@ -443,7 +514,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             + (
                 f'<ul class="discussion-flow discussion-points">{"".join(f"<li>{topic_resolved(segment)}</li>" for segment in flow_segments)}</ul>'
                 if len(flow_segments) > 1
-                else (f'<p class="discussion-flow">{topic_resolved(flow)}</p>' if flow else "")
+                else (f'<p class="discussion-flow">{topic_resolved(flow_segments[0])}</p>' if flow_segments else "")
             )
             + (_redacted_html(outcome) if _is_redacted(outcome) else (f'<div class="topic-result concluded"><span>讨论落点</span><p>{topic_resolved(outcome_text)}</p></div>' if outcome_text else ""))
             + "".join(extras)

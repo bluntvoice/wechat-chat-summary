@@ -118,7 +118,7 @@ $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 “今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 → 今日活跃情况 → 报告结尾”组织；
 同一语义话题可合并多个不连续时间区间，结论、问题、风险、引用和资源嵌入对应话题。
 无法可靠关联的补充信息进入 AI 今日观察，未归类资源保留为其他资源；JSON 与 SQLite 历史索引
-保存同一套结构。较长讨论脉络保留换行并在渲染时形成 2–5 个短段；今日速览和主要话题中的唯一成员昵称
+保存同一套结构。较长讨论脉络按发言人、子问题或讨论阶段形成 2–5 个短段，同一成员的连续表达不因长度被拆成两段；今日速览和主要话题中的唯一成员昵称
 使用蓝色加粗。新报告不提取行动事项，Schema 2.2 兼容字段固定为空，旧数据保留但不展示或索引。链接卡片、普通
 URL 与文件元数据会先确定性提取，再由 AI 按当日主题归类；模型遗漏或不可靠归类会本地回退
 到相近主题或“其他 / 未归类”。小红书、淘宝 / 天猫、公众号、知乎、京东、抖音、哔哩哔哩、微博等
@@ -149,9 +149,10 @@ Tauri 解析的 Windows 用户数据目录，只保存报告结构、独立每�
 
 历史中心通过 JSONL Bridge 调用 `list_history_chats`、`list_history_reports`、
 `get_history_report`、`search_history`、`get_report_versions`、`list_history_resources` 和
-`refresh_history_state`，React 不直接访问 SQLite。HistoryStore 从 Schema 2.2 的
-`content.topics[*]` 派生主要话题、讨论结论、开放问题、风险提示、代表性原话和资源等
-逻辑模块，并保留 FTS5 + 中文子串回退。报告列表默认显示最新版本，旧版本始终保留。
+`refresh_history_state`，React 不直接访问 SQLite。HistoryStore 从 Schema 2.2 派生今日速览、
+今日主要话题、AI 今日观察和今日活跃情况；话题内结论、开放问题、风险提示、代表性原话和资源
+保留在对应话题中，不在默认详情重复拆卡。历史搜索仍覆盖这些嵌套内容，并保留 FTS5 + 中文子串
+回退。报告列表默认显示最新版本，旧版本始终保留。
 
 生成页的“已总结”状态按 WeChatDataAnalysis 返回的 `chat.id` 与 SQLite 有效报告匹配。SQLite 是
 唯一事实来源；设置中的 `summarized_chat_ids` 仅为刷新后的缓存。历史库中的旧群不会被强行加入

@@ -11,6 +11,9 @@ const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const tauriConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const installer = readFileSync(new URL("../installer/test-installer.nsi", import.meta.url), "utf8");
 const buildScript = readFileSync(new URL("../scripts/build-windows-test-package.ps1", import.meta.url), "utf8");
+const workflows = ["build-test.yml", "ci.yml", "release.yml"]
+  .map((name) => readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8"))
+  .join("\n");
 
 test("primary navigation uses a unified icon library and resets page scroll", () => {
   assert.match(app, /from "lucide-react"/);
@@ -50,17 +53,22 @@ test("history preview supports validated inline redaction with an auxiliary targ
   assert.match(styles, /\.history-module\.redaction-selectable/);
 });
 
-test("history activity statistics use a bounded compact renderer", () => {
+test("history default view follows report sections without duplicate activity totals", () => {
+  assert.match(history, /REPORT_SECTION_KEYS = \["themes", "topics", "ai_observations", "member_activity"\]/);
+  assert.match(history, /history-report-sections/);
+  assert.match(history, /报告结尾/);
+  assert.doesNotMatch(history, /\["消息数", stats\.message_count\]/);
   assert.match(history, /function ActivityStatsView/);
   assert.match(history, /\.slice\(0, 5\)/);
   assert.match(history, /\.slice\(0, 12\)/);
   assert.match(history, /isActivityStatsModule\(module\)/);
-  assert.match(styles, /\.history-activity-metrics[^\n]+repeat\(3/);
+  assert.match(styles, /\.history-report-section/);
   assert.match(styles, /\.history-segment-list[^\n]+repeat\(2/);
 });
 
 test("history resources hide internal fields and use a concise preview", () => {
   assert.match(history, /function ResourcePreview/);
+  assert.match(history, /related_resources/);
   assert.match(history, /module\.module_key === "resources"/);
   assert.match(history, /"message_id", "file_size", "source"/);
   assert.match(history, /topic !== "其他 \/ 未归类"/);
@@ -80,13 +88,25 @@ test("desktop typography uses readable tokens across history and helper text", (
   assert.match(styles, /\.privacy-copy[^}]*font-size:\s*12px/s);
 });
 
-test("installer blocks install and uninstall while the app mutex is present", () => {
+test("installer requests a graceful close before blocking install or uninstall", () => {
   assert.match(installer, /OpenMutexW/);
-  assert.match(installer, /Local\\bluntvoice\.wechat-chat-summary\.app-running/);
+  assert.match(installer, /APP_RUNNING_MUTEX/);
+  assert.match(installer, /FindWindow \$1 "" "\$\{PRODUCT_NAME\}"/);
+  assert.match(installer, /SendMessage \$1 \$\{WM_CLOSE\}/);
+  assert.match(installer, /Function RequestAppClose/);
+  assert.match(installer, /Function un\.RequestAppClose/);
   assert.match(installer, /MB_RETRYCANCEL/);
   assert.match(installer, /Function EnsureAppClosed/);
   assert.match(installer, /Function un\.EnsureAppClosed/);
   assert.doesNotMatch(installer, /taskkill/i);
+});
+
+test("GitHub workflows use Node 24 based official action majors", () => {
+  assert.match(workflows, /actions\/checkout@v7/);
+  assert.match(workflows, /actions\/setup-node@v7/);
+  assert.match(workflows, /actions\/setup-python@v7/);
+  assert.match(workflows, /actions\/upload-artifact@v7/);
+  assert.doesNotMatch(workflows, /actions\/(?:checkout|setup-node|setup-python|upload-artifact)@v[1-6]\b/);
 });
 
 test("all user-visible desktop product names use 群聊拾遗", () => {

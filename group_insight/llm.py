@@ -522,7 +522,7 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 5. 允许保留轻度口语化，但不能夸张、不能编造。
 6. 控制片段输出长度，但要保留话题缘起、观点变化和阶段结果所需的信息。
 7. theme_cards 最多 3 条，highlight_sections 最多 4 条，participant_notes 最多 4 条。
-8. 每个话题以 discussion_flow 为核心，通常 50-250 个汉字；信息较少就短写，不得为了长度重复同义内容。信息较多时使用 2-5 个换行分隔的短段，优先按讨论顺序、不同成员观点或子问题组织，不要输出 Markdown 项目符号。
+8. 每个话题以 discussion_flow 为核心，通常 50-250 个汉字；信息较少就短写，不得为了长度重复同义内容。信息较多时使用 2-5 个换行分隔的短段，优先按讨论顺序、不同成员观点或子问题组织；同一成员连续表达的内容必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
 9. outcome/open_questions/risk_flags/quotes/resource_ids 都是可选细节；没有可靠内容就返回空值或空数组，禁止填写“暂无结论”“仍在讨论”等占位语。action_items 固定返回空数组，不提取行动事项。
 10. 每个话题 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选项只保留直接影响后续理解的信息。
 11. highlight_sections 表示语义话题而不是机械时间切段；时间相邻只是弱线索。只有讨论对象、核心问题与上下文指向相同，或存在明确回复/承接关系时才能合并。
@@ -552,7 +552,7 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 
 要求：
 1. 只整合输入中的已有信息，不要引入外部信息。
-2. 去重同类主题和话题内部重复细节；信息较多的 discussion_flow 保留 2-5 个有推进关系的短段，不要拆成同义要点，不要输出 Markdown 项目符号。
+2. 去重同类主题和话题内部重复细节；信息较多的 discussion_flow 保留 2-5 个有推进关系的短段。同一成员连续表达必须合并在同一段，只有发言人、子问题或讨论阶段发生变化时才分段；不要拆成同义要点，不要输出 Markdown 项目符号。
 3. highlight_sections 应按语义话题整理；跨 shard 只有在讨论对象、核心问题和上下文指向一致，或存在明确回复/承接关系时才合并，并用 time_ranges 保留多个区间。
 4. source_refs 必须引用输入里的 shard_id 或 bundle_id。
 5. outcome/open_questions/risk_flags/quotes/resource_ids 都是可选细节；无可靠内容就留空，不得用占位文本凑字段。action_items 固定返回空数组，不提取行动事项。
@@ -596,7 +596,7 @@ def build_final_prompts(
 2. theme_cards 是“今日速览”，动态生成约 3-5 条短卡片；不强制凑足，不展开完整讨论过程。
 3. sections 是“今日主要话题”，表示语义话题而不是机械时间段；数量根据当天内容动态决定，不设最低数量。
 4. 报表语言要像运营洞察报告，不要写成泛泛总结。
-5. 每个 section 以 discussion_flow 为唯一必需正文，自然叙述缘起、展开、观点、补充、转折与进展；通常 50-250 个汉字，信息少就短写，禁止同义反复。内容较长时使用 2-5 个换行分隔的短段，按讨论顺序、不同成员观点或子问题选择最自然的组织方式，不要输出 Markdown 项目符号。
+5. 每个 section 以 discussion_flow 为唯一必需正文，自然叙述缘起、展开、观点、补充、转折与进展；通常 50-250 个汉字，信息少就短写，禁止同义反复。内容较长时使用 2-5 个换行分隔的短段，按讨论顺序、不同成员观点或子问题选择最自然的组织方式；同一成员连续表达必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
 6. outcome/open_questions/risk_flags/quotes/resource_ids 均为话题内可选字段；没有可靠内容就返回空值或空数组，不得填写“暂无结论”“仍在讨论”“讨论停留在观点交流”等占位文本。action_items 固定返回空数组，不提取行动事项。
 7. theme_cards 最多 5 条且每条只做速览，不复述完整 discussion_flow；participant_insights 最多 6 条。
 8. 每个 section 的 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选细节从严保留。

@@ -13,10 +13,11 @@ from .report_model import BLOCKED_OBSERVATION_PHRASES
 from .report_schema import SCHEMA_VERSION, upgrade_legacy_report
 
 
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
 
 HISTORY_MODULE_ORDER = (
     "summary",
+    "themes",
     "topics",
     "ai_observations",
     "member_activity",
@@ -28,10 +29,11 @@ HISTORY_MODULE_ORDER = (
 )
 
 HISTORY_MODULE_LABELS = {
-    "summary": "报告摘要",
-    "topics": "主要话题",
+    "summary": "今日总览",
+    "themes": "今日速览",
+    "topics": "今日主要话题",
     "ai_observations": "AI 今日观察",
-    "member_activity": "成员 / 活跃情况",
+    "member_activity": "今日活跃情况",
     "outcome": "讨论结论",
     "open_questions": "开放问题",
     "risk_flags": "风险提示",
@@ -255,13 +257,40 @@ class HistoryStore:
                 stats if isinstance(stats, dict) else {},
             )
 
+    @classmethod
+    def _migrate_v2_to_v3(cls, connection: sqlite3.Connection) -> None:
+        """按报告一级板块重建历史索引，并加入今日速览模块。"""
+
+        rows = connection.execute(
+            """SELECT r.report_id, c.display_name, r.content_json, r.stats_json
+               FROM reports AS r
+               JOIN chats AS c ON c.chat_id = r.chat_id"""
+        ).fetchall()
+        for row in rows:
+            try:
+                content = json.loads(str(row["content_json"] or "{}"))
+                stats = json.loads(str(row["stats_json"] or "{}"))
+            except json.JSONDecodeError:
+                content, stats = {}, {}
+            cls._replace_report_index(
+                connection,
+                str(row["report_id"]),
+                str(row["display_name"]),
+                content if isinstance(content, dict) else {},
+                stats if isinstance(stats, dict) else {},
+            )
+
     def _ensure_schema(self) -> None:
         current_version = int(self.connection.execute("PRAGMA user_version").fetchone()[0])
         if current_version > DATABASE_SCHEMA_VERSION:
             raise RuntimeError(
                 f"数据库版本 {current_version} 高于当前程序支持的 {DATABASE_SCHEMA_VERSION}。"
             )
-        migrations = {1: self._migrate_v0_to_v1, 2: self._migrate_v1_to_v2}
+        migrations = {
+            1: self._migrate_v0_to_v1,
+            2: self._migrate_v1_to_v2,
+            3: self._migrate_v2_to_v3,
+        }
         for target_version in range(current_version + 1, DATABASE_SCHEMA_VERSION + 1):
             migration = migrations.get(target_version)
             if migration is None:
@@ -335,20 +364,60 @@ class HistoryStore:
         }
         add("summary", "报告摘要", summary)
 
+        themes = [
+            (source_index, item)
+            for source_index, item in enumerate(content.get("themes", []) or [])
+            if isinstance(item, dict)
+        ]
+        for display_index, (source_index, item) in enumerate(themes, 1):
+            add(
+                "themes",
+                cls._item_title(item, f"今日速览 {display_index}"),
+                item,
+                target_id(item, f"themes:{source_index}"),
+            )
+
+        resources = content.get("resources", {}) if isinstance(content.get("resources"), dict) else {}
+        resource_groups = [
+            (group_index, group)
+            for group_index, group in enumerate(resources.get("groups", []) or [])
+            if isinstance(group, dict) and not group.get("redacted")
+        ]
+        assigned_resource_groups: set[int] = set()
+
         topics = [
             (source_index, item)
             for source_index, item in enumerate(content.get("topics", []) or [])
             if isinstance(item, dict)
         ]
         for display_index, (source_index, topic) in enumerate(topics, 1):
+            topic_id = str(topic.get("id") or "")
+            linked_resource_ids = {str(value) for value in topic.get("resource_ids", []) or []}
+            related_resources: list[dict[str, Any]] = []
+            for group_index, group in resource_groups:
+                items = [
+                    item for item in group.get("items", []) or []
+                    if isinstance(item, dict) and not item.get("redacted")
+                ]
+                if (topic_id and str(group.get("topic_id") or "") == topic_id) or any(
+                    str(item.get("id") or "") in linked_resource_ids for item in items
+                ):
+                    assigned_resource_groups.add(group_index)
+                    related_resources.extend(
+                        {"topic": str(group.get("topic") or "相关资源"), **item}
+                        for item in items
+                    )
             core = {
                 key: topic.get(key)
                 for key in (
                     "id", "title", "start_time", "end_time", "time_ranges",
-                    "discussion_flow", "summary", "redacted", "time_label", "notice",
+                    "discussion_flow", "summary", "outcome", "result", "takeaway",
+                    "open_questions", "risk_flags", "quotes", "redacted", "time_label", "notice",
                 )
                 if topic.get(key) not in (None, "", [], {})
             }
+            if related_resources:
+                core["related_resources"] = related_resources
             add(
                 "topics",
                 cls._item_title(topic, f"主要话题 {display_index}"),
@@ -356,14 +425,23 @@ class HistoryStore:
                 target_id(topic, f"topics:{source_index}"),
             )
 
-        # 2.0/2.1 的速览卡只在没有正式话题时作为主要话题兼容展示，避免重复。
-        if not topics:
-            for source_index, item in enumerate(content.get("themes", []) or []):
+        for group_index, group in resource_groups:
+            if group_index in assigned_resource_groups:
+                continue
+            items = [
+                {"topic": str(group.get("topic") or "其他 / 未归类"), **item}
+                for item in group.get("items", []) or []
+                if isinstance(item, dict) and not item.get("redacted")
+            ]
+            if items:
                 add(
                     "topics",
-                    cls._item_title(item, f"主要话题 {source_index + 1}"),
-                    item,
-                    target_id(item, f"themes:{source_index}"),
+                    "其他 / 未归类资源",
+                    {
+                        "title": "其他 / 未归类资源",
+                        "discussion_flow": "以下链接或文件暂时无法可靠关联到某个主要话题。",
+                        "related_resources": items,
+                    },
                 )
 
         for source_index, item in enumerate(content.get("ai_observations", []) or []):
@@ -388,7 +466,6 @@ class HistoryStore:
             key: stats.get(key)
             for key in (
                 "top_speakers", "word_cloud", "time_segment_breakdown",
-                "participant_count", "message_count", "effective_message_count",
             )
             if stats.get(key) not in (None, "", [], {})
         }
@@ -434,7 +511,6 @@ class HistoryStore:
                     target_id(item, f"{module_key}:{source_index}"),
                 )
 
-        resources = content.get("resources", {}) if isinstance(content.get("resources"), dict) else {}
         for group_index, group in enumerate(resources.get("groups", []) or []):
             if not isinstance(group, dict) or group.get("redacted"):
                 continue
@@ -471,10 +547,11 @@ class HistoryStore:
                 "INSERT INTO report_modules VALUES(?,?,?,?,?,?)",
                 (report_id, module_key, ordinal, title, body, body),
             )
-            connection.execute(
-                "INSERT INTO report_search_fts(report_id,module_key,chat_name,title,body) VALUES(?,?,?,?,?)",
-                (report_id, module_key, chat_name, title, body),
-            )
+            if module_key in {"summary", "themes", "topics", "ai_observations", "member_activity"}:
+                connection.execute(
+                    "INSERT INTO report_search_fts(report_id,module_key,chat_name,title,body) VALUES(?,?,?,?,?)",
+                    (report_id, module_key, chat_name, title, body),
+                )
 
     @staticmethod
     def _write_chat_daily_stats(

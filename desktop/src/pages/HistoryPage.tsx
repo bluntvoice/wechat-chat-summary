@@ -19,15 +19,13 @@ type HistoryPageProps = { active: boolean; target?: HistoryNavigationTarget | nu
 
 const MODULE_OPTIONS = [
   ["all", "全部"],
-  ["topics", "主要话题"],
+  ["themes", "今日速览"],
+  ["topics", "今日主要话题"],
   ["ai_observations", "AI 今日观察"],
-  ["member_activity", "成员 / 活跃情况"],
-  ["outcome", "讨论结论"],
-  ["open_questions", "开放问题"],
-  ["risk_flags", "风险提示"],
-  ["quotes", "代表性原话"],
-  ["resources", "资源"],
+  ["member_activity", "今日活跃情况"],
 ] as const;
+
+const REPORT_SECTION_KEYS = ["themes", "topics", "ai_observations", "member_activity"] as const;
 
 const FIELD_LABELS: Record<string, string> = {
   discussion_flow: "讨论脉络",
@@ -58,6 +56,12 @@ const FIELD_LABELS: Record<string, string> = {
   top_speakers: "发言排行",
   word_cloud: "群关键词",
   time_segment_breakdown: "活跃时段",
+  outcome: "讨论落点",
+  result: "讨论落点",
+  open_questions: "开放问题",
+  risk_flags: "风险提示",
+  quotes: "相关原话",
+  related_resources: "相关资源",
   count: "数量",
   rank: "排名",
   word: "关键词",
@@ -67,6 +71,7 @@ const HIDDEN_FIELDS = new Set([
   "id", "topic_id", "resource_id", "metadata", "redacted", "tone", "confidence",
   "sender_id", "sender_username", "username", "title", "start_time", "end_time",
   "redaction_id", "redaction_target_id", "message_id", "file_size", "source",
+  "resource_ids", "action_items", "status",
 ]);
 
 function datePart(value: string) {
@@ -139,17 +144,10 @@ function ActivityStatsView({ value, memberNames }: { value: unknown; memberNames
     .slice(0, 12);
   const segments = (Array.isArray(stats.time_segment_breakdown) ? stats.time_segment_breakdown : [])
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
-  const metricCandidates: Array<[string, unknown]> = [
-    ["消息数", stats.message_count],
-    ["有效消息", stats.effective_message_count],
-    ["参与人数", stats.participant_count],
-  ];
-  const metrics = metricCandidates.filter(([, count]) => count !== undefined && count !== null && count !== "");
   const speakerMax = Math.max(1, ...speakers.map((item) => Number(item.message_count) || 0));
   const segmentMax = Math.max(1, ...segments.map((item) => Number(item.count) || 0));
 
   return <div className="history-activity-stats">
-    {metrics.length > 0 && <dl className="history-activity-metrics">{metrics.map(([label, count]) => <div key={String(label)}><dt>{label}</dt><dd>{String(count)}</dd></div>)}</dl>}
     {speakers.length > 0 && <section className="history-activity-block"><h4>发言排行</h4><ol className="history-speaker-list">{speakers.map((item, index) => {
       const count = Number(item.message_count) || 0;
       return <li key={`${String(item.name || "群成员")}-${index}`}><span>{Number(item.rank) || index + 1}</span><strong>{resolveMemberTokens(String(item.name || "群成员"), memberNames)}</strong><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / speakerMax * 100))}%` }} /></i><em>{count} 条</em></li>;
@@ -175,6 +173,31 @@ function resourceDomain(value: string) {
   } catch {
     return value.length > 54 ? `${value.slice(0, 51)}…` : value;
   }
+}
+
+function TopicPreview({ value, memberNames }: { value: unknown; memberNames: Record<string, string> }) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return <ValueView value={value} memberNames={memberNames} />;
+  }
+  const topic = value as Record<string, unknown>;
+  const flow = String(topic.discussion_flow || topic.summary || "").trim();
+  const outcome = topic.outcome || topic.result || topic.takeaway;
+  const detailRows = ([
+    ["讨论落点", outcome],
+    ["开放问题", topic.open_questions],
+    ["风险提示", topic.risk_flags],
+    ["相关原话", topic.quotes],
+  ] as Array<[string, unknown]>).filter(([, item]) => item !== undefined && item !== null && item !== "" && !(Array.isArray(item) && item.length === 0));
+  const resources = Array.isArray(topic.related_resources)
+    ? topic.related_resources.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : [];
+
+  return <div className="history-topic-preview">
+    {Boolean(topic.time_ranges) && <ValueView value={topic.time_ranges} memberNames={memberNames} fieldKey="time_ranges" />}
+    {flow && <p className="history-topic-flow">{resolveMemberTokens(flow, memberNames)}</p>}
+    {detailRows.map(([label, item]) => <section className="history-topic-extra" key={label}><h4>{label}</h4><ValueView value={item} memberNames={memberNames} /></section>)}
+    {resources.length > 0 && <section className="history-topic-extra"><h4>相关资源</h4><div className="history-topic-resources">{resources.map((item, index) => <ResourcePreview key={`${String(item.id || item.url || item.title || "resource")}-${index}`} value={item} memberNames={memberNames} />)}</div></section>}
+  </div>;
 }
 
 function resourcePlatform(value: string, type: string) {
@@ -226,6 +249,7 @@ function ModuleCard({
   target,
   selected,
   onToggle,
+  showSectionLabel = true,
 }: {
   module: HistoryModule;
   memberNames: Record<string, string>;
@@ -233,6 +257,7 @@ function ModuleCard({
   target?: RedactionTarget;
   selected: boolean;
   onToggle: (target: RedactionTarget) => void;
+  showSectionLabel?: boolean;
 }) {
   const redacted = Boolean(module.content && typeof module.content === "object" && !Array.isArray(module.content) && (module.content as Record<string, unknown>).redacted);
   const selectable = Boolean(redactionMode && target && !target.redacted);
@@ -252,9 +277,11 @@ function ModuleCard({
       }
     }}
   >
-    <div className="history-module-heading"><span>{module.module_label}</span><h3>{redacted ? "已屏蔽内容" : resolveMemberTokens(module.title, memberNames)}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
+    <div className="history-module-heading">{showSectionLabel && <span>{module.module_label}</span>}<h3>{redacted ? "已屏蔽内容" : resolveMemberTokens(module.title, memberNames)}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
     {isActivityStatsModule(module)
       ? <ActivityStatsView value={module.content} memberNames={memberNames} />
+      : module.module_key === "topics"
+        ? <TopicPreview value={module.content} memberNames={memberNames} />
       : module.module_key === "resources"
         ? <ResourcePreview value={module.content} memberNames={memberNames} />
         : <ValueView value={module.content} memberNames={memberNames} />}
@@ -476,8 +503,15 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
 
   const visibleModules = (detail?.modules || []).filter((module) => {
     if (module.module_key === "summary") return false;
-    return detailModule === "all" || module.module_key === detailModule;
+    return detailModule === "all"
+      ? REPORT_SECTION_KEYS.includes(module.module_key as typeof REPORT_SECTION_KEYS[number])
+      : module.module_key === detailModule;
   });
+  const reportSections = REPORT_SECTION_KEYS.map((key) => ({
+    key,
+    label: MODULE_OPTIONS.find(([value]) => value === key)?.[1] || key,
+    modules: visibleModules.filter((module) => module.module_key === key),
+  })).filter((section) => section.modules.length > 0);
   const memberNames = useMemo(() => Object.fromEntries(
     ((detail?.stats?.member_aliases as Array<Record<string, unknown>> | undefined) || [])
       .map((item) => [String(item.sender_id || ""), String(item.sender_name || "")])
@@ -521,7 +555,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       <section className="history-detail-pane">
         {!detail && <div className="history-empty detail-empty"><strong>选择一份历史报告</strong><span>这里会显示报告模块、全部版本和导出文件。</span></div>}
         {detail && <>
-          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)}</span><h2>{detail.headline}</h2><p>{detail.one_line_summary}</p></div><div className="history-stat-row"><span>{detail.message_count} 条消息</span><span>{detail.participant_count} 人</span><span>{detail.resource_count} 项资源</span></div></div>
+          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)}</span><h2>{detail.headline}</h2><p>{detail.one_line_summary}</p></div><div className="history-stat-row"><span>今日消息 {detail.message_count} 条</span><span>今日字数 {Number(detail.stats.effective_char_count) || 0} 字</span><span>参与人数 {detail.participant_count} 人</span>{detail.resource_count > 0 && <span>整理资源 {detail.resource_count} 项</span>}</div></div>
           <div className="history-export-row">
             <button className="button primary small" disabled={!detail.exports.png.exists} onClick={() => openExport(detail.exports.png.path)}>打开 PNG</button>
             <button className="button secondary" disabled={!detail.exports.html.exists} onClick={() => openExport(detail.exports.html.path)}>打开 HTML</button>
@@ -533,10 +567,15 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
           {redactionMode && <div className="history-redaction-toolbar" aria-live="polite"><div><strong>选择要屏蔽的报告条目</strong><span>点击下方带边框的整项；未直接呈现的条目可在完整列表中补充。</span></div><div><span>已选择 {newSelectionCount} 项</span><button className="button secondary" disabled={redactionBusy} onClick={closeRedactionMode}>取消</button><button className="button primary small" disabled={redactionBusy || !newSelectionCount} onClick={applyRedactions}>{redactionBusy ? "正在生成…" : "生成屏蔽版"}</button></div></div>}
           {redactionMode && <details className="history-redaction-list"><summary>查看全部可屏蔽项 <span>{redactionTargets.length}</span></summary><RedactionTargetGroups targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onToggle={toggleRedaction} /></details>}
           {!redactionMode && detailModule !== "all" && <div className="history-module-focus"><span>当前模块：{MODULE_OPTIONS.find(([key]) => key === detailModule)?.[1] || detailModule}</span><button onClick={() => setDetailModule("all")}>查看全部</button></div>}
-          <div className="history-module-list">{visibleModules.map((module) => {
-            const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
-            return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} redactionMode={redactionMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} />;
-          })}{!visibleModules.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}</div>
+          {detailModule === "all"
+            ? <div className="history-report-sections">{reportSections.map((section) => <section className="history-report-section" key={section.key}><h3>{section.label}</h3><div className="history-module-list">{section.modules.map((module) => {
+              const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
+              return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} redactionMode={redactionMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} showSectionLabel={false} />;
+            })}</div></section>)}{!reportSections.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}<footer className="history-report-end"><strong>报告结尾</strong><span>{resolveMemberTokens(String(detail.content.conclusion || "以上为本次群聊日报整理。"), memberNames)}</span><small>报告由群聊拾遗生成 · {detail.display_name} · {periodLabel(detail.period_start, detail.period_end)}<br />生成时间：{detail.generated_at.slice(0, 19)}</small></footer></div>
+            : <div className="history-module-list">{visibleModules.map((module) => {
+              const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
+              return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} redactionMode={redactionMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} />;
+            })}{!visibleModules.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}</div>}
         </>}
       </section>
     </div>

@@ -514,6 +514,36 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertIn("报告由群聊拾遗生成 · 测试群 · 2026-09-03", html)
         self.assertIn("生成时间：", html)
 
+    def test_discussion_flow_keeps_consecutive_same_speaker_in_one_segment(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-09-03 00:00:00", end_time="2026-09-03 23:59:59", version=1,
+            stats={
+                "message_count": 4, "participant_count": 2,
+                "member_aliases": [
+                    {"sender_id": "wxid_a", "sender_name": "小甲"},
+                    {"sender_id": "wxid_b", "sender_name": "小乙"},
+                ],
+            },
+            report={
+                "sections": [{
+                    "title": "连续观点",
+                    "discussion_flow": (
+                        "[[user:wxid_a]]先说明背景。\n"
+                        "[[user:wxid_a]]随后补充原因。\n"
+                        "[[user:wxid_b]]提出不同建议。"
+                    ),
+                }],
+            },
+            resources={"count": 0, "groups": []},
+            exports={"json": "a", "html": "b", "png": "c"},
+            provider="deepseek", model="test", dry_run=False, chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        self.assertEqual(html.count('<li><strong class="topic-member">小甲</strong>'), 1)
+        self.assertEqual(html.count('<li><strong class="topic-member">小乙</strong>'), 1)
+        self.assertIn("小甲</strong>先说明背景。 <strong class=\"topic-member\">小甲</strong>随后补充原因。", html)
+
     def test_weakness_observations_are_removed(self):
         report = repair_final_report(
             {

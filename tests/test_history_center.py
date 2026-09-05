@@ -95,7 +95,7 @@ def history_document(root: Path, *, version: int = 1, schema_version: str = "2.2
 
 
 class HistoryCenterMigrationTests(unittest.TestCase):
-    def test_v1_database_rebuilds_schema_22_logical_modules(self) -> None:
+    def test_v1_database_rebuilds_report_aligned_logical_modules(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             path = root / "history.sqlite3"
@@ -133,6 +133,7 @@ class HistoryCenterMigrationTests(unittest.TestCase):
                     DATABASE_SCHEMA_VERSION,
                 )
                 modules = store._module_keys(metadata["report_id"])
+                self.assertIn("themes", modules)
                 self.assertIn("topics", modules)
                 self.assertIn("outcome", modules)
                 self.assertNotIn("action_items", modules)
@@ -152,9 +153,22 @@ class HistoryCenterMigrationTests(unittest.TestCase):
             with closing(sqlite3.connect(path)) as connection:
                 self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
 
+    def test_failed_v3_migration_keeps_v2_version(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "failed-v3.sqlite3"
+            with closing(sqlite3.connect(path)) as connection, connection:
+                for statement in BASE_SCHEMA_STATEMENTS:
+                    connection.execute(statement)
+                connection.execute("PRAGMA user_version = 2")
+            with patch.object(HistoryStore, "_migrate_v2_to_v3", side_effect=RuntimeError("boom-v3")):
+                with self.assertRaisesRegex(RuntimeError, "boom-v3"):
+                    HistoryStore(path)
+            with closing(sqlite3.connect(path)) as connection:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+
 
 class HistoryCenterQueryTests(unittest.TestCase):
-    def test_schema_22_modules_are_derived_without_repeating_nested_details(self) -> None:
+    def test_schema_22_default_sections_include_report_content_without_activity_totals(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             with HistoryStore(root / "history.sqlite3") as store:
@@ -164,13 +178,14 @@ class HistoryCenterQueryTests(unittest.TestCase):
                 self.assertTrue(
                     {
                         "topics", "ai_observations", "member_activity", "outcome",
-                        "open_questions", "risk_flags", "quotes", "resources",
+                        "open_questions", "risk_flags", "quotes", "resources", "themes",
                     }.issubset(module_keys)
                 )
                 topic = next(item for item in detail["modules"] if item["module_key"] == "topics")
                 self.assertNotIn("action_items", topic["content"])
-                self.assertNotIn("outcome", topic["content"])
-                self.assertNotIn("quotes", topic["content"])
+                self.assertEqual(topic["content"]["outcome"]["content"], "采用新清关渠道。")
+                self.assertEqual(topic["content"]["quotes"][0]["quote"], "先把清单核完再发。")
+                self.assertEqual(len(topic["content"]["related_resources"]), 2)
                 self.assertEqual(len(detail["resources"]), 2)
                 target_ids: dict[str, list[str]] = {}
                 for item in detail["modules"]:
@@ -188,6 +203,9 @@ class HistoryCenterQueryTests(unittest.TestCase):
                     if item["module_key"] == "member_activity" and item["title"] == "活跃统计"
                 ][0]
                 self.assertEqual(activity_stats["redaction_target_id"], "")
+                self.assertNotIn("message_count", activity_stats["content"])
+                self.assertNotIn("effective_message_count", activity_stats["content"])
+                self.assertNotIn("participant_count", activity_stats["content"])
 
     def test_history_queries_default_to_latest_and_keep_all_versions(self) -> None:
         with TemporaryDirectory() as temp_dir:

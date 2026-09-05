@@ -2,6 +2,10 @@ Unicode true
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "WinMessages.nsh"
+
+!define APP_RUNNING_MUTEX "Local\bluntvoice.wechat-chat-summary.app-running"
+!define APP_CLOSE_WAIT_STEPS 40
 
 !ifndef APP_EXE
   !error "APP_EXE is required"
@@ -57,12 +61,39 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright bluntvoice"
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
+Function RequestAppClose
+  FindWindow $1 "" "${PRODUCT_NAME}"
+  ${If} $1 != 0
+    SendMessage $1 ${WM_CLOSE} 0 0 /TIMEOUT=2000
+  ${EndIf}
+
+  StrCpy $2 0
+wait_for_close:
+  Sleep 250
+  StrCpy $0 0
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
+  ${If} $0 == 0
+    Return
+  ${EndIf}
+  System::Call 'kernel32::CloseHandle(p r0)'
+  IntOp $2 $2 + 1
+  IntCmp $2 ${APP_CLOSE_WAIT_STEPS} close_timeout wait_for_close close_timeout
+close_timeout:
+FunctionEnd
+
 Function EnsureAppClosed
 check_app:
-  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "Local\bluntvoice.wechat-chat-summary.app-running") p .r0'
+  StrCpy $0 0
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
   ${If} $0 != 0
     System::Call 'kernel32::CloseHandle(p r0)'
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "检测到群聊拾遗正在运行。$\r$\n$\r$\n请先关闭软件，再点击重试继续安装；点击取消将退出安装。" IDRETRY check_app IDCANCEL cancel_install
+    Call RequestAppClose
+    StrCpy $0 0
+    System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
+    ${If} $0 != 0
+      System::Call 'kernel32::CloseHandle(p r0)'
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "群聊拾遗未能自动正常关闭。$\r$\n$\r$\n请确认软件中的任务已经结束并手动关闭，再点击重试继续安装；点击取消将退出安装。" IDRETRY check_app IDCANCEL cancel_install
+    ${EndIf}
   ${EndIf}
   Return
 cancel_install:
@@ -73,12 +104,39 @@ Function .onInit
   Call EnsureAppClosed
 FunctionEnd
 
+Function un.RequestAppClose
+  FindWindow $1 "" "${PRODUCT_NAME}"
+  ${If} $1 != 0
+    SendMessage $1 ${WM_CLOSE} 0 0 /TIMEOUT=2000
+  ${EndIf}
+
+  StrCpy $2 0
+wait_for_close:
+  Sleep 250
+  StrCpy $0 0
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
+  ${If} $0 == 0
+    Return
+  ${EndIf}
+  System::Call 'kernel32::CloseHandle(p r0)'
+  IntOp $2 $2 + 1
+  IntCmp $2 ${APP_CLOSE_WAIT_STEPS} close_timeout wait_for_close close_timeout
+close_timeout:
+FunctionEnd
+
 Function un.EnsureAppClosed
 check_app:
-  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "Local\bluntvoice.wechat-chat-summary.app-running") p .r0'
+  StrCpy $0 0
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
   ${If} $0 != 0
     System::Call 'kernel32::CloseHandle(p r0)'
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "检测到群聊拾遗正在运行。$\r$\n$\r$\n请先关闭软件，再点击重试继续卸载；点击取消将退出卸载。" IDRETRY check_app IDCANCEL cancel_uninstall
+    Call un.RequestAppClose
+    StrCpy $0 0
+    System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
+    ${If} $0 != 0
+      System::Call 'kernel32::CloseHandle(p r0)'
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "群聊拾遗未能自动正常关闭。$\r$\n$\r$\n请确认软件中的任务已经结束并手动关闭，再点击重试继续卸载；点击取消将退出卸载。" IDRETRY check_app IDCANCEL cancel_uninstall
+    ${EndIf}
   ${EndIf}
   Return
 cancel_uninstall:
