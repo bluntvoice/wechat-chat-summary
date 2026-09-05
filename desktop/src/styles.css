@@ -79,6 +79,12 @@ input:focus, select:focus { border-color: var(--green); }
 .field-grid .wide { grid-column: 1 / -1; }
 .selection-note { margin: 13px 0 0; padding: 9px 11px; border-radius: 5px; background: var(--green-soft); color: #476052; font-size: 12px; }
 .selection-note strong { color: var(--green-dark); }
+.data-source-guidance { margin-top: 12px; padding: 12px 13px; border-left: 3px solid var(--amber); border-radius: 5px; background: #fff9ed; color: #59665f; }
+.data-source-guidance > strong { color: #77501f; font-size: 13px; }
+.data-source-guidance p { margin: 3px 0 0; font-size: 12px; line-height: 1.65; }
+.data-source-guidance details, .data-source-status details, .guide-status details { margin-top: 7px; color: #748078; font-size: var(--font-caption); }
+.data-source-guidance summary, .data-source-status summary, .guide-status summary { width: max-content; cursor: pointer; }
+.data-source-guidance code, .data-source-status details code, .guide-status code { display: block; margin-top: 5px; color: #66736c; font: var(--font-caption)/1.55 "Cascadia Mono",Consolas,monospace; overflow-wrap: anywhere; white-space: normal; }
 .quick-dates { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
 .quick-dates button { border: 0; border-radius: 5px; padding: 6px 10px; background: #eef3f0; color: #536159; font-size: 12px; cursor: pointer; }
 .quick-dates button:hover { background: #e0ebe4; color: var(--green-dark); }
@@ -374,6 +380,7 @@ button.heatmap-cell:hover, button.heatmap-cell:focus-visible { z-index: 4; trans
 .about-label { color: var(--green) !important; font-size: 9px !important; font-weight: 750; letter-spacing: 0; }
 .about-url { max-width: 680px; color: #496255 !important; font-family: "Cascadia Mono",Consolas,monospace; overflow-wrap: anywhere; }
 .about-action { width: 112px; min-width: 112px; padding-inline: 10px; white-space: nowrap; }
+.about-source-actions { display: flex; align-items: center; gap: 7px; }
 .about-update { min-height: 154px; align-items: start; }
 .about-update-main { min-width: 0; }
 .about-update-actions { min-height: 36px; display: flex; justify-content: flex-end; margin-top: 2px; }
@@ -405,6 +412,19 @@ button.heatmap-cell:hover, button.heatmap-cell:focus-visible { z-index: 4; trans
 .settings-section-head > div:first-child { display: flex; align-items: center; gap: 10px; }
 .settings-section-head > div:first-child > span { color: var(--green); font: 750 10px/1 "Segoe UI",sans-serif; letter-spacing: .08em; }
 .settings-section h2 { margin: 0; color: #294336; font-size: 16px; }
+.data-source-status { margin-bottom: 14px; padding: 13px 14px; border: 1px solid #d8e2dc; border-radius: 7px; background: #f3f7f4; }
+.data-source-status.ready { border-color: #b8d9c4; background: #eef8f1; }
+.data-source-status.error { border-color: #e5d4b7; background: #fffaf0; }
+.data-source-status-main { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.data-source-status-main > div { display: flex; align-items: baseline; gap: 10px; }
+.data-source-status-main span { color: #344e3f; font-size: 13px; font-weight: 700; }
+.data-source-status-main strong { color: #6c7871; font-size: var(--font-caption); }
+.data-source-status.ready .data-source-status-main strong { color: var(--green-dark); }
+.data-source-status.error .data-source-status-main strong { color: #8a591e; }
+.data-source-status-main code { color: #66756d; font: var(--font-caption)/1.5 "Cascadia Mono",Consolas,monospace; overflow-wrap: anywhere; }
+.data-source-status > p { margin: 6px 0 0; color: #67756d; font-size: 12px; line-height: 1.6; }
+.data-source-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.data-source-actions .button { min-height: 32px; padding-inline: 11px; }
 .provider-options { display: grid; grid-template-columns: 1fr 220px; align-items: end; gap: 12px; margin-top: 13px; padding-top: 13px; border-top: 1px dashed #d9e3dc; }
 .switch-row { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .switch-row > span { display: grid; justify-content: initial; gap: 2px; }
@@ -426,10 +446,17 @@ button.heatmap-cell:hover, button.heatmap-cell:focus-visible { z-index: 4; trans
 .guide-heading h2 { margin: 0; color: #263f31; font-size: 21px; }
 .guide-heading p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
 .guide-steps { margin: 18px 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; list-style: none; }
+.guide-data-source-steps { grid-template-columns: 1fr; gap: 4px; }
 .guide-steps li { min-width: 0; display: grid; grid-template-columns: 26px minmax(0,1fr); gap: 9px; padding: 9px 0; }
 .guide-steps li > span { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--green-soft); color: var(--green-dark); font-size: 11px; font-weight: 750; }
 .guide-steps strong { color: #314a3c; font-size: 12px; }
 .guide-steps p { margin: 3px 0 0; color: #718078; font-size: 10px; line-height: 1.55; }
+.guide-step-action { min-height: 32px; margin-top: 8px; padding-inline: 11px; }
+.guide-status { margin-top: 14px; padding: 11px 13px; border-radius: 6px; background: #f0f4f1; }
+.guide-status.ready { border-left: 3px solid var(--green); background: #edf8f1; }
+.guide-status.pending { border-left: 3px solid var(--amber); background: #fff9ed; }
+.guide-status strong { color: #31503f; font-size: 13px; }
+.guide-status p { margin: 3px 0 0; color: #67756d; font-size: 12px; line-height: 1.65; }
 .guide-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 17px; padding-top: 15px; border-top: 1px solid var(--line); }
 
 /* 桌面端统一字号层级：保持紧凑，但不再使用难以辨认的 7–10px 正文。 */

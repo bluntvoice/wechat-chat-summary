@@ -4,6 +4,11 @@ import test from "node:test";
 
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const guide = readFileSync(new URL("../src/components/GuideDialog.tsx", import.meta.url), "utf8");
+const generatePage = readFileSync(new URL("../src/pages/GeneratePage.tsx", import.meta.url), "utf8");
+const settings = readFileSync(new URL("../src/pages/SettingsPage.tsx", import.meta.url), "utf8");
+const about = readFileSync(new URL("../src/pages/AboutPage.tsx", import.meta.url), "utf8");
+const dataSource = readFileSync(new URL("../src/services/wechatDataSource.ts", import.meta.url), "utf8");
+const tauriLib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const history = readFileSync(new URL("../src/pages/HistoryPage.tsx", import.meta.url), "utf8");
 const generation = readFileSync(new URL("../src/hooks/useReportGeneration.ts", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -21,11 +26,37 @@ test("primary navigation uses a unified icon library and resets page scroll", ()
   assert.match(app, /window\.scrollTo\(\{ top: 0, left: 0/);
 });
 
-test("quick guide is dismissible and contains seven concise steps", () => {
+test("quick guide is dismissible and explains the three-step data source setup", () => {
   assert.match(app, /quick-guide-dismissed/);
   assert.match(app, /GuideDialog/);
-  assert.equal((guide.match(/^  \["/gm) ?? []).length, 7);
+  assert.equal((guide.match(/<li>/g) ?? []).length, 3);
   assert.match(guide, /关闭使用指南/);
+  assert.match(guide, /安装 WeChatDataAnalysis/);
+  assert.match(guide, /启动并准备微信数据/);
+  assert.match(guide, /重新检测数据源/);
+  assert.match(guide, /已连接 WeChatDataAnalysis/);
+  assert.match(guide, /暂未检测到服务/);
+});
+
+test("data source guidance stays concise on generate and remains actionable in settings", () => {
+  assert.match(generatePage, /数据源未就绪/);
+  assert.match(generatePage, /重新检测/);
+  assert.match(generatePage, /如何配置？/);
+  assert.match(settings, /未检测到服务/);
+  assert.match(settings, /下载 WeChatDataAnalysis/);
+  assert.match(settings, /配置指南/);
+  assert.match(settings, /重新检测/);
+  assert.match(about, /数据来源/);
+  assert.match(about, /独立的开源项目，需要单独下载安装并运行/);
+});
+
+test("WeChatDataAnalysis links are centralized and opened through a desktop allowlist", () => {
+  assert.match(dataSource, /https:\/\/github\.com\/LifeArchiveProject\/WeChatDataAnalysis/);
+  assert.match(dataSource, /WECHAT_DATA_ANALYSIS_RELEASES/);
+  assert.doesNotMatch(generatePage + settings + guide + about, /https:\/\/github\.com\/LifeArchiveProject\/WeChatDataAnalysis/);
+  assert.match(tauriLib, /fn open_external_url/);
+  assert.match(tauriLib, /ALLOWED_URLS/);
+  assert.match(tauriLib, /不允许打开未登记的外部链接/);
 });
 
 test("elapsed time uses the local clock while percent remains backend-owned", () => {

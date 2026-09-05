@@ -7,6 +7,7 @@ Python 核心。开发模式使用仓库虚拟环境，测试安装包使用 PyI
 当前完成：
 
 - 测试 WeChatDataAnalysis 并读取/搜索群聊；
+- 将 WeChatDataAnalysis 作为需要单独安装和运行的数据源进行三步引导，并在生成页、设置页提供重新检测及官方 Releases 入口；
 - 选择单日或自定义日期范围；
 - 配置和测试 DeepSeek / OpenAI Compatible API；
 - 在独立设置页配置数据源、AI API、报告导出与本机 MCP Server；

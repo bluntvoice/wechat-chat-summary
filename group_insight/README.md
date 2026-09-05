@@ -2,6 +2,8 @@
 
 `group_insight` 通过 WeChatDataAnalysis 本地 API 读取微信消息、构造 LLM 分析流程、生成 JSON/HTML/PNG，并在需要时通过 PC 微信 UI 自动化发送报表图片。
 
+WeChatDataAnalysis 是独立的前置数据源，需要单独下载安装并保持运行。桌面端只判断本地 API 当前是否可用，不根据连接失败推断是否已经安装；用户可从现有使用指南和设置页打开官方项目及 Releases 页面并重新检测。
+
 默认从仓库根目录执行下面的命令。
 
 ## 配置 `.env`

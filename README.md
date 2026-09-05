@@ -186,7 +186,7 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 
 ### WeChatDataAnalysis
 
-本项目本身不直接负责微信数据库解密和原始数据读取。相关能力由 [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) 提供。
+本项目本身不直接负责微信数据库解密和原始数据读取。相关能力由 [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) 提供；它是需要单独下载安装并运行的前置数据源，可从 [官方 Releases](https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases) 下载。
 
 基本流程：
 
@@ -194,6 +194,8 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 2. 完成微信数据加载；
 3. 启动本地 API；
 4. 再由群聊拾遗连接。
+
+桌面端首次使用指南会按上述流程引导。生成页连接失败时可重新检测或打开配置指南；设置页的数据源区域长期提供连接状态、API 地址、下载入口和重新检测。连接失败只代表当前未检测到服务，不能据此判断软件一定没有安装。
 
 默认本机地址为：
 

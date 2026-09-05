@@ -17,6 +17,7 @@ export default function App() {
   const [page, setPage] = useState<AppPage>("generate");
   const [historyTarget, setHistoryTarget] = useState<HistoryNavigationTarget | null>(null);
   const [guideOpen, setGuideOpen] = useState(() => localStorage.getItem("quick-guide-dismissed") !== "1");
+  const [dataSourceRefreshVersion, setDataSourceRefreshVersion] = useState(0);
 
   function navigate(nextPage: AppPage) {
     setPage(nextPage);
@@ -46,12 +47,12 @@ export default function App() {
       <button className="rail-help" onClick={() => setGuideOpen(true)} title="打开使用指南"><CircleHelp size={18} aria-hidden="true" /><small>指南</small></button>
     </aside>
     <div className="page-host">
-      <div className="page-slot" hidden={page !== "generate"}><GeneratePage active={page === "generate"} onOpenSettings={() => navigate("settings")} /></div>
+      <div className="page-slot" hidden={page !== "generate"}><GeneratePage active={page === "generate"} onOpenSettings={() => navigate("settings")} onOpenGuide={() => setGuideOpen(true)} dataSourceRefreshVersion={dataSourceRefreshVersion} /></div>
       <div className="page-slot" hidden={page !== "history"}><HistoryPage active={page === "history"} target={historyTarget} /></div>
       <div className="page-slot" hidden={page !== "heatmap"}><HeatmapPage active={page === "heatmap"} onOpenHistory={openHistory} /></div>
-      <div className="page-slot" hidden={page !== "settings"}><SettingsPage active={page === "settings"} /></div>
+      <div className="page-slot" hidden={page !== "settings"}><SettingsPage active={page === "settings"} onOpenGuide={() => setGuideOpen(true)} dataSourceRefreshVersion={dataSourceRefreshVersion} /></div>
       <div className="page-slot" hidden={page !== "about"}><AboutPage /></div>
     </div>
-    {guideOpen && <GuideDialog onClose={closeGuide} onOpenSettings={() => { closeGuide(); navigate("settings"); }} />}
+    {guideOpen && <GuideDialog onClose={closeGuide} onOpenSettings={() => { closeGuide(); navigate("settings"); }} onDataSourceConnected={() => setDataSourceRefreshVersion((current) => current + 1)} />}
   </main>;
 }

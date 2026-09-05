@@ -321,6 +321,18 @@ fn open_system_path(path: String) -> Result<(), String> {
     open::that_detached(&target).map_err(|error| format!("无法打开路径: {error}"))
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    const ALLOWED_URLS: [&str; 2] = [
+        "https://github.com/LifeArchiveProject/WeChatDataAnalysis",
+        "https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases",
+    ];
+    if !ALLOWED_URLS.contains(&url.as_str()) {
+        return Err("不允许打开未登记的外部链接。".to_string());
+    }
+    open::that_detached(&url).map_err(|error| format!("无法打开网页: {error}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
@@ -332,6 +344,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             bridge_call,
             open_system_path,
+            open_external_url,
             mcp_server_status,
             mcp_server_start,
             mcp_server_stop,

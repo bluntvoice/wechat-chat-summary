@@ -13,6 +13,10 @@ export async function openSystemPath(path?: string) {
   await invoke("open_system_path", { path });
 }
 
+export async function openExternalUrl(url: string) {
+  await invoke("open_external_url", { url });
+}
+
 export async function invokeDesktop<T>(command: string, args: Record<string, unknown> = {}) {
   return invoke<T>(command, args);
 }

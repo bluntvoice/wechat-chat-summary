@@ -1,10 +1,11 @@
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, CircleHelp, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import RedactionEditor from "../components/RedactionEditor";
 import { useReportGeneration } from "../hooks/useReportGeneration";
 import { inclusiveDateRange, localDate, scheduledReportDate } from "../services/dates";
 import { filterAndSortChats, type ChatListFilter } from "../services/chatList";
 import { bridge, openSystemPath } from "../services/desktopBridge";
+import { DATA_SOURCE_UNAVAILABLE_MESSAGE } from "../services/wechatDataSource";
 import {
   INITIAL_SETTINGS,
   type Chat,
@@ -13,7 +14,17 @@ import {
   type Settings,
 } from "../types/desktop";
 
-function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSettings: () => void }) {
+function GeneratePage({
+  active,
+  onOpenSettings,
+  onOpenGuide,
+  dataSourceRefreshVersion,
+}: {
+  active: boolean;
+  onOpenSettings: () => void;
+  onOpenGuide: () => void;
+  dataSourceRefreshVersion: number;
+}) {
   const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatId, setChatId] = useState("");
@@ -24,6 +35,7 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
   const [endDate, setEndDate] = useState(localDate());
   const [wechatState, setWechatState] = useState<"idle" | "testing" | "ready" | "error">("idle");
   const [message, setMessage] = useState("先连接 WeChatDataAnalysis，再选择需要总结的群聊。");
+  const [wechatErrorDetail, setWechatErrorDetail] = useState("");
   const [redactionTargets, setRedactionTargets] = useState<RedactionTarget[]>([]);
   const [selectedRedactions, setSelectedRedactions] = useState<string[]>([]);
   const [redactionEditorOpen, setRedactionEditorOpen] = useState(false);
@@ -46,6 +58,11 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
       setSettings({ ...INITIAL_SETTINGS, ...saved });
     }).catch((error) => setMessage(String(error)));
   }, [active]);
+
+  useEffect(() => {
+    if (!active || dataSourceRefreshVersion === 0) return;
+    void connectWeChat();
+  }, [active, dataSourceRefreshVersion]);
 
   useEffect(() => {
     if (!settings.schedule_enabled) return;
@@ -75,16 +92,20 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
   const statusSettings = () => ({ ...settings });
 
   async function connectWeChat() {
-    setWechatState("testing"); setMessage("正在读取本机群聊列表…");
+    setWechatState("testing"); setWechatErrorDetail(""); setMessage("正在读取本机群聊列表…");
     try {
       const data = await bridge<{ chats: Chat[]; account: string }>("list_chats", { settings: statusSettings() });
       const summarizedChatIds = data.chats.filter((chat) => chat.summarized).map((chat) => chat.id);
       setChats(data.chats);
       setSettings((current) => ({ ...current, summarized_chat_ids: summarizedChatIds }));
-      setWechatState("ready"); setMessage(`已读取 ${data.chats.length} 个群聊，请选择群聊和日期。`);
+      setWechatState("ready"); setWechatErrorDetail(""); setMessage(`已读取 ${data.chats.length} 个群聊，请选择群聊和日期。`);
       const remembered = data.chats.find((chat) => chat.id === settings.last_chat_id);
       if (remembered) setChatId(remembered.id); else if (data.chats.length && !chatId) setChatId(data.chats[0].id);
-    } catch (error) { setWechatState("error"); setMessage(error instanceof Error ? error.message : String(error)); }
+    } catch (error) {
+      setWechatState("error");
+      setWechatErrorDetail(error instanceof Error ? error.message : String(error));
+      setMessage("未检测到 WeChatDataAnalysis 本地服务。请先完成数据源配置后再生成群聊总结。");
+    }
   }
 
   async function saveSettings(showNotice = true) {
@@ -240,11 +261,12 @@ function GeneratePage({ active, onOpenSettings }: { active: boolean; onOpenSetti
 
   return <div className="workspace">
       <header className="topbar"><div><h1>生成总结</h1></div></header>
-      <section className="notice" aria-live="polite"><strong>{busy ? "处理中" : "当前状态"}</strong><span>{message}</span></section>
+      <section className="notice" aria-live="polite"><strong>{busy ? "处理中" : wechatState === "error" ? "数据源未就绪" : "当前状态"}</strong><span>{message}</span></section>
       <div className="grid">
         <section className="panel source-panel">
-          <div className="panel-heading"><div><span className="step-tag">1</span><h2>连接微信数据</h2></div><button className="button secondary" onClick={connectWeChat} disabled={wechatState === "testing" || busy}>{wechatState === "testing" ? "连接中…" : "测试并读取群聊"}</button></div>
+          <div className="panel-heading"><div><span className="step-tag">1</span><h2>连接微信数据</h2></div><div className="heading-actions">{wechatState === "error" && <button className="button ghost inline-icon" onClick={onOpenGuide}><CircleHelp size={14} aria-hidden="true" />如何配置？</button>}<button className="button secondary inline-icon" onClick={connectWeChat} disabled={wechatState === "testing" || busy}><RefreshCw size={14} className={wechatState === "testing" ? "spinning" : ""} aria-hidden="true" />{wechatState === "testing" ? "检测中…" : wechatState === "error" ? "重新检测" : "测试并读取群聊"}</button></div></div>
           <label><span>WeChatDataAnalysis API</span><input readOnly value={settings.wechat_api_url} /></label>
+          {wechatState === "error" && <div className="data-source-guidance"><strong>数据源未就绪</strong><p>{DATA_SOURCE_UNAVAILABLE_MESSAGE} 请先完成数据源配置后再生成群聊总结。</p>{wechatErrorDetail && <details><summary>连接详情</summary><code>{wechatErrorDetail}</code></details>}</div>}
           <div className="chat-picker"><div className="chat-search-control"><span>搜索群聊</span><div className="chat-search-row"><input aria-label="搜索群聊" placeholder="输入群聊名称" value={query} onChange={(e) => setQuery(e.target.value)} disabled={!chats.length} /><div className="mini-segmented" role="group" aria-label="群聊筛选"><button className={chatFilter === "all" ? "selected" : ""} onClick={() => setChatFilter("all")}>全部</button><button className={chatFilter === "summarized" ? "selected" : ""} onClick={() => setChatFilter("summarized")}>已总结</button></div></div></div><label><span>选择群聊</span><select value={chatId} onChange={(e) => setChatId(e.target.value)} disabled={!filteredChats.length}>{!filteredChats.length && <option value="">没有符合条件的群聊</option>}{filteredChats.map((chat) => <option key={chat.id} value={chat.id}>{chat.name}{summarized.has(chat.id) ? " · 已总结" : ""}</option>)}</select></label></div>
           {selectedChat && <p className="selection-note">本次总结：<strong>{selectedChat.name}</strong>{summarized.has(selectedChat.id) && <em>　已有历史报告</em>}</p>}
         </section>

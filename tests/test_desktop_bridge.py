@@ -14,6 +14,7 @@ from group_insight.desktop_bridge import (
     _redact_report,
     _refresh_history_state,
     _test_ai,
+    _test_wechat,
     build_report_entrypoint,
     handle,
     normalize_chat_completions_url,
@@ -22,6 +23,7 @@ from group_insight.models import StructuredMessage
 from group_insight.history_store import HistoryStore as ActualHistoryStore
 from group_insight.report_paths import allocate_report_paths
 from group_insight.report_schema import build_report_document
+from group_insight.wechat_data_api import WeChatDataAPIError
 from tests.test_history_center import history_document
 
 
@@ -79,6 +81,27 @@ class DesktopBridgeTests(unittest.TestCase):
             })
         self.assertTrue(result["model_verified"])
         self.assertEqual(result["response_model"], "deepseek-v4-flash")
+
+    def test_wechat_connection_reports_unreachable_without_claiming_not_installed(self) -> None:
+        detail = (
+            "无法连接 WeChatDataAnalysis 本地 API (http://127.0.0.1:10392)。"
+            "请确认桌面工具已启动并完成微信数据加载。"
+        )
+        with patch("group_insight.desktop_bridge._list_chats", side_effect=WeChatDataAPIError(detail)):
+            result = _test_wechat({"wechat_api_url": "http://127.0.0.1:10392"})
+        self.assertEqual(result["status"], "unreachable")
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["group_count"], 0)
+        self.assertNotIn("未安装", result["detail"])
+
+    def test_wechat_connection_distinguishes_invalid_response(self) -> None:
+        with patch(
+            "group_insight.desktop_bridge._list_chats",
+            side_effect=WeChatDataAPIError("WeChatDataAnalysis API 返回了无效 JSON。"),
+        ):
+            result = _test_wechat({"wechat_api_url": "http://127.0.0.1:10392"})
+        self.assertEqual(result["status"], "invalid_response")
+        self.assertFalse(result["connected"])
 
     def test_ai_connection_rejects_unexpected_response_model(self) -> None:
         class FakeClient:
@@ -184,6 +207,7 @@ class DesktopBridgeTests(unittest.TestCase):
                 history.upsert_report(missing)
             with patch("group_insight.desktop_bridge._client", return_value=FakeAPI()):
                 result = _list_chats({"wechat_api_url": "http://127.0.0.1:10392"})
+            self.assertEqual(result["status"], "connected")
             self.assertEqual(
                 [item["id"] for item in result["chats"]],
                 ["history@chatroom", "a@chatroom", "z@chatroom"],

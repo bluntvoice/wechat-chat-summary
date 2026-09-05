@@ -27,7 +27,7 @@ from .report_paths import allocate_report_paths
 from .report_schema import upgrade_legacy_report
 from .settings import DEFAULT_REPORT_IMAGE_TIMEOUT_MS, DEFAULT_REPORT_IMAGE_WIDTH
 from .transport import export_report_image
-from .wechat_data_api import WeChatDataAPIClient
+from .wechat_data_api import WeChatDataAPIClient, WeChatDataAPIError
 
 
 def _force_utf8_stdio() -> None:
@@ -63,10 +63,35 @@ def _list_chats(settings: dict[str, Any]) -> dict[str, Any]:
         chats.append({"id": username, "name": name, "summarized": username in summarized})
     chats.sort(key=lambda item: (not bool(item["summarized"]), item["name"].casefold(), item["id"]))
     return {
+        "status": "connected",
         "connected": True,
         "account": str(payload.get("account") or ""),
         "source": str(payload.get("source") or ""),
         "chats": chats,
+    }
+
+
+def _test_wechat(settings: dict[str, Any]) -> dict[str, Any]:
+    """探测当前 API 状态；不根据连接失败推断软件是否安装。"""
+
+    try:
+        result = _list_chats(settings)
+    except WeChatDataAPIError as exc:
+        detail = str(exc)
+        if "无效 JSON" in detail or "响应不是 JSON 对象" in detail:
+            status = "invalid_response"
+        elif "请求失败" in detail or "返回 HTTP" in detail:
+            status = "service_error"
+        else:
+            status = "unreachable"
+        return {
+            "status": status,
+            "connected": False,
+            "group_count": 0,
+            "detail": detail,
+        }
+    return {key: value for key, value in result.items() if key != "chats"} | {
+        "group_count": len(result["chats"])
     }
 
 
@@ -490,10 +515,7 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         else load_desktop_api_key(provider)
     )
     if command == "test_wechat":
-        result = _list_chats(settings)
-        return {key: value for key, value in result.items() if key != "chats"} | {
-            "group_count": len(result["chats"])
-        }
+        return _test_wechat(settings)
     if command == "list_chats":
         return _list_chats(settings)
     if command == "test_ai":

@@ -2,9 +2,14 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Copy, RefreshCw } from "lucide-react";
+import { Copy, Download, ExternalLink, RefreshCw } from "lucide-react";
 
 import packageInfo from "../../package.json";
+import { openExternalUrl } from "../services/desktopBridge";
+import {
+  WECHAT_DATA_ANALYSIS_HOMEPAGE,
+  WECHAT_DATA_ANALYSIS_RELEASES,
+} from "../services/wechatDataSource";
 
 const PROJECT_URL = "https://github.com/bluntvoice/wechat-chat-summary";
 const appIcon = new URL("../../src-tauri/icons/icon.png", import.meta.url).href;
@@ -73,6 +78,7 @@ export default function AboutPage() {
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [verified, setVerified] = useState<DownloadResult | null>(null);
   const [message, setMessage] = useState("");
+  const [dataSourceMessage, setDataSourceMessage] = useState("");
   const [confirmInstall, setConfirmInstall] = useState(false);
 
   useEffect(() => {
@@ -102,6 +108,15 @@ export default function AboutPage() {
       window.setTimeout(() => setCopyState("复制项目地址"), 1600);
     } catch {
       setCopyState("复制失败");
+    }
+  }
+
+  async function openDataSourceLink(url: string) {
+    try {
+      await openExternalUrl(url);
+      setDataSourceMessage("");
+    } catch (error) {
+      setDataSourceMessage(`无法打开网页：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -175,6 +190,11 @@ export default function AboutPage() {
     <section className="about-row" aria-labelledby="project-heading">
       <div><p className="about-label">开源项目</p><h3 id="project-heading">bluntvoice/wechat-chat-summary</h3><p className="about-url">{PROJECT_URL}</p></div>
       <button className="button secondary about-action" onClick={copyProjectUrl}><Copy size={15} aria-hidden="true" />{copyState}</button>
+    </section>
+
+    <section className="about-row" aria-labelledby="data-source-heading">
+      <div><p className="about-label">数据来源</p><h3 id="data-source-heading">WeChatDataAnalysis</h3><p>群聊拾遗通过 WeChatDataAnalysis 提供的本地 API 获取微信聊天数据。它是独立的开源项目，需要单独下载安装并运行。</p>{dataSourceMessage && <p className="about-error" role="status">{dataSourceMessage}</p>}</div>
+      <div className="about-source-actions"><button className="button ghost about-action" onClick={() => openDataSourceLink(WECHAT_DATA_ANALYSIS_HOMEPAGE)}><ExternalLink size={15} aria-hidden="true" />项目主页</button><button className="button secondary about-action" onClick={() => openDataSourceLink(WECHAT_DATA_ANALYSIS_RELEASES)}><Download size={15} aria-hidden="true" />下载最新版</button></div>
     </section>
 
     <section className="about-row about-update" aria-labelledby="update-heading">
