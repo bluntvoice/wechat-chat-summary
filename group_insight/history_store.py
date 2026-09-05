@@ -496,8 +496,6 @@ class HistoryStore:
                     add(module_key, cls._item_title(value, HISTORY_MODULE_LABELS[module_key]), value, item_target)
 
         legacy_outcomes = content.get("decisions", []) or []
-        if content.get("conclusion") and not any(row[0] == "outcome" for row in rows):
-            legacy_outcomes = [*legacy_outcomes, {"content": content["conclusion"]}]
         decision_count = len(content.get("decisions", []) or [])
         for source_index, item in enumerate(legacy_outcomes):
             item_target = target_id(item, f"decisions:{source_index}") if source_index < decision_count else ""

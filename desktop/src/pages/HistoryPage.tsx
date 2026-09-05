@@ -167,6 +167,27 @@ function isActivityStatsModule(module: HistoryModule) {
     .some((key) => key in content);
 }
 
+function MemberObservationView({
+  value,
+  title,
+  memberNames,
+}: {
+  value: unknown;
+  title: string;
+  memberNames: Record<string, string>;
+}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return <ValueView value={value} memberNames={memberNames} />;
+  }
+  const content = value as Record<string, unknown>;
+  const memberName = resolveMemberTokens(String(content.name || "").trim(), memberNames);
+  const resolvedTitle = resolveMemberTokens(title.trim(), memberNames);
+  const visibleContent = memberName && memberName === resolvedTitle
+    ? Object.fromEntries(Object.entries(content).filter(([key]) => key !== "name"))
+    : content;
+  return <ValueView value={visibleContent} memberNames={memberNames} />;
+}
+
 function resourceDomain(value: string) {
   try {
     return new URL(value).hostname.replace(/^www\./, "");
@@ -280,7 +301,9 @@ function ModuleCard({
     <div className="history-module-heading">{showSectionLabel && <span>{module.module_label}</span>}<h3>{redacted ? "已屏蔽内容" : resolveMemberTokens(module.title, memberNames)}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
     {isActivityStatsModule(module)
       ? <ActivityStatsView value={module.content} memberNames={memberNames} />
-      : module.module_key === "topics"
+      : module.module_key === "member_activity"
+        ? <MemberObservationView value={module.content} title={module.title} memberNames={memberNames} />
+        : module.module_key === "topics"
         ? <TopicPreview value={module.content} memberNames={memberNames} />
       : module.module_key === "resources"
         ? <ResourcePreview value={module.content} memberNames={memberNames} />

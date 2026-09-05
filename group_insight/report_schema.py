@@ -76,7 +76,7 @@ REPORT_SCHEMA_2_2 = {
                             "end_time": {"type": "string", "maxLength": 32},
                             "time_ranges": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
                             "discussion_flow": {"type": "string", "minLength": 1, "maxLength": 4000},
-                            "outcome": {"type": ["object", "null"]},
+                            "outcome": {"type": "null"},
                             "action_items": {"type": "array", "maxItems": 0, "items": {"type": "object"}},
                             "open_questions": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
                             "risk_flags": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
@@ -142,22 +142,6 @@ def _one_line(report: dict[str, Any], chat_name: str) -> str:
 def _canonical_topic(item: dict[str, Any], index: int) -> dict[str, Any]:
     """把新文档的话题固定为 Schema 2.2，避免旧冗余字段继续写入。"""
 
-    outcome = item.get("outcome")
-    if not isinstance(outcome, dict):
-        legacy_result = item.get("result") if isinstance(item.get("result"), dict) else {}
-        outcome = (
-            {"content": legacy_result.get("summary", "")}
-            if str(legacy_result.get("status") or "") == "concluded" and legacy_result.get("summary")
-            else None
-        )
-    if isinstance(outcome, dict):
-        outcome = dict(outcome)
-        outcome["content"] = normalize_text(outcome.get("content", "") or outcome.get("summary", ""), max_len=240)
-        if outcome["content"] in {
-            "", "暂无结论", "暂无结论。", "未形成明确结论", "未形成明确结论。",
-            "仍在讨论", "仍在讨论。", "讨论停留在观点交流", "讨论停留在观点交流。",
-        }:
-            outcome = None
     return {
         "id": str(item.get("id") or item.get("topic_key") or f"topic-{index}"),
         "title": normalize_text(item.get("title", ""), max_len=140) or "主要话题",
@@ -167,7 +151,8 @@ def _canonical_topic(item: dict[str, Any], index: int) -> dict[str, Any]:
         "discussion_flow": normalize_multiline_text(
             item.get("discussion_flow", "") or item.get("summary", ""), max_len=360
         ),
-        "outcome": outcome,
+        # Schema 2.2 为兼容旧报告保留字段；新报告不再生成讨论落点。
+        "outcome": None,
         "action_items": [],
         "open_questions": item.get("open_questions", []) if isinstance(item.get("open_questions"), list) else [],
         "risk_flags": item.get("risk_flags", []) if isinstance(item.get("risk_flags"), list) else [],
@@ -219,10 +204,6 @@ def build_report_document(
             target = target_topic(item)
             if target is not None:
                 target.setdefault(key, []).append(item)
-    for item in report.get("decisions", []) if isinstance(report.get("decisions"), list) else []:
-        target = target_topic(item)
-        if target is not None and not target.get("outcome"):
-            target["outcome"] = item
     catalog_ids = {
         str(item.get("id") or "")
         for group in resources.get("groups", [])

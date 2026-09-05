@@ -138,21 +138,38 @@ def _resolve(value: Any, names: dict[str, str]) -> str:
     return re.sub(r"\[\[user:([^\]]+)\]\]", lambda match: names.get(match.group(1), "群成员"), text)
 
 
-def _plain_member_pattern(names: dict[str, str]) -> re.Pattern[str] | None:
-    """为模型直接写出的唯一成员昵称构造一次受控匹配器。"""
-    counts: dict[str, int] = {}
-    for raw_name in names.values():
+def _plain_member_matcher(
+    names: dict[str, str],
+) -> tuple[re.Pattern[str] | None, dict[str, str]]:
+    """匹配模型直写的唯一昵称或已知账号 ID，并统一返回显示昵称。"""
+
+    alias_owners: dict[str, set[str]] = {}
+    replacements: dict[str, str] = {}
+    for raw_sender_id, raw_name in names.items():
+        sender_id = str(raw_sender_id or "").strip()
         name = str(raw_name or "").strip()
-        if name and name not in {"我", "群成员", "未知成员"}:
-            counts[name] = counts.get(name, 0) + 1
+        if not sender_id or not name:
+            continue
+
+        # 裸账号 ID 只允许认领自身；若它同时是另一成员的昵称，后续会因多 owner 被排除。
+        alias_owners.setdefault(sender_id, set()).add(sender_id)
+        replacements[sender_id] = name
+        if name not in {"我", "群成员", "未知成员"}:
+            display_aliases = {name, re.sub(r"\s+", "", name)}
+            for alias in display_aliases:
+                if not alias:
+                    continue
+                alias_owners.setdefault(alias, set()).add(sender_id)
+                # 昵称的空白变体只负责识别和着色，不改写模型原有行文。
+                replacements[alias] = alias
 
     aliases = sorted(
-        (name for name, count in counts.items() if count == 1),
+        (alias for alias, owners in alias_owners.items() if len(owners) == 1),
         key=len,
         reverse=True,
     )
     if not aliases:
-        return None
+        return None, {}
 
     alternatives: list[str] = []
     for alias in aliases:
@@ -160,12 +177,14 @@ def _plain_member_pattern(names: dict[str, str]) -> re.Pattern[str] | None:
         if re.fullmatch(r"[A-Za-z0-9_.-]+", alias):
             escaped = rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
         alternatives.append(escaped)
-    return re.compile("|".join(alternatives))
+    safe_replacements = {alias: replacements[alias] for alias in aliases}
+    return re.compile("|".join(alternatives)), safe_replacements
 
 
 def _highlight_plain_member_names(
     value: str,
     pattern: re.Pattern[str] | None,
+    replacements: dict[str, str],
     *,
     member_class: str,
 ) -> str:
@@ -176,7 +195,8 @@ def _highlight_plain_member_names(
     cursor = 0
     for match in pattern.finditer(value):
         output.append(_esc(value[cursor : match.start()]))
-        output.append(f'<strong class="{member_class}">{_esc(match.group(0))}</strong>')
+        display_name = replacements.get(match.group(0), match.group(0))
+        output.append(f'<strong class="{member_class}">{_esc(display_name)}</strong>')
         cursor = match.end()
     output.append(_esc(value[cursor:]))
     return "".join(output)
@@ -188,6 +208,7 @@ def _resolve_html(
     *,
     member_class: str = "",
     plain_member_pattern: re.Pattern[str] | None = None,
+    plain_member_replacements: dict[str, str] | None = None,
 ) -> str:
     """转义普通文本，并可对成员占位符施加受控 HTML 样式。"""
 
@@ -197,7 +218,12 @@ def _resolve_html(
     for match in re.finditer(r"\[\[user:([^\]]+)\]\]", text):
         plain = text[cursor : match.start()]
         output.append(
-            _highlight_plain_member_names(plain, plain_member_pattern, member_class=member_class)
+            _highlight_plain_member_names(
+                plain,
+                plain_member_pattern,
+                plain_member_replacements or {},
+                member_class=member_class,
+            )
             if member_class
             else _esc(plain)
         )
@@ -206,7 +232,12 @@ def _resolve_html(
         cursor = match.end()
     tail = text[cursor:]
     output.append(
-        _highlight_plain_member_names(tail, plain_member_pattern, member_class=member_class)
+        _highlight_plain_member_names(
+            tail,
+            plain_member_pattern,
+            plain_member_replacements or {},
+            member_class=member_class,
+        )
         if member_class
         else _esc(tail)
     )
@@ -305,7 +336,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     chat = metadata.get("chat", {})
     period = metadata.get("period", {})
     names = _member_names(stats)
-    plain_member_pattern = _plain_member_pattern(names)
+    plain_member_pattern, plain_member_replacements = _plain_member_matcher(names)
 
     def resolved(value: Any) -> str:
         return _esc(_resolve(value, names))
@@ -316,6 +347,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             names,
             member_class="topic-member",
             plain_member_pattern=plain_member_pattern,
+            plain_member_replacements=plain_member_replacements,
         )
 
     themes = content.get("themes", []) or []

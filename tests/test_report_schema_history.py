@@ -388,6 +388,10 @@ class ReportSchemaHistoryTests(unittest.TestCase):
             resources={"count": 0, "groups": []}, exports={"json": "a", "html": "b", "png": "c"},
             provider="deepseek", model="deepseek-v4-flash", dry_run=False, chunk_count=1, chunk_plan={},
         )
+        # 模拟修复前已保存的 Schema 2.2 报告；旧讨论落点仍可查看和屏蔽。
+        document["content"]["topics"][0]["outcome"] = {
+            "content": "敏感讨论落点", "tone": "formal", "confidence": 0.9,
+        }
         targets = {item["id"] for item in list_redaction_targets(document)}
         self.assertIn("topics:0:outcome", targets)
         self.assertIn("topics:0:open_questions:0", targets)
@@ -425,7 +429,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertEqual(len(topics[0]["time_ranges"]), 2)
         self.assertIn("上午提出项目排期", topics[0]["discussion_flow"])
         self.assertIn("下午补充了交付顺序", topics[0]["discussion_flow"])
-        self.assertEqual(topics[0]["outcome"]["content"], "先完成清单，再分批交付。")
+        self.assertIsNone(topics[0]["outcome"])
         self.assertEqual(topics[0]["action_items"], [])
         self.assertNotIn("key_points", topics[0])
         self.assertNotIn("turning_points", topics[0])
@@ -469,17 +473,28 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertNotIn("key_points", document["content"]["topics"][0])
         self.assertNotIn("turning_points", document["content"]["topics"][0])
         self.assertNotIn("decisions", document["content"])
+        self.assertIsNone(document["content"]["topics"][0]["outcome"])
         labels = ["今日速览", "今日主要话题", "AI 今日观察", "今日活跃情况", "报告结尾"]
         positions = [html.index(label) for label in labels]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("先提出清单，再补充交付顺序。", html)
         self.assertIn("先把清单定下来。", html)
         self.assertNotIn("整理最终清单", html)
+        self.assertNotIn("讨论落点", html)
+        self.assertNotIn("分批交付。", html)
         self.assertIn("项目清单", html)
         self.assertNotIn("详细讨论脉络", html)
         self.assertNotIn("今日有趣内容", html)
         self.assertNotIn("最早消息", html)
         self.assertNotIn("最晚消息", html)
+
+        with TemporaryDirectory() as temp_dir:
+            with HistoryStore(Path(temp_dir) / "history.sqlite3") as store:
+                report_id = store.upsert_report(document)
+                module_keys = {
+                    item["module_key"] for item in store.get_report_detail(report_id)["modules"]
+                }
+        self.assertNotIn("outcome", module_keys)
 
     def test_quick_view_highlights_members_and_discussion_flow_is_segmented(self):
         document = build_report_document(
@@ -513,6 +528,86 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertEqual(html.count('<li><strong class="topic-member">'), 2)
         self.assertIn("报告由群聊拾遗生成 · 测试群 · 2026-09-03", html)
         self.assertIn("生成时间：", html)
+
+    def test_quick_view_normalizes_mixed_member_references_consistently(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-09-03 00:00:00", end_time="2026-09-03 23:59:59", version=1,
+            stats={
+                "message_count": 3, "participant_count": 2,
+                "member_aliases": [
+                    {"sender_id": "wxid_a", "sender_name": "小甲"},
+                    {"sender_id": "wxid_b", "sender_name": "小乙"},
+                ],
+            },
+            report={
+                "theme_cards": [{
+                    "title": "[[user:wxid_a]]与wxid_b复核方案",
+                    "summary": "小甲确认方向，小乙补充风险；wxid_a随后回应。",
+                }],
+                "sections": [],
+            },
+            resources={"count": 0, "groups": []},
+            exports={"json": "a", "html": "b", "png": "c"},
+            provider="deepseek", model="test", dry_run=False, chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        quick_view = html.split("<h2>今日速览</h2>", 1)[1].split("</section>", 1)[0]
+        self.assertNotIn("wxid_a", quick_view)
+        self.assertNotIn("wxid_b", quick_view)
+        self.assertEqual(quick_view.count('<strong class="topic-member">小甲</strong>'), 3)
+        self.assertEqual(quick_view.count('<strong class="topic-member">小乙</strong>'), 2)
+
+    def test_plain_member_id_is_not_claimed_when_it_is_another_members_name(self):
+        document = {
+            "schema_version": "2.2",
+            "metadata": {
+                "chat": {"id": "room@chatroom", "name": "测试群"},
+                "period": {"report_date": "2026-09-03"},
+            },
+            "stats": {
+                "member_aliases": [
+                    {"sender_id": "member_alias_123", "sender_name": "wxid_target_123456"},
+                    {"sender_id": "wxid_target_123456", "sender_name": "正常昵称"},
+                ]
+            },
+            "content": {
+                "headline": "测试",
+                "themes": [{"title": "交叉引用", "summary": "wxid_target_123456补充意见。"}],
+                "topics": [],
+            },
+        }
+        html = render_html_report(document)
+        self.assertIn("wxid_target_123456补充意见", html)
+        self.assertNotIn('<strong class="topic-member">正常昵称</strong>补充意见', html)
+
+    def test_quick_view_matches_unique_member_name_ignoring_whitespace(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-09-03 00:00:00", end_time="2026-09-03 23:59:59", version=1,
+            stats={
+                "message_count": 1,
+                "participant_count": 1,
+                "member_aliases": [
+                    {"sender_id": "ZJ645253207", "sender_name": "周杰 律师"},
+                ],
+            },
+            report={
+                "theme_cards": [{
+                    "title": "微信读书会员省钱攻略",
+                    "summary": "周杰律师分享30天挑战方法。",
+                }],
+                "sections": [],
+            },
+            resources={"count": 0, "groups": []},
+            exports={"json": "a", "html": "b", "png": "c"},
+            provider="deepseek", model="test", dry_run=False, chunk_count=1, chunk_plan={},
+        )
+        html = render_html_report(document)
+        self.assertIn(
+            '<strong class="topic-member">周杰律师</strong>分享30天挑战方法',
+            html,
+        )
 
     def test_discussion_flow_keeps_consecutive_same_speaker_in_one_segment(self):
         document = build_report_document(
@@ -616,7 +711,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertIn("ai_observations", system_prompt)
         self.assertIn("resource_ids", system_prompt)
         self.assertIn("时间相邻只是弱线索", system_prompt)
-        self.assertIn("暂无结论", system_prompt)
+        self.assertIn("outcome 固定返回 null", system_prompt)
         self.assertIn("action_items 固定返回空数组", system_prompt)
         self.assertIn("讨论弱点", system_prompt)
 

@@ -21,16 +21,6 @@ from .settings import MAX_REPORT_SECTIONS, SECTION_TOPIC_COVERAGE_THRESHOLD
 
 
 NON_FORMAL_TONES = {"joke", "sarcasm", "casual", "uncertain", "teasing", "夸张", "反话", "玩笑", "调侃", "闲聊"}
-EMPTY_OUTCOME_TEXTS = {
-    "暂无结论",
-    "暂无结论。",
-    "未形成明确结论",
-    "未形成明确结论。",
-    "讨论停留在观点交流",
-    "讨论停留在观点交流。",
-    "仍在讨论",
-    "仍在讨论。",
-}
 BLOCKED_OBSERVATION_PHRASES = ("讨论弱点", "讨论不足", "讨论短板")
 
 
@@ -164,28 +154,6 @@ def _normalized_time_ranges(section: dict[str, Any]) -> list[dict[str, str]]:
     return sorted(ranges, key=lambda item: (item["start"], item["end"]))
 
 
-def _normalized_topic_outcome(value: Any, takeaway: Any = "") -> dict[str, Any] | None:
-    """仅保留有明确内容和足够可信度的讨论落点。"""
-
-    if isinstance(value, dict):
-        status = str(value.get("status") or "").strip().lower()
-        content = normalize_text(value.get("content", "") or value.get("summary", ""), max_len=240)
-        candidate = {**value, "content": content}
-    else:
-        status = ""
-        content = normalize_text(value, max_len=240)
-        candidate = {"content": content}
-    if not content:
-        content = normalize_text(takeaway, max_len=240)
-        candidate["content"] = content
-    if status and status != "concluded":
-        return None
-    if not content or content in EMPTY_OUTCOME_TEXTS:
-        return None
-    filtered = filter_serious_items([candidate], content_key="content")
-    return filtered[0] if filtered and isinstance(filtered[0], dict) else None
-
-
 def _merge_serious_items(
     *sources: Any,
     content_key: str,
@@ -291,10 +259,6 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         discussion_flow = normalize_multiline_text(
             section.get("discussion_flow", "") or section.get("summary", ""), max_len=360
         )
-        outcome = _normalized_topic_outcome(
-            section.get("outcome") if section.get("outcome") not in (None, "") else section.get("result"),
-            section.get("takeaway", ""),
-        )
         time_ranges = _normalized_time_ranges(section)
         if not title and not discussion_flow:
             continue
@@ -306,8 +270,8 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "end_time": time_ranges[-1]["end"] if time_ranges else str(section.get("end_time") or ""),
             "time_ranges": time_ranges,
             "discussion_flow": discussion_flow,
-            "outcome": outcome,
-            # Schema 2.2 为兼容旧报告继续保留字段；新报告不再生成行动事项。
+            # Schema 2.2 为兼容旧报告继续保留字段；新报告不再生成讨论落点和行动事项。
+            "outcome": None,
             "action_items": [],
             "open_questions": _merge_serious_items(
                 section.get("open_questions", []), content_key="question", limit=2
@@ -333,8 +297,6 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             existing["discussion_flow"] = normalize_multiline_text(
                 f"{existing['discussion_flow']}\n{discussion_flow}", max_len=360
             )
-        if not existing.get("outcome") and outcome:
-            existing["outcome"] = outcome
         existing["action_items"] = []
         existing["open_questions"] = _merge_serious_items(
             existing.get("open_questions", []), item.get("open_questions", []), content_key="question", limit=2
@@ -380,7 +342,7 @@ def build_report_sections_from_bundles(bundles: list[dict[str, Any]]) -> list[di
                     "end_time": section.get("end_time", ""),
                     "time_ranges": section.get("time_ranges", []),
                     "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
-                    "outcome": section.get("outcome") or section.get("result"),
+                    "outcome": None,
                     "action_items": section.get("action_items", []),
                     "open_questions": section.get("open_questions", []),
                     "risk_flags": section.get("risk_flags", []),
@@ -397,12 +359,6 @@ def section_topic_tokens(section: dict[str, Any]) -> set[str]:
     parts = [
         normalize_text(section.get("title", ""), max_len=120),
         normalize_text(section.get("discussion_flow", "") or section.get("summary", ""), max_len=240),
-        normalize_text(
-            (section.get("outcome") or {}).get("content", "")
-            if isinstance(section.get("outcome"), dict)
-            else section.get("takeaway", ""),
-            max_len=160,
-        ),
     ]
 
     tokens: set[str] = set()
@@ -534,12 +490,6 @@ def repair_final_report(
         target = sections_by_id.get(str(legacy_item.get("topic_id") or ""))
         if target is not None:
             target["quotes"] = _merge_quotes(target.get("quotes", []), [legacy_item], limit=2)
-    for legacy_item in report.get("decisions", []) if isinstance(report.get("decisions"), list) else []:
-        if not isinstance(legacy_item, dict):
-            continue
-        target = sections_by_id.get(str(legacy_item.get("topic_id") or ""))
-        if target is not None and not target.get("outcome"):
-            target["outcome"] = _normalized_topic_outcome(legacy_item)
     for group in report.get("resource_groups", []) if isinstance(report.get("resource_groups"), list) else []:
         if not isinstance(group, dict):
             continue
@@ -701,7 +651,7 @@ def fallback_reduce_bundle(bundle_id: str, items: list[dict[str, Any]]) -> dict[
                     {"start": section.get("start_time", ""), "end": section.get("end_time", "")}
                 ],
                 "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
-                "outcome": section.get("outcome"),
+                "outcome": None,
                 "action_items": section.get("action_items", []),
                 "open_questions": section.get("open_questions", []),
                 "risk_flags": section.get("risk_flags", []),
@@ -756,7 +706,7 @@ def fallback_final_report(
                     "end_time": section.get("end_time", ""),
                     "time_ranges": section.get("time_ranges", []),
                     "discussion_flow": section.get("discussion_flow") or section.get("summary", ""),
-                    "outcome": section.get("outcome"),
+                    "outcome": None,
                     "action_items": section.get("action_items", []),
                     "open_questions": section.get("open_questions", []),
                     "risk_flags": section.get("risk_flags", []),

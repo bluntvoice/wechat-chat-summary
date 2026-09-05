@@ -413,7 +413,7 @@ MAP_SCHEMA_EXAMPLE = {
             "start_time": "2026-04-08 09:12",
             "end_time": "2026-04-08 09:35",
             "discussion_flow": "用连续叙述说明这个话题如何被提起、展开和推进。",
-            "outcome": {"content": "仅在明确形成落点时填写", "tone": "formal", "confidence": 0.9},
+            "outcome": None,
             "action_items": [],
             "open_questions": [],
             "risk_flags": [],
@@ -453,7 +453,7 @@ REDUCE_SCHEMA_EXAMPLE = {
                 {"start": "2026-04-08 15:10", "end": "2026-04-08 15:35"},
             ],
             "discussion_flow": "跨片段合并后的连续讨论脉络",
-            "outcome": {"content": "明确形成的讨论落点", "tone": "formal", "confidence": 0.9},
+            "outcome": None,
             "action_items": [],
             "open_questions": [],
             "risk_flags": [],
@@ -489,7 +489,7 @@ FINAL_REPORT_SCHEMA_EXAMPLE = {
                 {"start": "2026-04-08 15:10", "end": "2026-04-08 15:35"},
             ],
             "discussion_flow": "讨论如何被提起。\n不同成员分别补充了什么观点。\n讨论最后推进到什么状态。",
-            "outcome": {"content": "明确形成的讨论落点", "tone": "formal", "confidence": 0.9},
+            "outcome": None,
             "action_items": [],
             "open_questions": [{"question": "仍需解决的严肃问题", "tone": "formal", "confidence": 0.88}],
             "risk_flags": [{"content": "需要继续观察的风险", "tone": "formal", "confidence": 0.85}],
@@ -523,14 +523,14 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 6. 控制片段输出长度，但要保留话题缘起、观点变化和阶段结果所需的信息。
 7. theme_cards 最多 3 条，highlight_sections 最多 4 条，participant_notes 最多 4 条。
 8. 每个话题以 discussion_flow 为核心，通常 50-250 个汉字；信息较少就短写，不得为了长度重复同义内容。信息较多时使用 2-5 个换行分隔的短段，优先按讨论顺序、不同成员观点或子问题组织；同一成员连续表达的内容必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
-9. outcome/open_questions/risk_flags/quotes/resource_ids 都是可选细节；没有可靠内容就返回空值或空数组，禁止填写“暂无结论”“仍在讨论”等占位语。action_items 固定返回空数组，不提取行动事项。
+9. outcome 固定返回 null，不生成讨论落点；open_questions/risk_flags/quotes/resource_ids 是可选细节，没有可靠内容就返回空数组。action_items 固定返回空数组，不提取行动事项。
 10. 每个话题 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选项只保留直接影响后续理解的信息。
 11. highlight_sections 表示语义话题而不是机械时间切段；时间相邻只是弱线索。只有讨论对象、核心问题与上下文指向相同，或存在明确回复/承接关系时才能合并。
 12. 同一时间窗口出现不同讨论对象时必须拆开，时间范围允许重叠；严禁把先后出现但语义无关的话题串成同一个 discussion_flow。
 13. 不要只写最显眼的主线，持续时间较短但消息量可观、内容明确的次级话题也要覆盖。
 14. 输入里会提供 member_directory；提到具体成员时，请统一使用对应的 `[[user:sender_id]]` 占位符，不要直接输出昵称。
-15. 必须区分正式讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 outcome/open_questions/risk_flags。
-16. outcome/open_questions/risk_flags 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时省略或放入 light_moments。
+15. 必须区分正式讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 open_questions/risk_flags。
+16. open_questions/risk_flags 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时省略或放入 light_moments。
 17. 为同一语义话题生成稳定、简短的 topic_key；同一时间片内再次出现的同一话题不要拆成多个 key。
 
 输出 json schema 示例：
@@ -555,7 +555,7 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 2. 去重同类主题和话题内部重复细节；信息较多的 discussion_flow 保留 2-5 个有推进关系的短段。同一成员连续表达必须合并在同一段，只有发言人、子问题或讨论阶段发生变化时才分段；不要拆成同义要点，不要输出 Markdown 项目符号。
 3. highlight_sections 应按语义话题整理；跨 shard 只有在讨论对象、核心问题和上下文指向一致，或存在明确回复/承接关系时才合并，并用 time_ranges 保留多个区间。
 4. source_refs 必须引用输入里的 shard_id 或 bundle_id。
-5. outcome/open_questions/risk_flags/quotes/resource_ids 都是可选细节；无可靠内容就留空，不得用占位文本凑字段。action_items 固定返回空数组，不提取行动事项。
+5. outcome 固定返回 null，不生成讨论落点；open_questions/risk_flags/quotes/resource_ids 是可选细节，无可靠内容就返回空数组。action_items 固定返回空数组，不提取行动事项。
 6. discussion_flow 通常 50-250 个汉字；保留理解讨论发展所需的缘起、观点、补充、转折或结果，但不重复同义信息；较长内容用换行分成 2-5 个短段。
 7. theme_cards 最多 4 条，highlight_sections 最多 6 条，participant_notes 最多 6 条。
 8. 每个话题 quotes 默认 0-1 条、最多 2 条，open_questions 最多 2 条。
@@ -563,7 +563,7 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 10. 不要求每个 shard/bundle 都形成一个 section；普通闲聊或无独立信息量的片段可以不进入主要话题。
 11. 时间接近或相邻不能单独作为合并依据；讨论对象不同、问题不同或没有承接关系时必须分开。
 12. 如果输入里出现 `[[user:sender_id]]` 占位符，输出时保留该占位符，不要改写成昵称。
-13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成讨论落点、开放问题或风险。
+13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成开放问题或风险。
 
 输出 json schema 示例：
 {json.dumps(REDUCE_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -597,7 +597,7 @@ def build_final_prompts(
 3. sections 是“今日主要话题”，表示语义话题而不是机械时间段；数量根据当天内容动态决定，不设最低数量。
 4. 报表语言要像运营洞察报告，不要写成泛泛总结。
 5. 每个 section 以 discussion_flow 为唯一必需正文，自然叙述缘起、展开、观点、补充、转折与进展；通常 50-250 个汉字，信息少就短写，禁止同义反复。内容较长时使用 2-5 个换行分隔的短段，按讨论顺序、不同成员观点或子问题选择最自然的组织方式；同一成员连续表达必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
-6. outcome/open_questions/risk_flags/quotes/resource_ids 均为话题内可选字段；没有可靠内容就返回空值或空数组，不得填写“暂无结论”“仍在讨论”“讨论停留在观点交流”等占位文本。action_items 固定返回空数组，不提取行动事项。
+6. outcome 固定返回 null，不生成讨论落点；open_questions/risk_flags/quotes/resource_ids 为话题内可选字段，没有可靠内容就返回空数组。action_items 固定返回空数组，不提取行动事项。
 7. theme_cards 最多 5 条且每条只做速览，不复述完整 discussion_flow；participant_insights 最多 6 条。
 8. 每个 section 的 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选细节从严保留。
 9. 如果多个话题的主要活跃时间交叠，允许不同 sections 的 start_time / end_time 重叠，不要为了避免重叠而把不同主题强行糅合成一段。
@@ -607,11 +607,11 @@ def build_final_prompts(
 13. 如果输入里的 bundles 使用 `[[user:sender_id]]` 占位符，最终输出请保留这些占位符，不要改写成昵称。
 14. one_line_summary 必须精炼自然，概括当天真正有区分度的内容，避免机械复述消息数，建议不超过 60 个汉字。
 15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、开放问题或风险；light_moments 仅用于内部过滤，不作为对外报告模块。
-16. outcome/open_questions/risk_flags 采用高判定门槛。结构化对象必须提供 tone/confidence，并如实保留；不得把 casual/joke/sarcasm/teasing/uncertain 升级为 formal。
+16. open_questions/risk_flags 采用高判定门槛。结构化对象必须提供 tone/confidence，并如实保留；不得把 casual/joke/sarcasm/teasing/uncertain 升级为 formal。
 17. section.resource_ids 只能引用资源清单中真实存在的 resource_id；只有资源标题、上下文或原消息与该话题语义明确一致时才关联，不能可靠归类时不要塞进任何话题。
 18. ai_observations 回答“从今天这些聊天中可以观察到什么”，不得重复话题摘要，不得推测成员性格、关系或真实意图，也不得生成“讨论弱点”“讨论不足”“讨论短板”等对群聊质量的泛化批评。
 19. 结论、问题、风险和引用直接放入所属 section；无法可靠关联时省略，不得强行归类。
-20. outcome 只有在聊天中存在明确结论、共识、决定、安排或可复述落点时才填写；未形成落点时返回 null，不作说明。
+20. 不论讨论是否形成结论，outcome 都必须返回 null；必要进展只在 discussion_flow 中客观叙述，不另设讨论落点。
 21. conclusion 是简短结语，不复述整份报告，不包含虚构事实。
 
 最终 json schema 示例：

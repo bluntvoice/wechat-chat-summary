@@ -66,6 +66,13 @@ test("history default view follows report sections without duplicate activity to
   assert.match(styles, /\.history-segment-list[^\n]+repeat\(2/);
 });
 
+test("member observation hides only a name duplicated by its card title", () => {
+  assert.match(history, /function MemberObservationView/);
+  assert.match(history, /memberName && memberName === resolvedTitle/);
+  assert.match(history, /filter\(\(\[key\]\) => key !== "name"\)/);
+  assert.match(history, /module\.module_key === "member_activity"[\s\S]*?<MemberObservationView/);
+});
+
 test("history resources hide internal fields and use a concise preview", () => {
   assert.match(history, /function ResourcePreview/);
   assert.match(history, /related_resources/);

@@ -90,6 +90,8 @@ def history_document(root: Path, *, version: int = 1, schema_version: str = "2.2
         chunk_count=1,
         chunk_plan={},
     )
+    # 模拟修复前已保存的报告；旧讨论落点继续由历史中心读取。
+    document["content"]["topics"][0]["outcome"] = {"content": "采用新清关渠道。"}
     document["schema_version"] = schema_version
     return document
 

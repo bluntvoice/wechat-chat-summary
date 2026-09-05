@@ -80,7 +80,7 @@ def valid_external_document() -> dict:
                     "end_time": "09:00",
                     "time_ranges": [{"start": "08:00", "end": "09:00"}],
                     "discussion_flow": "[[user:wxid_a]] 发起确认，[[user:wxid_b]] 明确当天完成。",
-                    "outcome": {"content": "当天完成复核。", "tone": "formal", "confidence": 0.95},
+                    "outcome": None,
                     "action_items": [],
                     "open_questions": [],
                     "risk_flags": [],
@@ -171,6 +171,17 @@ class MCPServiceTests(unittest.TestCase):
         service = MCPService()
         document = valid_external_document()
         document["content"]["topics"][0]["action_items"] = [{"task": "不应进入新报告"}]
+        with patch.object(service, "_messages") as messages:
+            with self.assertRaisesRegex(ValueError, "Report Schema 2.2"):
+                service.submit_report(document)
+        messages.assert_not_called()
+
+    def test_new_schema_rejects_nonempty_outcome(self):
+        service = MCPService()
+        document = valid_external_document()
+        document["content"]["topics"][0]["outcome"] = {
+            "content": "不应进入新报告", "tone": "formal", "confidence": 0.95,
+        }
         with patch.object(service, "_messages") as messages:
             with self.assertRaisesRegex(ValueError, "Report Schema 2.2"):
                 service.submit_report(document)
