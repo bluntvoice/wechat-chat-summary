@@ -28,7 +28,8 @@ $notes = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $NotesPath), [Text.UT
 if ([string]::IsNullOrWhiteSpace($notes)) {
     throw "发布说明不能为空。"
 }
-if ($notes -notmatch '(?m)^## 版本亮点[ \t]*$') {
+$releaseNotesHeadingPattern = '(?m)^## 版本亮点[ \t]*(?=\r?$)'
+if ($notes -notmatch $releaseNotesHeadingPattern) {
     throw "发布说明必须包含二级标题：## 版本亮点"
 }
 
@@ -38,7 +39,7 @@ if ($changelog -match "(?m)^## \[$([regex]::Escape($Version))\](?:\s|$)") {
     throw "CHANGELOG 已存在版本 $Version，拒绝重复发布。"
 }
 
-$notesForChangelog = [regex]::Replace($notes, '(?m)^## 版本亮点[ \t]*$', '### 版本亮点', 1)
+$notesForChangelog = [regex]::Replace($notes, $releaseNotesHeadingPattern, '### 版本亮点', 1)
 $entry = "## [$Version] - $((Get-Date).ToString('yyyy-MM-dd'))`r`n`r`n$notesForChangelog`r`n`r`n"
 $anchor = "<!-- 新版本由 release.yml 插入到此行之后 -->"
 if (-not $changelog.Contains($anchor)) {
