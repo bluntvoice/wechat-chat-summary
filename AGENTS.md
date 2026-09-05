@@ -70,6 +70,8 @@
 - 测试安装包只能通过 `build-test.yml` 或脚本的 `Test` 模式生成，不创建 Tag 和 GitHub Release。
 - 正式发布只能人工触发 `release.yml`。全部测试与安装包构建成功后，工作流才允许提交版本文件、
   推送默认分支与 Tag；Stable 使用 `x.y.z`，Prerelease 使用含后缀的 SemVer 并必须标为 Prerelease。
+- Stable Release 的同一次版本提交必须自动同步 README 当前版本、徽章、下载说明、项目状态和简版版本日志；
+  Prerelease 不得覆盖 README 的 Stable 版本状态。README 不是版本号权威来源。
 - 发布说明必须包含“版本亮点”，并同步写入 `CHANGELOG.md`。正式 Release 前必须复核上游许可、
   用户可见变化、测试结果、安装包内容和发布通道；不得覆盖既有 Tag。
 - GitHub Actions 构建不得读取或打包 `.env`、`secrets.env`、本地配置、聊天数据、SQLite、

@@ -5,6 +5,7 @@
 .venv/
 .dev-cache/
 artifacts/
+release/
 
 # Python 缓存
 __pycache__/

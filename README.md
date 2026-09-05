@@ -1,12 +1,8 @@
 # 群聊拾遗（wechat-chat-summary）
 
-<!--
-首次正式 Stable Release 发布后启用以下徽章：
-
-![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)
-
-![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)
--->
+<!-- release-readme:badges:start -->
+<!-- 首次正式 Stable Release 时由 release.yml 自动启用 Release 与下载量徽章。 -->
+<!-- release-readme:badges:end -->
 
 一个基于本地微信聊天数据的微信群聊统计、AI 总结与历史回顾工具。
 
@@ -14,13 +10,17 @@
 
 除了生成单次总结外，项目还提供历史报告管理、全文搜索、群聊活跃热力图、内容屏蔽、定时生成以及 MCP Server 等功能。
 
+<!-- release-readme:current-version:start -->
 > 当前版本：**v0.2.4**
+<!-- release-readme:current-version:end -->
+<!-- release-readme:release-status:start -->
 >
 > 当前主要面向 Windows 桌面环境开发。
 >
 > 项目仍处于持续开发阶段。
 >
 > GitHub 暂未发布正式 Stable Release。
+<!-- release-readme:release-status:end -->
 
 ## 这个项目可以做什么？
 
@@ -164,6 +164,7 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 
 ## 下载与安装
 
+<!-- release-readme:download:start -->
 当前项目仍处于正式 Release 发布前阶段。Windows 安装包构建及更新机制已经在源码中建立，但 GitHub Releases 暂未提供正式稳定版安装包。
 
 正式版本发布后，将优先通过本仓库的 [GitHub Releases](https://github.com/bluntvoice/wechat-chat-summary/releases) 页面提供 Windows 安装程序。
@@ -173,6 +174,7 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 > **待补充：首次 Stable Release 发布后，在此补充最新版下载入口、安装方式及版本要求。**
 
 <!-- TODO: 首次 Stable Release 发布后补充最新版安装包下载地址及安装说明 -->
+<!-- release-readme:download:end -->
 
 ## 前置依赖
 
@@ -371,24 +373,20 @@ wechat-chat-summary
 
 ## 版本更新日志
 
-### 当前开发版本（v0.2.4）
+<!-- release-readme:history -->
+
+### v0.2.4
 
 - 优化主要话题结构、报告视觉、进度与首次使用指南；
 - 增加群聊活跃热力图；
-- 整理 DeepSeek / OpenAI Compatible Provider，并增加本机 MCP Server；
-- 增加独立关于页、手动检查更新及安装包下载、SHA-256 校验和启动安装程序的更新闭环；
-- 安装和卸载前检测群聊拾遗是否正在运行，自动请求软件正常退出；无法正常退出时提示手动关闭后重试或取消，不强制结束进程；
-- 将 GitHub Actions 官方动作统一升级到 Node.js 24 运行时版本，消除 Node.js 20 弃用警告；
-- 历史中心默认详情与报告一级板块对齐，话题细节不再重复拆卡，活跃情况不重复顶部统计；
-- 自定义连续日期支持最多 7 天逐日独立生成，保留合并模式，并提供跳过、继续与失败日重试；
-- 调整桌面端与历史中心字号，优化报告讨论分段、成员昵称高亮、资源平台标签和双行页脚；
-- 新报告与历史界面移除行动事项，旧报告数据保持只读兼容；
-- 支持在历史报告预览中直接选择并屏蔽完整报告条目；
-- 定时生成支持选择当日或昨日；
-- 统一软件显示名称为“群聊拾遗”，并精简历史中心的活跃统计和资源预览；
-- 检测跨成员账号误绑，并支持昵称异常时按需启动本地上游源码分支复读；复读不可用时按账号读取实时微信名，仍无法确认则停止报告生成。
+- 增加 DeepSeek / OpenAI Compatible Provider 与 MCP Server；
+- 增加手动检查更新及安装包更新闭环；
+- 支持最多 7 天连续日期逐日生成；
+- 优化历史中心、成员昵称识别、资源标签及报告布局。
 
+<!-- release-readme:prestable-history-note:start -->
 以上能力已在当前源码中实现，但尚未发布为 GitHub Stable Release。
+<!-- release-readme:prestable-history-note:end -->
 
 ### v0.2.3
 
@@ -411,6 +409,8 @@ wechat-chat-summary
 - 建立结构化报告、HTML / PNG / JSON 输出与历史数据基础；
 - 完成桌面端生成报告的基本闭环。
 
+> 更完整的版本变化请查看 [CHANGELOG.md](./CHANGELOG.md)。
+
 ## 项目来源与致谢
 
 - [wzj042/wechat-auto-insight](https://github.com/wzj042/wechat-auto-insight)：本项目最初参考并基于其部分群聊总结、报告渲染和可选微信发送能力继续开发。当前历史中心、热力图、Provider、MCP Server、更新闭环等能力已在本仓库中独立扩展。
@@ -420,6 +420,7 @@ wechat-chat-summary
 
 ## 当前开发状态
 
+<!-- release-readme:development-status:start -->
 - 核心 Windows 桌面端已经可以从源码运行；
 - Windows x64 测试安装包构建流程已经建立；
 - GitHub Actions CI、测试安装包与人工触发的 Stable / Prerelease 发布流程已经建立；
@@ -427,6 +428,7 @@ wechat-chat-summary
 - 软件启动时不会自动检查更新，也不会后台周期检查；
 - 当前 GitHub Releases 尚无正式 Release；
 - Windows 安装包暂未进行代码签名。
+<!-- release-readme:development-status:end -->
 
 当前仓库没有 `LICENSE` 文件，也不声明整体采用 MIT 或其他开源许可证。公开可见不等同于已经授予复制、修改或再分发许可；正式发布前仍需复核项目及上游依赖的许可边界。
 

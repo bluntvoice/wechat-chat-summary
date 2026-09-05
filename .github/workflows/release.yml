@@ -18,6 +18,10 @@ on:
         description: "版本亮点正文（必填，工作流会自动添加 Markdown 标题）"
         required: true
         type: string
+      readme_summary:
+        description: "README 简版版本摘要（Stable 必填；不含版本标题，Prerelease 忽略）"
+        required: false
+        type: string
       confirm_real_release:
         description: "确认这是面向真实用户的正式发布，并已完成开源许可与发布内容复核"
         required: true
@@ -83,6 +87,7 @@ jobs:
           TARGET_VERSION: ${{ inputs.version }}
           RELEASE_CHANNEL: ${{ inputs.channel }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
+          README_SUMMARY: ${{ inputs.readme_summary }}
           CONFIRM_REAL_RELEASE: ${{ inputs.confirm_real_release }}
           ALLOW_WITHIN_24H: ${{ inputs.allow_release_within_24h }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -127,21 +132,37 @@ jobs:
           $notesDocument = "## 版本亮点`r`n`r`n$notesBody"
           [IO.File]::WriteAllText($notesPath, $notesDocument, [Text.UTF8Encoding]::new($false))
 
+          $readmeSummaryPath = Join-Path $env:RUNNER_TEMP "readme-summary.md"
+          if ($env:RELEASE_CHANNEL -eq "stable") {
+            $readmeSummary = ([string]$env:README_SUMMARY).Trim()
+            if ([string]::IsNullOrWhiteSpace($readmeSummary)) {
+              throw "Stable Release 的 README 简版版本摘要不能为空。"
+            }
+            [IO.File]::WriteAllText($readmeSummaryPath, $readmeSummary, [Text.UTF8Encoding]::new($false))
+          }
+
           $packageKind = if ($env:RELEASE_CHANNEL -eq "stable") { "Stable" } else { "Prerelease" }
           "version=$env:TARGET_VERSION" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "package_kind=$packageKind" >> $env:GITHUB_OUTPUT
           "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
+          "readme_summary_path=$readmeSummaryPath" >> $env:GITHUB_OUTPUT
           "base_sha=$env:GITHUB_SHA" >> $env:GITHUB_OUTPUT
 
-      - name: Set release version and update CHANGELOG
+      - name: Set release version and update release documents
         shell: pwsh
         env:
           TARGET_VERSION: ${{ steps.release_request.outputs.version }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
           NOTES_PATH: ${{ steps.release_request.outputs.notes_path }}
+          README_SUMMARY_PATH: ${{ steps.release_request.outputs.readme_summary_path }}
         run: |
           node desktop/scripts/version.mjs --set $env:TARGET_VERSION
           ./desktop/scripts/prepare-release-notes.ps1 -Version $env:TARGET_VERSION -NotesPath $env:NOTES_PATH
+          node desktop/scripts/update-release-readme.mjs `
+            --version $env:TARGET_VERSION `
+            --channel $env:RELEASE_CHANNEL `
+            --summary-file $env:README_SUMMARY_PATH
           node desktop/scripts/version.mjs --check
 
       - name: Install build dependencies
@@ -185,6 +206,8 @@ jobs:
 
       - name: Validate changed release files
         shell: pwsh
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
         run: |
           $allowed = @(
             "CHANGELOG.md",
@@ -194,6 +217,9 @@ jobs:
             "desktop/src-tauri/Cargo.toml",
             "desktop/src-tauri/Cargo.lock"
           )
+          if ($env:RELEASE_CHANNEL -eq "stable") {
+            $allowed += "README.md"
+          }
           $changed = @(git diff --name-only)
           $unexpected = @($changed | Where-Object { $_ -notin $allowed })
           if ($unexpected.Count -gt 0) {
@@ -208,6 +234,7 @@ jobs:
         env:
           TARGET_VERSION: ${{ steps.release_request.outputs.version }}
           RELEASE_TAG: ${{ steps.release_request.outputs.tag }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
           BASE_SHA: ${{ steps.release_request.outputs.base_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -220,6 +247,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
+          if ($env:RELEASE_CHANNEL -eq "stable") {
+            git add README.md
+          }
           git add desktop/package.json desktop/package-lock.json
           git add desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
           git commit -m "chore(release): v$env:TARGET_VERSION" -m "同步桌面端版本并更新发布日志；安装包已通过自动测试与 Windows 构建。"
