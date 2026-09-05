@@ -16,7 +16,12 @@ from .common import (
     normalize_text,
     topic_similarity,
 )
-from .member_references import member_names_from_stats, normalize_member_references
+from .member_references import (
+    USER_REFERENCE_PATTERN,
+    member_names_from_stats,
+    normalize_member_reference_text,
+    normalize_member_references,
+)
 from .models import MessageChunk
 from .settings import MAX_REPORT_SECTIONS, SECTION_TOPIC_COVERAGE_THRESHOLD
 
@@ -282,6 +287,7 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ),
             "quotes": _merge_quotes(section.get("quotes", []), limit=2),
             "resource_ids": _merge_resource_ids(section.get("resource_ids", [])),
+            "representative_refs": _stable_member_references(section.get("representative_refs", []))[:2],
         }
         if merge_key not in indexes:
             indexes[merge_key] = len(deduped)
@@ -309,6 +315,9 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         existing["resource_ids"] = _merge_resource_ids(
             existing.get("resource_ids", []), item.get("resource_ids", [])
         )
+        existing["representative_refs"] = _stable_member_references(
+            [*existing.get("representative_refs", []), *item.get("representative_refs", [])]
+        )[:2]
     return deduped
 
 
@@ -349,6 +358,7 @@ def build_report_sections_from_bundles(bundles: list[dict[str, Any]]) -> list[di
                     "risk_flags": section.get("risk_flags", []),
                     "quotes": section.get("quotes", []),
                     "resource_ids": section.get("resource_ids", []),
+                    "representative_refs": section.get("representative_refs", []),
                 }
             )
     return select_timeline_sections(dedupe_sections(sections), limit=MAX_REPORT_SECTIONS)
@@ -459,6 +469,199 @@ def build_theme_cards_from_bundles(bundles: list[dict[str, Any]]) -> list[dict[s
     return dedupe_theme_cards(cards, limit=4)
 
 
+def _stable_member_references(value: Any) -> list[str]:
+    """从任意阶段结构中按出现顺序提取稳定成员引用。"""
+
+    if isinstance(value, dict):
+        values = value.values()
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        values = [value]
+    result: list[str] = []
+    for item in values:
+        if isinstance(item, (dict, list, tuple)):
+            candidates = _stable_member_references(item)
+        else:
+            candidates = [match.group(0) for match in USER_REFERENCE_PATTERN.finditer(str(item or ""))]
+        for token in candidates:
+            if token not in result:
+                result.append(token)
+    return result
+
+
+def _analysis_section_references(section: dict[str, Any]) -> list[str]:
+    values: list[Any] = [section.get("representative_refs", []), section.get("discussion_flow", "")]
+    for quote in section.get("quotes", []) if isinstance(section.get("quotes"), list) else []:
+        if isinstance(quote, dict):
+            values.append(quote.get("speaker") or quote.get("sender_ref") or "")
+    return _stable_member_references(values)[:2]
+
+
+def _analysis_section_match_score(target: dict[str, Any], source: dict[str, Any]) -> float:
+    target_id = str(target.get("id") or target.get("topic_key") or "").casefold().removeprefix("topic-")
+    source_id = str(source.get("id") or source.get("topic_key") or "").casefold().removeprefix("topic-")
+    if target_id and source_id and target_id == source_id:
+        return 2.0
+    return _theme_section_score(target, source)
+
+
+def ensure_bundle_representative_references(
+    analysis: dict[str, Any],
+    source_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """让 map/reduce 话题携带可继续传递的代表成员引用。"""
+
+    source_sections = [
+        section
+        for item in source_items or []
+        if isinstance(item, dict)
+        for section in item.get("highlight_sections", [])
+        if isinstance(section, dict)
+    ]
+    sections = analysis.get("highlight_sections", [])
+    sections = sections if isinstance(sections, list) else []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        refs = _analysis_section_references(section)
+        source_refs: list[str] = []
+        if source_sections:
+            ranked = sorted(
+                ((_analysis_section_match_score(section, candidate), candidate) for candidate in source_sections),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            if ranked and ranked[0][0] >= 0.2:
+                source_refs = _analysis_section_references(ranked[0][1])
+        if source_refs:
+            # reduce 输出只能沿用输入阶段已经由证据固化的成员，不能信任模型新造的账号引用。
+            refs = source_refs
+        flow = str(section.get("discussion_flow") or section.get("summary") or "").strip()
+        if flow and refs and not any(token in flow for token in refs):
+            section["discussion_flow"] = f"代表发言：{'、'.join(refs)}。\n{flow}"
+        section["representative_refs"] = refs[:2]
+
+    for card in analysis.get("theme_cards", []) if isinstance(analysis.get("theme_cards"), list) else []:
+        if not isinstance(card, dict):
+            continue
+        summary = str(card.get("summary") or "").strip()
+        if not summary or _stable_member_references(summary):
+            continue
+        ranked = sorted(
+            (
+                (_theme_section_score(card, section), section)
+                for section in sections
+                if isinstance(section, dict) and _analysis_section_references(section)
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        if ranked and ranked[0][0] >= 0.2:
+            refs = _analysis_section_references(ranked[0][1])
+            card["summary"] = f"代表发言：{'、'.join(refs)}。{summary}"
+    return analysis
+
+
+def _member_references(value: Any, names: dict[str, str]) -> list[str]:
+    """按出现顺序提取可解析的稳定成员引用。"""
+
+    normalized = normalize_member_reference_text(value, names)
+    result: list[str] = []
+    for match in USER_REFERENCE_PATTERN.finditer(normalized):
+        sender_id = match.group(1)
+        token = match.group(0)
+        if sender_id in names and token not in result:
+            result.append(token)
+    return result
+
+
+def _section_representatives(
+    section: dict[str, Any],
+    bundle_sections: list[dict[str, Any]],
+    names: dict[str, str],
+) -> list[str]:
+    """从正文、受控原话及同话题 bundle 中取得可靠代表成员。"""
+
+    result: list[str] = []
+
+    def collect(value: Any) -> None:
+        for token in _member_references(value, names):
+            if token not in result:
+                result.append(token)
+
+    collect(section.get("discussion_flow", ""))
+    collect(section.get("representative_refs", []))
+    for quote in section.get("quotes", []) if isinstance(section.get("quotes"), list) else []:
+        if isinstance(quote, dict):
+            collect(quote.get("speaker") or quote.get("sender_ref") or "")
+
+    for candidate in bundle_sections:
+        if _analysis_section_match_score(section, candidate) < 0.2:
+            continue
+        collect(candidate.get("discussion_flow", ""))
+        collect(candidate.get("representative_refs", []))
+        for quote in candidate.get("quotes", []) if isinstance(candidate.get("quotes"), list) else []:
+            if isinstance(quote, dict):
+                collect(quote.get("speaker") or quote.get("sender_ref") or "")
+    return result[:2]
+
+
+def _theme_section_score(card: dict[str, Any], section: dict[str, Any]) -> float:
+    card_title = normalize_text(card.get("title", ""), max_len=120)
+    section_title = normalize_text(section.get("title", ""), max_len=140)
+    compact_card = card_title.replace("的", "").replace("与", "")
+    compact_section = section_title.replace("的", "").replace("与", "")
+    if compact_card and compact_section and (
+        compact_card in compact_section or compact_section in compact_card
+    ):
+        return 1.0
+    return topic_similarity(extract_topic_tokens(card_title), extract_topic_tokens(section_title))
+
+
+def ensure_representative_member_references(
+    report: dict[str, Any],
+    bundles: list[dict[str, Any]],
+    names: dict[str, str],
+) -> dict[str, Any]:
+    """保证主要话题及其速览卡片至少展示一名可靠代表发言者。"""
+
+    sections = report.get("sections", []) if isinstance(report.get("sections"), list) else []
+    bundle_sections = build_report_sections_from_bundles(bundles)
+    representatives: dict[int, list[str]] = {}
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        flow = normalize_member_reference_text(section.get("discussion_flow", ""), names)
+        refs = _section_representatives(section, bundle_sections, names)
+        if flow and not _member_references(flow, names) and refs:
+            flow = f"代表发言：{'、'.join(refs)}。\n{flow}"
+        section["discussion_flow"] = flow
+        representatives[id(section)] = _member_references(flow, names) or refs
+
+    for card in report.get("theme_cards", []) if isinstance(report.get("theme_cards"), list) else []:
+        if not isinstance(card, dict):
+            continue
+        summary = normalize_member_reference_text(card.get("summary", ""), names)
+        if not summary or _member_references(summary, names):
+            card["summary"] = summary
+            continue
+        ranked = sorted(
+            (
+                (_theme_section_score(card, section), section)
+                for section in sections
+                if isinstance(section, dict) and representatives.get(id(section))
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        if ranked and ranked[0][0] >= 0.2:
+            refs = representatives[id(ranked[0][1])][:2]
+            summary = f"代表发言：{'、'.join(refs)}。{summary}"
+        card["summary"] = summary
+    return report
+
+
 def repair_final_report(
     report: dict[str, Any],
     chat_name: str,
@@ -541,7 +744,9 @@ def repair_final_report(
         ]
     if not repaired["conclusion"]:
         repaired["conclusion"] = "以上为本次群聊日报整理。"
-    return normalize_member_references(repaired, member_names_from_stats(stats))
+    names = member_names_from_stats(stats)
+    normalized = normalize_member_references(repaired, names)
+    return ensure_representative_member_references(normalized, bundles, names)
 
 
 def fallback_map_analysis(chunk: MessageChunk) -> dict[str, Any]:

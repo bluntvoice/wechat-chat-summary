@@ -530,9 +530,10 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 12. 同一时间窗口出现不同讨论对象时必须拆开，时间范围允许重叠；严禁把先后出现但语义无关的话题串成同一个 discussion_flow。
 13. 不要只写最显眼的主线，持续时间较短但消息量可观、内容明确的次级话题也要覆盖。
 14. 输入里会提供 member_directory；提到具体成员时，请统一使用对应的 `[[user:sender_id]]` 占位符，不要直接输出昵称。
-15. 必须区分正式讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 open_questions/risk_flags。
-16. open_questions/risk_flags 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时省略或放入 light_moments。
-17. 为同一语义话题生成稳定、简短的 topic_key；同一时间片内再次出现的同一话题不要拆成多个 key。
+15. 每个 highlight_section 必须从 evidence_ids 对应的发言中选择 1-2 位代表成员，并在 discussion_flow 中保留其 `[[user:sender_id]]`；不得整段只用“群友、有人、成员、多人”等泛称。泛称可用于概括其他参与者，但不能替代代表成员。
+16. 必须区分正式讨论、轻松闲聊、玩笑、夸张、反话与调侃；明显或高度疑似玩笑不得写入 open_questions/risk_flags。
+17. open_questions/risk_flags 必须提供 tone 与 confidence；证据不足、可能是玩笑或只是随口一提时省略或放入 light_moments。
+18. 为同一语义话题生成稳定、简短的 topic_key；同一时间片内再次出现的同一话题不要拆成多个 key。
 
 输出 json schema 示例：
 {json.dumps(MAP_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -563,8 +564,9 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 9. 合并时检查是否遗漏持续但相对次级的话题，不要只保留最热主线。
 10. 不要求每个 shard/bundle 都形成一个 section；普通闲聊或无独立信息量的片段可以不进入主要话题。
 11. 时间接近或相邻不能单独作为合并依据；讨论对象不同、问题不同或没有承接关系时必须分开。
-12. 如果输入里出现 `[[user:sender_id]]` 占位符，输出时保留该占位符，不要改写成昵称。
-13. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成开放问题或风险。
+12. 每个 highlight_section 必须保留输入中 1-2 位代表成员的 `[[user:sender_id]]`；不得把具体成员全部改写成“群友、有人、成员、多人”等泛称。
+13. 如果输入里出现 `[[user:sender_id]]` 占位符，输出时保留该占位符，不要改写成昵称或短称。
+14. 合并时保留 tone/confidence；疑似玩笑、调侃、夸张或反话不能升级成开放问题或风险。
 
 输出 json schema 示例：
 {json.dumps(REDUCE_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}
@@ -606,15 +608,16 @@ def build_final_prompts(
 10. 覆盖当日所有明显成型且有信息量的话题；普通闲聊不必为了覆盖时间线而进入 sections。
 11. 同一话题上午出现、下午继续时必须合并为一个 section，并用 time_ranges 记录多个区间。
 12. 不要因为时间不连续拆分同一话题，也不要为了减少数量合并无关话题；时间相邻只是弱线索，必须同时核对讨论对象、核心问题、语义和回复承接关系。
-13. 如果输入里的 bundles 使用 `[[user:sender_id]]` 占位符，最终输出请保留这些占位符，不要改写成昵称。
-14. one_line_summary 必须精炼自然，概括当天真正有区分度的内容，避免机械复述消息数，建议不超过 60 个汉字。
-15. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、开放问题或风险；light_moments 仅用于内部过滤，不作为对外报告模块。
-16. open_questions/risk_flags 采用高判定门槛。结构化对象必须提供 tone/confidence，并如实保留；不得把 casual/joke/sarcasm/teasing/uncertain 升级为 formal。
-17. section.resource_ids 只能引用资源清单中真实存在的 resource_id；只有资源标题、上下文或原消息与该话题语义明确一致时才关联，不能可靠归类时不要塞进任何话题。
-18. ai_observations 回答“从今天这些聊天中可以观察到什么”，不得重复话题摘要，不得推测成员性格、关系或真实意图，也不得生成“讨论弱点”“讨论不足”“讨论短板”等对群聊质量的泛化批评。
-19. 结论、问题、风险和引用直接放入所属 section；无法可靠关联时省略，不得强行归类。
-20. 不论讨论是否形成结论，outcome 都必须返回 null；必要进展只在 discussion_flow 中客观叙述，不另设讨论落点。
-21. conclusion 是简短结语，不复述整份报告，不包含虚构事实。
+13. 每个 section 必须保留 bundles 中 1-2 位代表成员的 `[[user:sender_id]]`；不得把具体成员全部改写成“群友、有人、成员、多人”等泛称。theme_cards 涉及具体成员时也使用占位符。
+14. 如果输入里的 bundles 使用 `[[user:sender_id]]` 占位符，最终输出请保留这些占位符，不要改写成昵称或短称。
+15. one_line_summary 必须精炼自然，概括当天真正有区分度的内容，避免机械复述消息数，建议不超过 60 个汉字。
+16. 特别区分正式讨论与轻松闲聊、玩笑、夸张、反话和群友调侃。明显或高度疑似玩笑不得作为客观事实、结论、开放问题或风险；light_moments 仅用于内部过滤，不作为对外报告模块。
+17. open_questions/risk_flags 采用高判定门槛。结构化对象必须提供 tone/confidence，并如实保留；不得把 casual/joke/sarcasm/teasing/uncertain 升级为 formal。
+18. section.resource_ids 只能引用资源清单中真实存在的 resource_id；只有资源标题、上下文或原消息与该话题语义明确一致时才关联，不能可靠归类时不要塞进任何话题。
+19. ai_observations 回答“从今天这些聊天中可以观察到什么”，不得重复话题摘要，不得推测成员性格、关系或真实意图，也不得生成“讨论弱点”“讨论不足”“讨论短板”等对群聊质量的泛化批评。
+20. 结论、问题、风险和引用直接放入所属 section；无法可靠关联时省略，不得强行归类。
+21. 不论讨论是否形成结论，outcome 都必须返回 null；必要进展只在 discussion_flow 中客观叙述，不另设讨论落点。
+22. conclusion 是简短结语，不复述整份报告，不包含虚构事实。
 
 最终 json schema 示例：
 {json.dumps(FINAL_REPORT_SCHEMA_EXAMPLE, ensure_ascii=False, indent=2)}

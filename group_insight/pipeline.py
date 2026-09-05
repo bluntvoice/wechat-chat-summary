@@ -12,6 +12,7 @@ from typing import Any, Callable
 from .cache_utils import build_stage_fingerprint, load_cached_stage_output, write_stage_output
 from .chunking import chunk_payload
 from .common import ensure_dir, log_llm_request_estimate, write_json
+from .common import make_user_placeholder
 from .llm import (
     build_final_prompts,
     build_map_prompts,
@@ -25,8 +26,43 @@ from .report_model import (
     fallback_final_report,
     fallback_map_analysis,
     fallback_reduce_bundle,
+    ensure_bundle_representative_references,
     repair_final_report,
 )
+
+
+def _attach_map_representatives(result: dict[str, Any], chunk: MessageChunk) -> dict[str, Any]:
+    """依据模型给出的 evidence_ids 反查真实消息发送者，固化代表成员。"""
+
+    sender_refs = {
+        message.id: make_user_placeholder(message.sender_username)
+        for message in chunk.messages
+        if message.sender_username and not message.sender_username.casefold().endswith("@chatroom")
+    }
+    for section in result.get("highlight_sections", []) if isinstance(result.get("highlight_sections"), list) else []:
+        if not isinstance(section, dict):
+            continue
+        refs: list[str] = []
+
+        def add_evidence(evidence_id: Any) -> None:
+            token = sender_refs.get(str(evidence_id or ""))
+            if token and token not in refs:
+                refs.append(token)
+
+        for evidence_id in section.get("evidence_ids", []) if isinstance(section.get("evidence_ids"), list) else []:
+            add_evidence(evidence_id)
+        for quote in section.get("quotes", []) if isinstance(section.get("quotes"), list) else []:
+            if not isinstance(quote, dict):
+                continue
+            add_evidence(quote.get("evidence_id") or quote.get("message_id"))
+            if not quote.get("sender_ref"):
+                quote_ref = sender_refs.get(str(quote.get("evidence_id") or quote.get("message_id") or ""))
+                if quote_ref:
+                    quote["sender_ref"] = quote_ref
+        section["representative_refs"] = refs[:2]
+    return ensure_bundle_representative_references(result)
+
+
 def run_map_stage(
     chunks: list[MessageChunk],
     output_dir: Path,
@@ -58,7 +94,7 @@ def run_map_stage(
         # 原始消息分片不落盘；指纹只用于判断派生结果缓存是否可复用。
         cached = load_cached_stage_output(output_path, fingerprint)
         if cached is not None:
-            return cached
+            return _attach_map_representatives(cached, chunk)
 
         if dry_run:
             result = fallback_map_analysis(chunk)
@@ -69,6 +105,7 @@ def run_map_stage(
             log_llm_request_estimate(f"map:{chunk.id}", client, system_prompt, user_prompt, stage_max_tokens)
             result = client.chat_json(system_prompt, user_prompt, max_tokens=stage_max_tokens, temperature=0.2)
 
+        result = _attach_map_representatives(result, chunk)
         write_stage_output(output_path, result, fingerprint)
         return result
 
@@ -117,7 +154,7 @@ def reduce_once(
         )
         cached = load_cached_stage_output(output_path, fingerprint)
         if cached is not None:
-            results.append(cached)
+            results.append(ensure_bundle_representative_references(cached, group_items))
             continue
 
         if dry_run:
@@ -130,6 +167,7 @@ def reduce_once(
             bundle = client.chat_json(system_prompt, user_prompt, max_tokens=stage_max_tokens, temperature=0.2)
             bundle.setdefault("bundle_id", bundle_id)
 
+        bundle = ensure_bundle_representative_references(bundle, group_items)
         write_stage_output(output_path, bundle, fingerprint)
         results.append(bundle)
 

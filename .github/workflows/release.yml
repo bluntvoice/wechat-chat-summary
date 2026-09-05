@@ -107,8 +107,9 @@ jobs:
 
           node desktop/scripts/version.mjs --check
           if ($LASTEXITCODE -ne 0) { throw "当前版本文件不一致。" }
-          node desktop/scripts/version.mjs --assert-greater $env:TARGET_VERSION
-          if ($LASTEXITCODE -ne 0) { throw "目标版本必须高于当前版本。" }
+          $currentVersion = (node desktop/scripts/version.mjs --print).Trim()
+          node desktop/scripts/version.mjs --assert-not-lower $env:TARGET_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "目标版本不得低于当前版本。" }
 
           $tag = "v$env:TARGET_VERSION"
           git fetch --tags --force
@@ -148,6 +149,7 @@ jobs:
           "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
           "readme_summary_path=$readmeSummaryPath" >> $env:GITHUB_OUTPUT
           "base_sha=$env:GITHUB_SHA" >> $env:GITHUB_OUTPUT
+          "version_changed=$($currentVersion -ne $env:TARGET_VERSION)" >> $env:GITHUB_OUTPUT
 
       - name: Set release version and update release documents
         shell: pwsh
@@ -208,6 +210,7 @@ jobs:
         shell: pwsh
         env:
           RELEASE_CHANNEL: ${{ inputs.channel }}
+          VERSION_CHANGED: ${{ steps.release_request.outputs.version_changed }}
         run: |
           $allowed = @(
             "CHANGELOG.md",
@@ -225,8 +228,21 @@ jobs:
           if ($unexpected.Count -gt 0) {
             throw "Release 产生了未授权文件变更：$($unexpected -join ', ')"
           }
-          foreach ($required in $allowed) {
-            if ($required -notin $changed) { throw "Release 缺少预期版本变更：$required" }
+          $required = @("CHANGELOG.md")
+          if ($env:RELEASE_CHANNEL -eq "stable") {
+            $required += "README.md"
+          }
+          if ($env:VERSION_CHANGED -eq "true") {
+            $required += @(
+              "desktop/package.json",
+              "desktop/package-lock.json",
+              "desktop/src-tauri/tauri.conf.json",
+              "desktop/src-tauri/Cargo.toml",
+              "desktop/src-tauri/Cargo.lock"
+            )
+          }
+          foreach ($requiredFile in $required) {
+            if ($requiredFile -notin $changed) { throw "Release 缺少预期版本变更：$requiredFile" }
           }
 
       - name: Commit version, create tag and push atomically

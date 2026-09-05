@@ -4,15 +4,16 @@ from tempfile import TemporaryDirectory
 
 from group_insight.chunking import chunk_payload
 from group_insight.history_store import HistoryStore
-from group_insight.llm import build_final_prompts
+from group_insight.llm import build_final_prompts, build_map_prompts, build_reduce_prompts
 from group_insight.member_references import (
     member_names_from_stats,
     normalize_member_reference_text,
     resolve_member_reference_text,
 )
 from group_insight.models import MessageChunk, StructuredMessage
+from group_insight.pipeline import _attach_map_representatives
 from group_insight.rendering import render_html_report
-from group_insight.report_model import repair_final_report
+from group_insight.report_model import ensure_bundle_representative_references, repair_final_report
 from group_insight.report_schema import build_report_document
 
 
@@ -134,6 +135,118 @@ class MemberReferenceTests(unittest.TestCase):
             resolved,
             "深圳-港股信披-Venti认为需要调整，深圳-机器人-涉外法务-Samantha老师随后补充。",
         )
+
+    def test_real_report_short_name_contexts_restore_full_group_nickname(self):
+        names = {
+            "member-samantha": "深圳-机器人-涉外法务-Samantha",
+            "member-moon": "上海-涉外法务-月亮牙",
+        }
+        cases = {
+            "Samantha进一步分享。": "深圳-机器人-涉外法务-Samantha进一步分享。",
+            "Samantha因职业信仰保持热情。": "深圳-机器人-涉外法务-Samantha因职业信仰保持热情。",
+            "Samantha则回应自己工作强度大。": "深圳-机器人-涉外法务-Samantha则回应自己工作强度大。",
+            "Samantha的拼命工作经历。": "深圳-机器人-涉外法务-Samantha的拼命工作经历。",
+            "月亮牙问谁要接好运。": "上海-涉外法务-月亮牙问谁要接好运。",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(resolve_member_reference_text(source, names), expected)
+
+    def test_particle_after_common_word_does_not_create_member_reference(self):
+        names = {"member-apple": "苹果"}
+        self.assertEqual(normalize_member_reference_text("苹果的价格上涨。", names), "苹果的价格上涨。")
+        self.assertEqual(normalize_member_reference_text("苹果因天气减产。", names), "苹果因天气减产。")
+
+    def test_map_evidence_adds_stable_representative_member_reference(self):
+        messages = [
+            StructuredMessage(
+                id="m1", local_id=1, timestamp=1, time="2026-09-05 09:00",
+                sender_username="member-a", sender="城市-行业-Alice", text="分享具体观点",
+                msg_type="文本", chat_id="room@chatroom", chat_name="测试群", table_name="api", metadata={},
+            ),
+            StructuredMessage(
+                id="m2", local_id=2, timestamp=2, time="2026-09-05 09:01",
+                sender_username="member-b", sender="城市-行业-Bob", text="补充具体观点",
+                msg_type="文本", chat_id="room@chatroom", chat_name="测试群", table_name="api", metadata={},
+            ),
+        ]
+        chunk = MessageChunk(
+            id="shard-001", index=1, start_ts=1, end_ts=2,
+            start_time=messages[0].time, end_time=messages[-1].time,
+            message_count=2, char_count=12, messages=messages,
+        )
+        result = _attach_map_representatives({
+            "theme_cards": [{"title": "具体讨论", "summary": "群友分享经验。"}],
+            "highlight_sections": [{
+                "topic_key": "topic-a", "title": "具体讨论",
+                "discussion_flow": "有群友分享经验，其他成员补充。",
+                "evidence_ids": ["m1", "m2"], "quotes": [],
+            }],
+        }, chunk)
+        section = result["highlight_sections"][0]
+        self.assertEqual(section["representative_refs"], ["[[user:member-a]]", "[[user:member-b]]"])
+        self.assertTrue(section["discussion_flow"].startswith("代表发言：[[user:member-a]]、[[user:member-b]]。"))
+        self.assertIn("[[user:member-a]]", result["theme_cards"][0]["summary"])
+
+    def test_reduce_repair_preserves_representative_reference_from_source_topic(self):
+        source = {
+            "highlight_sections": [{
+                "topic_key": "topic-a", "title": "具体讨论",
+                "discussion_flow": "代表发言：[[user:member-a]]。\n群友分享经验。",
+                "representative_refs": ["[[user:member-a]]"],
+            }]
+        }
+        reduced = ensure_bundle_representative_references({
+            "theme_cards": [{"title": "具体讨论", "summary": "群友交流了经验。"}],
+            "highlight_sections": [{
+                "topic_key": "topic-a", "title": "具体讨论",
+                "discussion_flow": "[[user:hallucinated]]称群友交流了经验。",
+            }],
+        }, [source])
+        self.assertIn("[[user:member-a]]", reduced["highlight_sections"][0]["discussion_flow"])
+        self.assertEqual(reduced["highlight_sections"][0]["representative_refs"], ["[[user:member-a]]"])
+        self.assertIn("[[user:member-a]]", reduced["theme_cards"][0]["summary"])
+
+    def test_final_repair_uses_controlled_quote_as_representative_and_is_idempotent(self):
+        stats = {
+            "message_count": 1,
+            "participant_count": 1,
+            "member_aliases": [{"sender_id": "member-long", "sender_name": "昵称前半段昵称后半段"}],
+        }
+        report = {
+            "theme_cards": [{"title": "具体讨论", "summary": "群友分享了经验。"}],
+            "sections": [{
+                "id": "topic-a", "title": "具体讨论", "discussion_flow": "有群友分享了经验。",
+                "quotes": [{"speaker": "[[user:member-long]]", "quote": "原话"}],
+            }],
+        }
+        first = repair_final_report(report, "测试群", "2026-09-05 00:00:00", "2026-09-05 23:59:59", stats, [])
+        second = repair_final_report(first, "测试群", "2026-09-05 00:00:00", "2026-09-05 23:59:59", stats, [])
+        flow = second["sections"][0]["discussion_flow"]
+        self.assertEqual(flow.count("[[user:member-long]]"), 1)
+        self.assertEqual(flow.count("代表发言："), 1)
+        self.assertIn("[[user:member-long]]", second["theme_cards"][0]["summary"])
+        html = render_html_report(self.document(stats["member_aliases"], flow))
+        self.assertIn('<strong class="topic-member">昵称前半段昵称后半段</strong>', html)
+
+    def test_member_prompts_require_concrete_representative_references(self):
+        message = StructuredMessage(
+            id="m1", local_id=1, timestamp=1, time="2026-09-05 09:00",
+            sender_username="member-a", sender="城市-行业-Alice", text="测试内容", msg_type="文本",
+            chat_id="room@chatroom", chat_name="测试群", table_name="api", metadata={},
+        )
+        chunk = MessageChunk(
+            id="shard-001", index=1, start_ts=1, end_ts=1,
+            start_time=message.time, end_time=message.time,
+            message_count=1, char_count=4, messages=[message],
+        )
+        map_prompt, _ = build_map_prompts("测试群", chunk)
+        reduce_prompt, _ = build_reduce_prompts("bundle-1", [])
+        final_prompt, _ = build_final_prompts("测试群", message.time, message.time, {}, [], [])
+        for prompt in (map_prompt, reduce_prompt, final_prompt):
+            self.assertIn("代表成员", prompt)
+            self.assertIn("不得", prompt)
+            self.assertIn("群友", prompt)
 
     def test_report_repair_persists_stable_member_reference(self):
         stats = {

@@ -136,8 +136,14 @@ try {
       throw new Error(`目标版本 ${argument} 必须高于当前版本 ${current}。`);
     }
     console.log(`VERSION_GREATER=${argument}>${current}`);
+  } else if (command === "--assert-not-lower" && argument) {
+    const current = assertConsistent();
+    if (compareSemver(argument, current) < 0) {
+      throw new Error(`目标版本 ${argument} 不得低于当前版本 ${current}。`);
+    }
+    console.log(`VERSION_NOT_LOWER=${argument}>=${current}`);
   } else {
-    throw new Error("用法：version.mjs --check | --print | --set <version> | --assert-greater <version>");
+    throw new Error("用法：version.mjs --check | --print | --set <version> | --assert-greater <version> | --assert-not-lower <version>");
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

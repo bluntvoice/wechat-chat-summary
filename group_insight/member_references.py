@@ -22,13 +22,15 @@ _REFERENCE_FOLLOWERS = tuple(
             "讲述", "评论", "证实", "感叹", "提醒", "介绍", "透露", "呼吁", "引用", "附和",
             "分析", "澄清", "开玩笑", "随即", "随后", "主动", "详细", "直言", "猜测", "认同",
             "确认", "回应称", "补充说明", "提到", "提及", "转发", "评价", "共鸣", "感慨",
-            "反问", "讨论", "抱怨", "发红包", "宣布", "在", "对", "以", "称", "说", "等",
+            "反问", "讨论", "抱怨", "发红包", "宣布", "进一步", "提议", "发言", "参与",
+            "观察", "带来", "在", "对", "问", "以", "称", "说", "等",
             "早上", "早间",
         },
         key=len,
         reverse=True,
     )
 )
+_DERIVED_REFERENCE_FOLLOWERS = ("的", "因", "则")
 _MEMBER_TITLE_SUFFIXES = ("老师", "律师", "同学", "先生", "女士")
 _GENERIC_DERIVED_ALIASES = {
     "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "宁波", "武汉", "江苏", "浙江",
@@ -98,6 +100,8 @@ def _right_context_allows_reference(text: str, end: int, *, derived: bool) -> bo
     if not trimmed:
         return True
     if trimmed.startswith(_MEMBER_TITLE_SUFFIXES) or trimmed.startswith(_REFERENCE_FOLLOWERS):
+        return True
+    if derived and trimmed.startswith(_DERIVED_REFERENCE_FOLLOWERS):
         return True
     next_character = remainder[0]
     if not derived and (next_character.isspace() or next_character in _LEFT_BOUNDARY_CHARACTERS):
