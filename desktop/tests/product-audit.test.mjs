@@ -66,8 +66,10 @@ test("elapsed time uses the local clock while percent remains backend-owned", ()
 });
 
 test("history resolves member placeholders and avoids internal schema noise", () => {
-  assert.match(history, /resolveMemberTokens/);
-  assert.match(history, /resolveMemberTokens\(module\.title, memberNames\)/);
+  assert.match(history, /function MemberText/);
+  assert.match(history, /<MemberText value=\{module\.title\} memberNames=\{memberNames\}/);
+  assert.match(history, /className="history-member-name"/);
+  assert.match(styles, /\.history-member-name[^\n]+#3478bd[^\n]+font-weight: 800/);
   assert.match(history, /member_aliases/);
   assert.doesNotMatch(history, /value: "action_items"/);
   assert.doesNotMatch(history, /Schema \{detail\.schema_version\}/);

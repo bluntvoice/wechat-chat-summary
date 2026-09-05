@@ -252,6 +252,7 @@ input:focus, select:focus { border-color: var(--green); }
 .history-url { color: #276d48; overflow-wrap: anywhere; }
 .history-topic-preview { display: grid; gap: 8px; }
 .history-topic-flow { margin: 0; color: #536159; font-size: 13px; line-height: 1.7; white-space: pre-line; }
+.history-member-name { color: #3478bd; font-weight: 800; overflow-wrap: anywhere; }
 .history-topic-extra { padding: 8px 9px; border-radius: 6px; background: #edf3ef; }
 .history-topic-extra h4 { margin: 0 0 5px; color: #587064; font-size: 11px; }
 .history-topic-resources { display: grid; gap: 8px; }
@@ -262,7 +263,7 @@ input:focus, select:focus { border-color: var(--green); }
 .history-speaker-list { margin: 0; padding: 0; display: grid; gap: 4px; list-style: none; }
 .history-speaker-list li { min-width: 0; display: grid; grid-template-columns: 18px minmax(62px, .65fr) minmax(70px, 1fr) 36px; align-items: center; gap: 6px; }
 .history-speaker-list li > span { color: #8a978f; font-size: 8px; text-align: center; }
-.history-speaker-list strong { overflow: hidden; color: #42594c; font-size: 9px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.history-speaker-name { min-width: 0; color: #42594c; font-size: 9px; font-weight: 650; overflow-wrap: anywhere; }
 .history-speaker-list i, .history-segment-list i { height: 6px; overflow: hidden; border-radius: 6px; background: #dfe9e2; }
 .history-speaker-list i b, .history-segment-list i b { display: block; height: 100%; border-radius: inherit; background: #72ae84; }
 .history-speaker-list em { color: #738178; font-size: 8px; font-style: normal; text-align: right; white-space: nowrap; }

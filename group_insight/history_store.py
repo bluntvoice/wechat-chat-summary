@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .desktop_config import ensure_desktop_data_dir
+from .member_references import (
+    member_names_from_stats,
+    normalize_member_reference_text,
+    normalize_member_references,
+)
 from .report_model import BLOCKED_OBSERVATION_PHRASES
 from .report_schema import SCHEMA_VERSION, upgrade_legacy_report
 
@@ -1007,6 +1012,9 @@ class HistoryStore:
             stats = json.loads(str(row["stats_json"] or "{}"))
         except json.JSONDecodeError as exc:
             raise ValueError(f"历史报告结构化数据损坏: {exc}") from exc
+        names = member_names_from_stats(stats if isinstance(stats, dict) else {})
+        if isinstance(content, dict):
+            content = normalize_member_references(content, names)
         module_rows = self.connection.execute(
             """SELECT module_key, ordinal, title, content_json
                FROM report_modules WHERE report_id=? AND module_key <> 'action_items'""",
@@ -1027,13 +1035,14 @@ class HistoryStore:
                 value = json.loads(str(module_row["content_json"] or "null"))
             except json.JSONDecodeError:
                 value = str(module_row["content_json"] or "")
+            value = normalize_member_references(value, names)
             key = str(module_row["module_key"])
             modules.append(
                 {
                     "module_key": key,
                     "module_label": HISTORY_MODULE_LABELS.get(key, key),
                     "ordinal": int(module_row["ordinal"]),
-                    "title": str(module_row["title"]),
+                    "title": normalize_member_reference_text(str(module_row["title"]), names),
                     "content": value,
                     "redaction_target_id": live_target_ids.get((key, int(module_row["ordinal"])), ""),
                 }

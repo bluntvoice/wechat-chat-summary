@@ -11,6 +11,7 @@ from typing import Any
 from .chunking import chunk_payload, compact_direct_chunk_payload, compact_topic_index_payload, compact_topic_section_payload
 from .common import safe_json_loads, extract_json_object
 from .conversation import compact_prompt_stats
+from .member_references import member_names_from_stats, member_safe_prompt_value
 from .settings import (
     DEFAULT_API_URL,
     DEFAULT_DEEPSEEK_MODEL,
@@ -588,6 +589,7 @@ def build_final_prompts(
     resources: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     """构造 final 阶段生成最终日报结构的提示词。"""
+    safe_stats = member_safe_prompt_value(compact_prompt_stats(stats), member_names_from_stats(stats))
     system_prompt = f"""
 你是一个中文群聊洞察报表编辑。你会收到本地统计数据和一组最终 reduce bundles，请产出适合日报/周报页面渲染的最终结构化结果，并只输出 json。
 
@@ -623,7 +625,7 @@ def build_final_prompts(
 统计区间：{start_time} ~ {end_time}
 
 本地精确统计：
-{json.dumps(stats, ensure_ascii=False, indent=2)}
+{json.dumps(safe_stats, ensure_ascii=False, indent=2)}
 
 最终 reduce 输入：
 {json.dumps(bundles, ensure_ascii=False, indent=2)}

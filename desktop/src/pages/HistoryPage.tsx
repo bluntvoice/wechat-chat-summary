@@ -1,5 +1,5 @@
 import { EyeOff } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { RedactionTargetGroups } from "../components/RedactionEditor";
 import { bridge, openSystemPath } from "../services/desktopBridge";
@@ -84,13 +84,31 @@ function periodLabel(start: string, end: string) {
   return startDate === endDate ? startDate : `${startDate} 至 ${endDate}`;
 }
 
-function resolveMemberTokens(value: string, memberNames: Record<string, string> = {}) {
+function resolveMemberTokensText(value: string, memberNames: Record<string, string> = {}) {
   return value.replace(/\[\[user:([^\]]+)\]\]/g, (_match, senderId: string) => memberNames[senderId] || "群成员");
+}
+
+function memberTokenNodes(value: string, memberNames: Record<string, string> = {}): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /\[\[user:([^\]]+)\]\]/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    if (match.index > cursor) nodes.push(value.slice(cursor, match.index));
+    nodes.push(<strong className="history-member-name" key={`${match.index}-${match[1]}`}>{memberNames[match[1]] || "群成员"}</strong>);
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < value.length) nodes.push(value.slice(cursor));
+  return nodes;
+}
+
+function MemberText({ value, memberNames }: { value: string; memberNames: Record<string, string> }) {
+  return <>{memberTokenNodes(value, memberNames)}</>;
 }
 
 function flattenText(value: unknown): string {
   if (value == null) return "";
-  if (typeof value === "string") return resolveMemberTokens(value);
+  if (typeof value === "string") return resolveMemberTokensText(value);
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) return value.map(flattenText).filter(Boolean).join(" · ");
   if (typeof value === "object") return Object.entries(value as Record<string, unknown>)
@@ -110,8 +128,9 @@ function searchSnippet(value: string) {
 function ValueView({ value, memberNames, fieldKey = "" }: { value: unknown; memberNames: Record<string, string>; fieldKey?: string }) {
   if (value == null || value === "") return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    const text = resolveMemberTokens(String(value), memberNames);
-    return <span className={/^https?:\/\//i.test(text) ? "history-url" : ""}>{text}</span>;
+    const raw = String(value);
+    const text = resolveMemberTokensText(raw, memberNames);
+    return <span className={/^https?:\/\//i.test(text) ? "history-url" : ""}><MemberText value={raw} memberNames={memberNames} /></span>;
   }
   if (Array.isArray(value)) {
     if (fieldKey === "time_ranges") {
@@ -150,9 +169,9 @@ function ActivityStatsView({ value, memberNames }: { value: unknown; memberNames
   return <div className="history-activity-stats">
     {speakers.length > 0 && <section className="history-activity-block"><h4>发言排行</h4><ol className="history-speaker-list">{speakers.map((item, index) => {
       const count = Number(item.message_count) || 0;
-      return <li key={`${String(item.name || "群成员")}-${index}`}><span>{Number(item.rank) || index + 1}</span><strong>{resolveMemberTokens(String(item.name || "群成员"), memberNames)}</strong><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / speakerMax * 100))}%` }} /></i><em>{count} 条</em></li>;
+      return <li key={`${String(item.name || "群成员")}-${index}`}><span>{Number(item.rank) || index + 1}</span><div className="history-speaker-name"><MemberText value={String(item.name || "群成员")} memberNames={memberNames} /></div><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / speakerMax * 100))}%` }} /></i><em>{count} 条</em></li>;
     })}</ol></section>}
-    {keywords.length > 0 && <section className="history-activity-block"><h4>群关键词</h4><div className="history-keyword-list">{keywords.map((item, index) => <span key={`${String(item.word)}-${index}`}>{resolveMemberTokens(String(item.word), memberNames)}<small>{Number(item.count) || ""}</small></span>)}</div></section>}
+    {keywords.length > 0 && <section className="history-activity-block"><h4>群关键词</h4><div className="history-keyword-list">{keywords.map((item, index) => <span key={`${String(item.word)}-${index}`}>{resolveMemberTokensText(String(item.word), memberNames)}<small>{Number(item.count) || ""}</small></span>)}</div></section>}
     {segments.length > 0 && <section className="history-activity-block"><h4>活跃时段</h4><div className="history-segment-list">{segments.map((item, index) => {
       const count = Number(item.count) || 0;
       return <div key={`${String(item.label || "时段")}-${index}`}><span>{String(item.label || "时段")}</span><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / segmentMax * 100))}%` }} /></i><strong>{count}</strong></div>;
@@ -180,8 +199,8 @@ function MemberObservationView({
     return <ValueView value={value} memberNames={memberNames} />;
   }
   const content = value as Record<string, unknown>;
-  const memberName = resolveMemberTokens(String(content.name || "").trim(), memberNames);
-  const resolvedTitle = resolveMemberTokens(title.trim(), memberNames);
+  const memberName = resolveMemberTokensText(String(content.name || "").trim(), memberNames);
+  const resolvedTitle = resolveMemberTokensText(title.trim(), memberNames);
   const visibleContent = memberName && memberName === resolvedTitle
     ? Object.fromEntries(Object.entries(content).filter(([key]) => key !== "name"))
     : content;
@@ -215,7 +234,7 @@ function TopicPreview({ value, memberNames }: { value: unknown; memberNames: Rec
 
   return <div className="history-topic-preview">
     {Boolean(topic.time_ranges) && <ValueView value={topic.time_ranges} memberNames={memberNames} fieldKey="time_ranges" />}
-    {flow && <p className="history-topic-flow">{resolveMemberTokens(flow, memberNames)}</p>}
+    {flow && <p className="history-topic-flow"><MemberText value={flow} memberNames={memberNames} /></p>}
     {detailRows.map(([label, item]) => <section className="history-topic-extra" key={label}><h4>{label}</h4><ValueView value={item} memberNames={memberNames} /></section>)}
     {resources.length > 0 && <section className="history-topic-extra"><h4>相关资源</h4><div className="history-topic-resources">{resources.map((item, index) => <ResourcePreview key={`${String(item.id || item.url || item.title || "resource")}-${index}`} value={item} memberNames={memberNames} />)}</div></section>}
   </div>;
@@ -244,21 +263,20 @@ function ResourcePreview({ value, memberNames }: { value: unknown; memberNames: 
   const resource = value as Record<string, unknown>;
   const type = String(resource.type || "").toLowerCase() === "file" ? "file" : "link";
   const topic = String(resource.topic || "").trim();
-  const context = resolveMemberTokens(String(resource.context_summary || "").trim(), memberNames);
+  const context = String(resource.context_summary || "").trim();
   const senderId = String(resource.sender_id || "").trim();
-  const sender = senderId
-    ? memberNames[senderId] || resolveMemberTokens(String(resource.sender || "群成员").trim(), memberNames)
-    : resolveMemberTokens(String(resource.sender || "").trim(), memberNames);
+  const sender = senderId && memberNames[senderId]
+    ? `[[user:${senderId}]]`
+    : String(resource.sender || "").trim();
   const sentAt = String(resource.sent_at || "").trim().slice(0, 16);
   const url = String(resource.url || "").trim();
   const platform = resourcePlatform(url, type);
-  const metadata = [sender, sentAt].filter(Boolean);
   const showTopic = topic && topic !== "其他 / 未归类" && topic !== "其他/未归类";
 
   return <div className="history-resource-preview">
     <div className="history-resource-tags"><span className={`platform-${platform.key}`}>{platform.label}</span>{showTopic && <small>{topic}</small>}</div>
-    {context && <p>{context}</p>}
-    {metadata.length > 0 && <div className="history-resource-meta">{metadata.join(" · ")}</div>}
+    {context && <p><MemberText value={context} memberNames={memberNames} /></p>}
+    {(sender || sentAt) && <div className="history-resource-meta">{sender && <MemberText value={sender} memberNames={memberNames} />}{sender && sentAt ? " · " : ""}{sentAt}</div>}
     {url && <div className="history-resource-domain" title={url}>{resourceDomain(url)}</div>}
   </div>;
 }
@@ -298,7 +316,7 @@ function ModuleCard({
       }
     }}
   >
-    <div className="history-module-heading">{showSectionLabel && <span>{module.module_label}</span>}<h3>{redacted ? "已屏蔽内容" : resolveMemberTokens(module.title, memberNames)}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
+    <div className="history-module-heading">{showSectionLabel && <span>{module.module_label}</span>}<h3>{redacted ? "已屏蔽内容" : <MemberText value={module.title} memberNames={memberNames} />}</h3>{redactionMode && target && <span className="history-redaction-state">{target.redacted ? "已屏蔽" : selected ? "已选择" : "选择屏蔽"}</span>}</div>
     {isActivityStatsModule(module)
       ? <ActivityStatsView value={module.content} memberNames={memberNames} />
       : module.module_key === "member_activity"
@@ -594,7 +612,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
             ? <div className="history-report-sections">{reportSections.map((section) => <section className="history-report-section" key={section.key}><h3>{section.label}</h3><div className="history-module-list">{section.modules.map((module) => {
               const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
               return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} redactionMode={redactionMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} showSectionLabel={false} />;
-            })}</div></section>)}{!reportSections.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}<footer className="history-report-end"><strong>报告结尾</strong><span>{resolveMemberTokens(String(detail.content.conclusion || "以上为本次群聊日报整理。"), memberNames)}</span><small>报告由群聊拾遗生成 · {detail.display_name} · {periodLabel(detail.period_start, detail.period_end)}<br />生成时间：{detail.generated_at.slice(0, 19)}</small></footer></div>
+            })}</div></section>)}{!reportSections.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}<footer className="history-report-end"><strong>报告结尾</strong><span><MemberText value={String(detail.content.conclusion || "以上为本次群聊日报整理。")} memberNames={memberNames} /></span><small>报告由群聊拾遗生成 · {detail.display_name} · {periodLabel(detail.period_start, detail.period_end)}<br />生成时间：{detail.generated_at.slice(0, 19)}</small></footer></div>
             : <div className="history-module-list">{visibleModules.map((module) => {
               const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
               return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} redactionMode={redactionMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} />;

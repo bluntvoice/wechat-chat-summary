@@ -9,6 +9,12 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .member_references import (
+    USER_REFERENCE_PATTERN,
+    member_names_from_stats,
+    normalize_member_reference_text,
+    resolve_member_reference_text,
+)
 from .redaction import REDACTION_NOTICE
 from .report_model import BLOCKED_OBSERVATION_PHRASES
 from .resources import classify_resource_platform
@@ -124,82 +130,11 @@ def _discussion_segments(
 
 
 def _member_names(stats: dict[str, Any]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for item in stats.get("member_aliases", []) or []:
-        sender_id = str(item.get("sender_id") or "")
-        sender_name = str(item.get("sender_name") or "")
-        if sender_id and sender_name:
-            result[sender_id] = sender_name
-    return result
+    return member_names_from_stats(stats)
 
 
 def _resolve(value: Any, names: dict[str, str]) -> str:
-    text = str(value or "")
-    return re.sub(r"\[\[user:([^\]]+)\]\]", lambda match: names.get(match.group(1), "群成员"), text)
-
-
-def _plain_member_matcher(
-    names: dict[str, str],
-) -> tuple[re.Pattern[str] | None, dict[str, str]]:
-    """匹配模型直写的唯一昵称或已知账号 ID，并统一返回显示昵称。"""
-
-    alias_owners: dict[str, set[str]] = {}
-    replacements: dict[str, str] = {}
-    for raw_sender_id, raw_name in names.items():
-        sender_id = str(raw_sender_id or "").strip()
-        name = str(raw_name or "").strip()
-        if not sender_id or not name:
-            continue
-
-        # 裸账号 ID 只允许认领自身；若它同时是另一成员的昵称，后续会因多 owner 被排除。
-        alias_owners.setdefault(sender_id, set()).add(sender_id)
-        replacements[sender_id] = name
-        if name not in {"我", "群成员", "未知成员"}:
-            display_aliases = {name, re.sub(r"\s+", "", name)}
-            for alias in display_aliases:
-                if not alias:
-                    continue
-                alias_owners.setdefault(alias, set()).add(sender_id)
-                # 昵称的空白变体只负责识别和着色，不改写模型原有行文。
-                replacements[alias] = alias
-
-    aliases = sorted(
-        (alias for alias, owners in alias_owners.items() if len(owners) == 1),
-        key=len,
-        reverse=True,
-    )
-    if not aliases:
-        return None, {}
-
-    alternatives: list[str] = []
-    for alias in aliases:
-        escaped = re.escape(alias)
-        if re.fullmatch(r"[A-Za-z0-9_.-]+", alias):
-            escaped = rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
-        alternatives.append(escaped)
-    safe_replacements = {alias: replacements[alias] for alias in aliases}
-    return re.compile("|".join(alternatives)), safe_replacements
-
-
-def _highlight_plain_member_names(
-    value: str,
-    pattern: re.Pattern[str] | None,
-    replacements: dict[str, str],
-    *,
-    member_class: str,
-) -> str:
-    if pattern is None:
-        return _esc(value)
-
-    output: list[str] = []
-    cursor = 0
-    for match in pattern.finditer(value):
-        output.append(_esc(value[cursor : match.start()]))
-        display_name = replacements.get(match.group(0), match.group(0))
-        output.append(f'<strong class="{member_class}">{_esc(display_name)}</strong>')
-        cursor = match.end()
-    output.append(_esc(value[cursor:]))
-    return "".join(output)
+    return resolve_member_reference_text(value, names)
 
 
 def _resolve_html(
@@ -207,40 +142,20 @@ def _resolve_html(
     names: dict[str, str],
     *,
     member_class: str = "",
-    plain_member_pattern: re.Pattern[str] | None = None,
-    plain_member_replacements: dict[str, str] | None = None,
 ) -> str:
     """转义普通文本，并可对成员占位符施加受控 HTML 样式。"""
 
-    text = str(value or "")
+    text = normalize_member_reference_text(value, names)
     output: list[str] = []
     cursor = 0
-    for match in re.finditer(r"\[\[user:([^\]]+)\]\]", text):
+    for match in USER_REFERENCE_PATTERN.finditer(text):
         plain = text[cursor : match.start()]
-        output.append(
-            _highlight_plain_member_names(
-                plain,
-                plain_member_pattern,
-                plain_member_replacements or {},
-                member_class=member_class,
-            )
-            if member_class
-            else _esc(plain)
-        )
+        output.append(_esc(plain))
         name = _esc(names.get(match.group(1), "群成员"))
         output.append(f'<strong class="{member_class}">{name}</strong>' if member_class else name)
         cursor = match.end()
     tail = text[cursor:]
-    output.append(
-        _highlight_plain_member_names(
-            tail,
-            plain_member_pattern,
-            plain_member_replacements or {},
-            member_class=member_class,
-        )
-        if member_class
-        else _esc(tail)
-    )
+    output.append(_esc(tail))
     return "".join(output)
 
 
@@ -336,7 +251,6 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     chat = metadata.get("chat", {})
     period = metadata.get("period", {})
     names = _member_names(stats)
-    plain_member_pattern, plain_member_replacements = _plain_member_matcher(names)
 
     def resolved(value: Any) -> str:
         return _esc(_resolve(value, names))
@@ -346,8 +260,6 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
             value,
             names,
             member_class="topic-member",
-            plain_member_pattern=plain_member_pattern,
-            plain_member_replacements=plain_member_replacements,
         )
 
     themes = content.get("themes", []) or []
@@ -513,7 +425,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
                 f'<div class="section-body">{_redacted_html(topic)}</div></article>'
             )
         flow = topic.get("discussion_flow") or topic.get("summary") or ""
-        flow_segments = _discussion_segments(flow, names=names)
+        flow_segments = _discussion_segments(normalize_member_reference_text(flow, names), names=names)
         outcome = topic.get("outcome") if isinstance(topic.get("outcome"), dict) else {}
         legacy_result = topic.get("result") if isinstance(topic.get("result"), dict) else {}
         outcome_text = outcome.get("content") or legacy_result.get("summary") or topic.get("takeaway") or ""
@@ -561,7 +473,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
         topics_html += (
             f'<article class="main-topic other-topic"><div class="section-index">{len(topics) + 1}</div><div class="section-body"><h3>其他 / 未归类资源</h3>'
             '<p class="discussion-flow">以下链接或文件暂时无法可靠关联到某个主要话题。</p>'
-            + "".join(render_resource_group(group) for group in unassigned_groups)
+            + "".join(render_resource_group(group, topic_resolved, True) for group in unassigned_groups)
             + '</div></article>'
         )
     main_topics_section = (
@@ -571,19 +483,19 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     observation_html = "".join(
         _redacted_html(item)
         if _is_redacted(item)
-        else f'<article class="observation"><h3>{resolved(_text(item, "title") or "今日观察")}</h3><p>{resolved(_text(item, "content", "summary"))}</p></article>'
+        else f'<article class="observation"><h3>{topic_resolved(_text(item, "title") or "今日观察")}</h3><p>{topic_resolved(_text(item, "content", "summary"))}</p></article>'
         for item in observations
         if _is_redacted(item) or _text(item, "content", "summary")
     )
     supplemental = []
     for label, items, keys in legacy_serious_specs:
         unassigned = [item for item in items if id(item) not in used_item_ids]
-        supplemental.append(render_simple_items(label, unassigned, *keys))
+        supplemental.append(render_simple_items(label, unassigned, *keys, resolve_value=topic_resolved))
     unassigned_quotes = [item for item in quotes if id(item) not in used_item_ids]
     if unassigned_quotes:
         supplemental.append(
             '<div class="topic-extra"><h4>引用原话</h4>'
-            + "".join(render_quote(item) for item in unassigned_quotes)
+            + "".join(render_quote(item, topic_resolved) for item in unassigned_quotes)
             + '</div>'
         )
     supplemental_html = "".join(supplemental)
@@ -596,13 +508,13 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     member_html = "".join(
         _redacted_html(item, "li")
         if _is_redacted(item)
-        else f'<li><span class="rank">{index:02d}</span><div><strong>{resolved(_text(item, "name"))}</strong><p>{resolved(_text(item, "insight") or (str(item.get("message_count", 0)) + " 条消息" if isinstance(item, dict) else ""))}</p></div></li>'
+        else f'<li><span class="rank">{index:02d}</span><div><strong class="topic-member">{resolved(_text(item, "name"))}</strong><p>{topic_resolved(_text(item, "insight") or (str(item.get("message_count", 0)) + " 条消息" if isinstance(item, dict) else ""))}</p></div></li>'
         for index, item in enumerate(members, 1)
     )
     max_speaker_messages = max([int(item.get("message_count", 0)) for item in top_speakers] or [1])
     speaker_html = "".join(
         '<li class="speaker-row">'
-        f'<span class="rank">{index:02d}</span><strong>{resolved(item.get("name", "群成员"))}</strong>'
+        f'<span class="rank">{index:02d}</span><strong class="topic-member">{resolved(item.get("name", "群成员"))}</strong>'
         f'<i><b style="width:{max(3, round(100 * int(item.get("message_count", 0)) / max_speaker_messages))}%"></b></i>'
         f'<span class="speaker-count">{_esc(item.get("message_count", 0))} 条</span></li>'
         for index, item in enumerate(top_speakers[:10], 1)
@@ -658,7 +570,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
 {main_topics_section}
 {observation_section}
 {activity_section}
-<section class="card report-end"><h2>报告结尾</h2><p>{resolved(conclusion)}</p></section>
+<section class="card report-end"><h2>报告结尾</h2><p>{topic_resolved(conclusion)}</p></section>
 <footer class="footer"><span>报告由群聊拾遗生成 · {_esc(chat.get('name'))} · {_esc(period.get('report_date'))}</span>{(f'<span>生成时间：{_esc(generated_at)}</span>' if generated_at else '')}</footer>
 </main></body></html>"""
 

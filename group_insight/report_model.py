@@ -16,6 +16,7 @@ from .common import (
     normalize_text,
     topic_similarity,
 )
+from .member_references import member_names_from_stats, normalize_member_references
 from .models import MessageChunk
 from .settings import MAX_REPORT_SECTIONS, SECTION_TOPIC_COVERAGE_THRESHOLD
 
@@ -540,7 +541,7 @@ def repair_final_report(
         ]
     if not repaired["conclusion"]:
         repaired["conclusion"] = "以上为本次群聊日报整理。"
-    return repaired
+    return normalize_member_references(repaired, member_names_from_stats(stats))
 
 
 def fallback_map_analysis(chunk: MessageChunk) -> dict[str, Any]:

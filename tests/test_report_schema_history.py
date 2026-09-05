@@ -137,7 +137,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
             chunk_count=1, chunk_plan={},
         )
         html = render_html_report(document)
-        self.assertEqual(html.count("<strong>同一群昵称</strong>"), 1)
+        self.assertEqual(html.count('<strong class="topic-member">同一群昵称</strong>'), 1)
         self.assertIn("第一条观察", html)
         self.assertNotIn("第二条观察", html)
         self.assertIn(".member-list li{display:flex;align-items:center", html)
@@ -145,7 +145,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertIn("background:#dff0df", html)
         self.assertIn("<h2>今日活跃情况</h2>", html)
         self.assertIn("<h3>发言排行</h3>", html)
-        self.assertIn("<strong>发言第一</strong>", html)
+        self.assertIn('<strong class="topic-member">发言第一</strong>', html)
         self.assertIn("<span class=\"speaker-count\">12 条</span>", html)
 
     def test_png_export_keeps_the_same_complete_modules_as_html(self):
@@ -605,7 +605,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         )
         html = render_html_report(document)
         self.assertIn(
-            '<strong class="topic-member">周杰律师</strong>分享30天挑战方法',
+            '<strong class="topic-member">周杰 律师</strong>分享30天挑战方法',
             html,
         )
 

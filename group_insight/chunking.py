@@ -194,7 +194,6 @@ def chunk_payload(chunk: MessageChunk) -> dict[str, Any]:
         member_directory.append(
             {
                 "sender_id": sender_id,
-                "sender_name": message.sender,
                 "mention_token": make_user_placeholder(sender_id),
             }
         )
@@ -212,8 +211,7 @@ def chunk_payload(chunk: MessageChunk) -> dict[str, Any]:
             {
                 "id": message.id,
                 "time": message.time,
-                "sender_id": message.sender_username or "",
-                "sender": message.sender,
+                "sender_ref": make_user_placeholder(message.sender_username) or message.sender,
                 "type": message.msg_type,
                 "text": message.text,
                 "metadata": (
