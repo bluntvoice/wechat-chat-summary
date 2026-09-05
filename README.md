@@ -1,7 +1,9 @@
 # 群聊拾遗（wechat-chat-summary）
 
 <!-- release-readme:badges:start -->
-<!-- 首次正式 Stable Release 时由 release.yml 自动启用 Release 与下载量徽章。 -->
+![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)
+
+![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)
 <!-- release-readme:badges:end -->
 
 一个基于本地微信聊天数据的微信群聊统计、AI 总结与历史回顾工具。
@@ -11,15 +13,14 @@
 除了生成单次总结外，项目还提供历史报告管理、全文搜索、群聊活跃热力图、内容屏蔽、定时生成以及 MCP Server 等功能。
 
 <!-- release-readme:current-version:start -->
-> 当前版本：**v0.2.4**
+> 当前版本：**v1.0.0**
 <!-- release-readme:current-version:end -->
 <!-- release-readme:release-status:start -->
+> 当前主要面向 Windows 桌面环境。
 >
-> 当前主要面向 Windows 桌面环境开发。
+> 项目仍在持续开发。
 >
-> 项目仍处于持续开发阶段。
->
-> GitHub 暂未发布正式 Stable Release。
+> 当前提供 Windows x64 正式安装版本。
 <!-- release-readme:release-status:end -->
 
 ## 这个项目可以做什么？
@@ -165,15 +166,25 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 ## 下载与安装
 
 <!-- release-readme:download:start -->
-当前项目仍处于正式 Release 发布前阶段。Windows 安装包构建及更新机制已经在源码中建立，但 GitHub Releases 暂未提供正式稳定版安装包。
+当前正式版本通过本仓库的 [GitHub Releases](https://github.com/bluntvoice/wechat-chat-summary/releases) 提供。
 
-正式版本发布后，将优先通过本仓库的 [GitHub Releases](https://github.com/bluntvoice/wechat-chat-summary/releases) 页面提供 Windows 安装程序。
+### Windows
 
-### 正式版本
+当前正式版本主要面向 Windows x64。用户可从 [最新版下载页](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) 下载：
 
-> **待补充：首次 Stable Release 发布后，在此补充最新版下载入口、安装方式及版本要求。**
+```text
+WeChat-Chat-Summary_1.0.0_x64-setup.exe
+WeChat-Chat-Summary_1.0.0_x64-setup.exe.sha256
+```
 
-<!-- TODO: 首次 Stable Release 发布后补充最新版安装包下载地址及安装说明 -->
+安装步骤：
+
+1. 下载最新版安装程序及同名 `.sha256` 完整性校验文件；
+2. 运行安装程序；
+3. 首次启动后，根据软件内引导单独安装并运行 WeChatDataAnalysis；
+4. 配置 AI API；
+5. 选择独立的报告目录；
+6. 开始生成群聊总结。
 <!-- release-readme:download:end -->
 
 ## 前置依赖
@@ -375,6 +386,20 @@ wechat-chat-summary
 
 <!-- release-readme:history -->
 
+### v1.0.0
+
+首个正式稳定版本。
+
+- 完成 Windows 桌面端正式发布闭环；
+- 支持 WeChatDataAnalysis 数据源安装、连接与故障引导；
+- 支持单日及最多 7 天连续日期的群聊 AI 总结；
+- 支持 DeepSeek 与 OpenAI Compatible AI Provider；
+- 支持 PNG、HTML、JSON 多格式报告导出；
+- 提供历史中心、全文搜索、群聊活跃热力图和内容屏蔽；
+- 提供定时生成、MCP Server 和手动检查更新；
+- 优化成员昵称识别、报告结构与桌面阅读体验；
+- 完善 Windows 安装、覆盖升级和卸载流程。
+
 ### v0.2.4
 
 - 优化主要话题结构、报告视觉、进度与首次使用指南；
@@ -385,7 +410,6 @@ wechat-chat-summary
 - 优化历史中心、成员昵称识别、资源标签及报告布局。
 
 <!-- release-readme:prestable-history-note:start -->
-以上能力已在当前源码中实现，但尚未发布为 GitHub Stable Release。
 <!-- release-readme:prestable-history-note:end -->
 
 ### v0.2.3
@@ -421,13 +445,12 @@ wechat-chat-summary
 ## 当前开发状态
 
 <!-- release-readme:development-status:start -->
-- 核心 Windows 桌面端已经可以从源码运行；
-- Windows x64 测试安装包构建流程已经建立；
-- GitHub Actions CI、测试安装包与人工触发的 Stable / Prerelease 发布流程已经建立；
-- 用户手动触发的更新检查、下载、SHA-256 完整性校验和启动安装程序已经在源码中实现；
+- Windows x64 正式安装包通过 GitHub Releases 提供；
+- Stable / Prerelease 发布流程已经建立；
+- 测试安装包继续用于正式发布前验收；
+- 用户可在关于页手动检查更新、下载正式安装包并进行 SHA-256 完整性校验；
 - 软件启动时不会自动检查更新，也不会后台周期检查；
-- 当前 GitHub Releases 尚无正式 Release；
-- Windows 安装包暂未进行代码签名。
+- Windows 安装包当前仍未进行代码签名。
 <!-- release-readme:development-status:end -->
 
 当前仓库没有 `LICENSE` 文件，也不声明整体采用 MIT 或其他开源许可证。公开可见不等同于已经授予复制、修改或再分发许可；正式发布前仍需复核项目及上游依赖的许可边界。
