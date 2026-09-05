@@ -13,7 +13,7 @@
 除了生成单次总结外，项目还提供历史报告管理、全文搜索、群聊活跃热力图、内容屏蔽、定时生成以及 MCP Server 等功能。
 
 <!-- release-readme:current-version:start -->
-> 当前版本：**v1.0.0**
+> 当前版本：**v1.0.1**
 <!-- release-readme:current-version:end -->
 <!-- release-readme:release-status:start -->
 > 当前主要面向 Windows 桌面环境。
@@ -173,8 +173,8 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 当前正式版本主要面向 Windows x64。用户可从 [最新版下载页](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) 下载：
 
 ```text
-WeChat-Chat-Summary_1.0.0_x64-setup.exe
-WeChat-Chat-Summary_1.0.0_x64-setup.exe.sha256
+WeChat-Chat-Summary_1.0.1_x64-setup.exe
+WeChat-Chat-Summary_1.0.1_x64-setup.exe.sha256
 ```
 
 安装步骤：
@@ -385,6 +385,14 @@ wechat-chat-summary
 ## 版本更新日志
 
 <!-- release-readme:history -->
+
+### v1.0.1
+
+修复成员昵称与代表发言显示。
+
+- 修复 偶发HTML、PNG 与历史中心中部分成员昵称未正确显示为蓝色加粗的问题；
+- 修复报告中完整群昵称被简写或显示不完整的问题；
+- 优化成员引用解析，并根据话题证据保留代表成员，避免主要话题只显示“群友、有人”等泛称。
 
 ### v1.0.0
 
