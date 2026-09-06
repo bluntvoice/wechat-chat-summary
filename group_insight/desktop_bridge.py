@@ -7,6 +7,10 @@ import os
 import subprocess
 import sys
 import re
+import copy
+import tempfile
+from .anonymization import anonymize_report, first_seen_members
+from .report_lock import report_lock
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +28,7 @@ from .llm import DeepSeekClient, OpenAICompatibleClient, normalize_chat_completi
 from .redaction import list_redaction_targets, redact_report_document
 from .rendering import render_html_report
 from .report_paths import allocate_report_paths
-from .report_schema import upgrade_legacy_report
+from .report_schema import upgrade_legacy_report, validate_report_schema_2_2
 from .settings import DEFAULT_REPORT_IMAGE_TIMEOUT_MS, DEFAULT_REPORT_IMAGE_WIDTH
 from .transport import export_report_image
 from .wechat_data_api import WeChatDataAPIClient, WeChatDataAPIError
@@ -215,6 +219,8 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
                 else "OPENAI_COMPATIBLE_API_KEY"
             ): api_key,
             "GROUP_INSIGHT_NO_VENV_REDIRECT": "1",
+            "GROUP_INSIGHT_GENERATION_SOURCE": "regenerate" if payload.get("regenerated_from_report_id") else "normal",
+            "GROUP_INSIGHT_REGENERATED_FROM": str(payload.get("regenerated_from_report_id") or ""),
         }
     )
     creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -431,7 +437,128 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
     }
 
 
+def _history_document(report_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    with HistoryStore() as history:
+        detail = history.get_report_detail(report_id)
+    _path, document = _load_report_document({"json_path": detail["exports"]["json"]["path"]})
+    if document["metadata"]["report_id"] != report_id:
+        raise ValueError("报告文件与历史记录不一致。")
+    return detail, document
+
+
+def _regenerate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    with HistoryStore() as history:
+        detail = history.get_report_detail(str(payload.get("report_id") or ""))
+    if detail.get("report_variant", "normal") != "normal" or detail["period_start"][:10] != detail["period_end"][:10]:
+        raise ValueError("仅支持正常版单日报告重新生成。")
+    arguments = {
+        "chat": detail["chat_id"], "chat_name": detail["display_name"],
+        "start": detail["period_start"], "end": detail["period_end"],
+        "range_mode": "single", "job_id": payload.get("job_id"),
+        "regenerated_from_report_id": detail["report_id"],
+    }
+    try:
+        with report_lock(f"generate:{detail['chat_id']}:{detail['period_start'][:10]}:{detail['period_end'][:10]}"):
+            return _generate(settings, arguments)
+    except RuntimeError as exc:
+        if "指定时间范围内没有消息" in str(exc):
+            raise RuntimeError("未能读取该报告对应日期的聊天数据，无法重新生成。原历史报告不会受到影响。") from exc
+        if "WeChatDataAnalysis" in str(exc) or "连接" in str(exc):
+            raise RuntimeError("当前无法读取该日期的微信聊天数据，请先检查 WeChatDataAnalysis 后重试。原历史报告不会受到影响。") from exc
+        raise
+
+
+def _delete_report(payload: dict[str, Any]) -> dict[str, Any]:
+    from uuid import uuid4
+    report_id = str(payload.get("report_id") or "")
+    with report_lock("derive:" + report_id), HistoryStore() as history:
+        detail = history.get_report_detail(report_id)
+        rows = history.connection.execute("SELECT json_path, html_path, png_path FROM reports WHERE report_id=? OR source_report_id=?", (report_id, report_id)).fetchall()
+        moved = []
+        try:
+            for row in rows:
+                for value in row:
+                    if not value:
+                        continue
+                    path = Path(value).resolve()
+                    if path.is_file():
+                        backup = path.with_name(path.name + ".deleting-" + uuid4().hex)
+                        path.replace(backup)
+                        moved.append((path, backup))
+            history.delete_report(report_id)
+        except Exception:
+            for path, backup in reversed(moved):
+                backup.replace(path)
+            raise
+        for _path, backup in moved:
+            backup.unlink(missing_ok=True)
+        return {"completed": True, "report_id": detail.get("source_report_id") or ""}
+
+
+def _anonymous_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    report_id = str(payload.get("report_id") or "")
+    with report_lock("derive:" + report_id):
+        detail, document = _history_document(report_id)
+        metadata = document["metadata"]
+        if metadata.get("report_variant", "normal") != "normal":
+            raise ValueError("请从正常报告生成匿名版。")
+        order = metadata.get("member_first_seen_order")
+        if not order:
+            try:
+                _ctx, messages = fetch_structured_messages(
+                    detail["chat_id"], detail["period_start"], detail["period_end"],
+                    api_url=str(settings.get("wechat_api_url") or ""),
+                    local_source_dir=str(settings.get("wechat_local_source_dir") or ""),
+                    local_source_port=int(settings.get("wechat_local_source_port") or 10393),
+                )
+                order = first_seen_members(messages)
+            except Exception as exc:
+                raise ValueError("生成匿名版需要读取该日期范围内的成员发言顺序，请先启动 WeChatDataAnalysis 后重试。") from exc
+        derived = anonymize_report(document, order)
+        validate_report_schema_2_2(derived)
+        exports = {}
+        for kind in ("json", "html", "png"):
+            source = Path(detail["exports"][kind]["path"])
+            if not source.is_file():
+                raise ValueError("原报告导出文件已移动或不存在，请先恢复文件。")
+            exports[kind] = source.with_name(source.stem + "-匿名版" + source.suffix)
+        # 临时目录中的完整三件套通过验证后才替换；失败恢复旧派生文件。
+        with tempfile.TemporaryDirectory(prefix="anonymous-", dir=exports["json"].parent) as temporary:
+            staging = Path(temporary)
+            staged = {kind: staging / path.name for kind, path in exports.items()}
+            staged["json"].write_text(json.dumps(derived, ensure_ascii=False, indent=2), encoding="utf-8")
+            staged["html"].write_text(render_html_report(derived), encoding="utf-8")
+            error = export_report_image(staged["html"], staged["png"], viewport_width=DEFAULT_REPORT_IMAGE_WIDTH,
+                timeout_ms=DEFAULT_REPORT_IMAGE_TIMEOUT_MS, dpi=max(1, int(settings.get("image_dpi") or 300)))
+            if error or not staged["png"].is_file():
+                raise RuntimeError(f"匿名版 PNG 生成失败: {error or '未生成图片'}")
+            backups = {}
+            installed = []
+            try:
+                for kind, target in exports.items():
+                    if target.exists():
+                        backup = staging / (kind + ".backup")
+                        target.replace(backup)
+                        backups[kind] = backup
+                    staged[kind].replace(target)
+                    installed.append(kind)
+                indexed = copy.deepcopy(derived)
+                indexed["metadata"]["exports"] = {kind: str(path) for kind, path in exports.items()}
+                with HistoryStore() as history:
+                    history.upsert_report(indexed)
+            except Exception:
+                for kind in installed:
+                    exports[kind].unlink(missing_ok=True)
+                for kind, backup in backups.items():
+                    backup.replace(exports[kind])
+                raise
+        return {"completed": True, "ai_called": False, "report_id": derived["metadata"]["report_id"],
+                "version": derived["metadata"]["version"], **{kind + "_path": str(path) for kind, path in exports.items()}}
+
+
 def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if command == "delete_report":
+        return _delete_report(payload)
     if command == "get_state":
         return _state_with_history()
     if command == "save_settings":
@@ -521,7 +648,12 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "test_ai":
         return _test_ai(settings)
     if command == "generate":
-        return _generate(settings, payload)
+        with report_lock(f"generate:{payload.get('chat')}:{str(payload.get('start'))[:10]}:{str(payload.get('end'))[:10]}"):
+            return _generate(settings, payload)
+    if command == "regenerate_report":
+        return _regenerate(settings, payload)
+    if command == "anonymous_report":
+        return _anonymous_report(settings, payload)
     if command == "get_progress":
         job_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("job_id") or "current"))[:80] or "current"
         return read_progress(ensure_desktop_data_dir() / "jobs" / f"{job_id}.json")

@@ -1,9 +1,11 @@
-import { EyeOff } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { EyeOff, RefreshCw, UserRoundMinus, Trash2, FolderOpen } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { useReportGeneration } from "../hooks/useReportGeneration";
 import { RedactionTargetGroups } from "../components/RedactionEditor";
 import { bridge, openSystemPath } from "../services/desktopBridge";
 import type {
+  Settings,
   GenerationResult,
   HistoryChat,
   HistoryModule,
@@ -90,12 +92,12 @@ function resolveMemberTokensText(value: string, memberNames: Record<string, stri
 
 function memberTokenNodes(value: string, memberNames: Record<string, string> = {}): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /\[\[user:([^\]]+)\]\]/g;
+  const pattern = /\[\[user:([^\]]+)\]\]|群友\d{2,}/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(value)) !== null) {
     if (match.index > cursor) nodes.push(value.slice(cursor, match.index));
-    nodes.push(<strong className="history-member-name" key={`${match.index}-${match[1]}`}>{memberNames[match[1]] || "群成员"}</strong>);
+    nodes.push(<strong className="history-member-name" key={`${match.index}-${match[1]}`}>{match[1] ? memberNames[match[1]] || "群成员" : match[0]}</strong>);
     cursor = match.index + match[0].length;
   }
   if (cursor < value.length) nodes.push(value.slice(cursor));
@@ -352,6 +354,47 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
   const [redactionBusy, setRedactionBusy] = useState(false);
   const [message, setMessage] = useState("历史数据仅来自本机 SQLite，不搜索完整原始聊天正文。");
 
+  const [operation, setOperation] = useState<"anonymous" | "regenerate" | "delete" | null>(null);
+  const [operationBusy, setOperationBusy] = useState(false);
+  const [activeOperation, setActiveOperation] = useState<"anonymous" | "regenerate" | "delete" | null>(null);
+  const operationGuard = useRef(false);
+  const pendingReport = useRef("");
+  const generation = useReportGeneration({
+    settings: {} as Settings, setSettings: () => undefined, setMessage,
+    saveSettings: async () => undefined, beforeGeneration: () => undefined,
+  });
+
+  async function performOperation() {
+    if (!detail || !operation || operationGuard.current) return;
+    const selected = detail;
+    const action = operation;
+    operationGuard.current = true;
+    setOperationBusy(true);
+    setActiveOperation(action);
+    setOperation(null);
+    try {
+      let updated: GenerationResult;
+      if (action === "regenerate") {
+        updated = await generation.runGeneration(selected.chat_id, selected.display_name,
+          selected.period_start.slice(0, 10), selected.period_end.slice(0, 10), "single", false, selected.report_id);
+      } else {
+        updated = await bridge<GenerationResult>(action === "anonymous" ? "anonymous_report" : "delete_report", {report_id: selected.report_id});
+      }
+      pendingReport.current = updated.report_id || "";
+      await refreshHistory(false);
+      if (updated.report_id) setSelectedReportId(updated.report_id);
+      else setSelectedReportId("");
+      setDetailModule("all");
+      setMessage(action === "anonymous" ? "匿名版已生成，未调用 AI，原报告保持不变。" : action === "delete" ? "报告已删除。" : `已生成新版本 v${updated.version}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      operationGuard.current = false;
+      setOperationBusy(false);
+      setActiveOperation(null);
+    }
+  }
+
   const visibleChats = useMemo(() => {
     const needle = chatQuery.trim().toLocaleLowerCase("zh-CN");
     return needle ? chats.filter((chat) => chat.display_name.toLocaleLowerCase("zh-CN").includes(needle)) : chats;
@@ -428,7 +471,10 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
           setSearchHits([]);
           setResultTotal(response.total);
           const ids = response.items.map((item) => item.report_id);
-          setSelectedReportId((current) => ids.includes(current) ? current : ids[0] || "");
+          setSelectedReportId((current) => {
+            if (pendingReport.current) { const id = pendingReport.current; pendingReport.current = ""; return id; }
+            return ids.includes(current) ? current : ids[0] || "";
+          });
           setDetailModule(moduleFilter);
         }
       } catch (error) {
@@ -468,7 +514,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       if (!cancelled) setMessage(`报告详情读取失败：${error instanceof Error ? error.message : String(error)}`);
     });
     return () => { cancelled = true; };
-  }, [active, selectedReportId]);
+  }, [active, selectedReportId, historyRevision]);
 
   async function openExport(path: string) {
     try {
@@ -564,6 +610,13 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
   return <div className="workspace history-workspace">
     <header className="topbar history-topbar"><div><h1>历史中心</h1></div><button className="button secondary" disabled={busy} onClick={() => refreshHistory(true)}>{busy ? "刷新中…" : "刷新与导入"}</button></header>
     <section className="notice history-notice" aria-live="polite"><strong>本地历史</strong><span>{message}</span></section>
+    {operationBusy && activeOperation === "regenerate" && generation.progress && <section className="notice" aria-live="polite"><progress max={100} value={generation.progress.percent} /><span>{generation.progress.message} · {generation.progress.percent}% · {generation.progress.elapsed_seconds} 秒</span></section>}
+    {operationBusy && activeOperation !== "regenerate" && <section className="notice" role="status">正在处理本地报告…</section>}
+    {operation && detail && <div className="dialog-backdrop"><section className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="history-operation-title">
+      <h2 id="history-operation-title">{operation === "anonymous" ? "生成匿名版" : operation === "regenerate" ? "重新生成报告" : "删除报告"}</h2>
+      {operation === "anonymous" ? <><p>匿名版会将可识别成员显示为“群友01、群友02……”并移除成员级活跃统计，不会修改原报告。</p><p>匿名处理仅针对成员身份，聊天正文中自行出现的姓名、联系方式或其他敏感信息不会自动删除。分享前仍需自行确认。</p></> : operation === "regenerate" ? <><p>将使用当前版本的生成逻辑和当前 AI 配置，重新生成该群聊在 {detail.report_date} 的报告。</p><p>重新生成会创建新的历史版本，不会删除当前报告，并会产生 AI API 调用。</p></> : <p>{versions.some(v => v.source_report_id === detail.report_id) ? "该报告存在匿名版，删除原报告将同时删除关联匿名版。" : "将删除该报告文件和历史记录。其他正常版本不受影响。"}</p>}
+      <div className="dialog-actions"><button className="button secondary" onClick={() => setOperation(null)}>取消</button><button className="button primary" onClick={performOperation}>{operation === "anonymous" ? "生成匿名版" : operation === "regenerate" ? "重新生成" : "确认删除"}</button></div>
+    </section></div>}
     <div className="history-layout">
       <aside className="history-chat-pane">
         <div className="history-pane-heading"><div><span>群聊</span><strong>{chats.length}</strong></div><input aria-label="搜索历史群聊" placeholder="搜索群聊" value={chatQuery} onChange={(event) => setChatQuery(event.target.value)} /></div>
@@ -584,10 +637,10 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
         <div className="history-result-count">{keyword.trim() ? "搜索命中" : "最新版本"} · {resultTotal}</div>
         <div className="history-report-list">
           {searchHits.map((hit, index) => <button key={`${hit.report_id}-${hit.module_key}-${index}`} className={selectedReportId === hit.report_id && detailModule === hit.module_key ? "selected" : ""} onClick={() => { setSelectedReportId(hit.report_id); setDetailModule(hit.module_key); }}>
-            <div><strong>{hit.title}</strong><em>v{hit.version}</em></div><span>{periodLabel(hit.period_start, hit.period_end)} · {hit.module_label}</span><p>{searchSnippet(hit.snippet)}</p>
+            <div><strong>{hit.title}</strong><em>{hit.report_variant === "anonymous" ? "匿名版 · " : ""}v{hit.version}</em></div><span>{periodLabel(hit.period_start, hit.period_end)} · {hit.module_label}</span><p>{searchSnippet(hit.snippet)}</p>
           </button>)}
-          {!keyword.trim() && reports.map((report) => <button key={report.report_id} className={selectedReportId === report.report_id ? "selected" : ""} onClick={() => { setSelectedReportId(report.report_id); setDetailModule(moduleFilter); }}>
-            <div><strong>{report.one_line_summary || report.headline}</strong><em>v{report.version}</em></div><span>{periodLabel(report.period_start, report.period_end)} · {report.message_count} 条消息</span><p>{report.headline}</p>
+          {!keyword.trim() && reports.map((report) => <button key={report.report_id} className={selectedReportId === report.report_id || (detail?.period_start === report.period_start && detail?.period_end === report.period_end) ? "selected" : ""} onClick={() => { setSelectedReportId(report.report_id); setDetailModule(moduleFilter); }}>
+            <div><strong>{report.one_line_summary || report.headline}</strong><em>{report.report_variant === "anonymous" ? "匿名版 · " : ""}v{report.version}</em></div><span>{periodLabel(report.period_start, report.period_end)} · {report.message_count} 条消息</span><p>{report.headline}</p>
           </button>)}
           {!searchHits.length && !reports.length && <div className="history-empty">当前筛选下没有历史报告</div>}
         </div>
@@ -596,15 +649,22 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       <section className="history-detail-pane">
         {!detail && <div className="history-empty detail-empty"><strong>选择一份历史报告</strong><span>这里会显示报告模块、全部版本和导出文件。</span></div>}
         {detail && <>
-          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)}</span><h2>{detail.headline}</h2><p>{detail.one_line_summary}</p></div><div className="history-stat-row"><span>今日消息 {detail.message_count} 条</span><span>今日字数 {Number(detail.stats.effective_char_count) || 0} 字</span><span>参与人数 {detail.participant_count} 人</span>{detail.resource_count > 0 && <span>整理资源 {detail.resource_count} 项</span>}</div></div>
+          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)} · {detail.report_variant === "anonymous" ? `匿名版（来源正常版 v${detail.version}）` : `正常版 v${detail.version}`}</span><h2>{detail.headline}</h2><p>{detail.one_line_summary}</p></div><div className="history-stat-row"><span>今日消息 {detail.message_count} 条</span><span>今日字数 {Number(detail.stats.effective_char_count) || 0} 字</span><span>参与人数 {detail.participant_count} 人</span>{detail.resource_count > 0 && <span>整理资源 {detail.resource_count} 项</span>}</div></div>
           <div className="history-export-row">
             <button className="button primary small" disabled={!detail.exports.png.exists} onClick={() => openExport(detail.exports.png.path)}>打开 PNG</button>
             <button className="button secondary" disabled={!detail.exports.html.exists} onClick={() => openExport(detail.exports.html.path)}>打开 HTML</button>
             <button className="button secondary" disabled={!detail.exports.json.exists} onClick={() => openExport(detail.exports.json.path)}>打开 JSON</button>
-            {!redactionMode && <button className="button secondary inline-icon" disabled={redactionBusy || !detail.exports.json.exists} onClick={openRedactionMode}><EyeOff size={15} aria-hidden="true" />{redactionBusy ? "读取中…" : "屏蔽内容"}</button>}
+            {!redactionMode && detail.report_variant !== "anonymous" && <button className="button secondary inline-icon" disabled={redactionBusy || !detail.exports.json.exists} onClick={openRedactionMode}><EyeOff size={15} aria-hidden="true" />{redactionBusy ? "读取中…" : "屏蔽内容"}</button>}
+            {!redactionMode && detail.report_variant !== "anonymous" && <>
+              {detail.period_start.slice(0, 10) === detail.period_end.slice(0, 10) && <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy} onClick={() => setOperation("regenerate")}><RefreshCw size={15} />重新生成</button>}
+              <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy || !detail.exports.json.exists} onClick={() => setOperation("anonymous")}><UserRoundMinus size={15} />{versions.some(v => v.source_report_id === detail.report_id) ? "重新生成匿名版" : "生成匿名版"}</button>
+            </>}
+            {detail.report_variant === "anonymous" && <button className="button secondary" onClick={() => setSelectedReportId(detail.source_report_id || "")}>查看原报告 · v{detail.version}</button>}
+            <button className="button secondary inline-icon" disabled={operationBusy} onClick={() => openExport(detail.exports.json.path.replace(/[\\/][^\\/]+$/, ""))}><FolderOpen size={15} />所在目录</button>
+            <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy} onClick={() => setOperation("delete")}><Trash2 size={15} />删除</button>
             {Object.values(detail.exports).some((item) => !item.exists) && <small>灰色文件已移动或不存在</small>}
           </div>
-          <div className="history-versions"><span>历史版本</span><div>{versions.map((version) => <button key={version.report_id} className={selectedReportId === version.report_id ? "selected" : ""} onClick={() => { setSelectedReportId(version.report_id); setDetailModule("all"); }}>v{version.version}<small>{version.generated_at.slice(5, 16)}</small></button>)}</div></div>
+          <div className="history-versions"><span>历史版本</span><div>{versions.map((version) => <button key={version.report_id} className={selectedReportId === version.report_id ? "selected" : ""} onClick={() => { setSelectedReportId(version.report_id); setDetailModule("all"); }}>{version.report_variant === "anonymous" ? `匿名版 · 来源 v${version.version}` : `正常版 v${version.version}`}<small>{version.generated_at.slice(5, 16)}</small></button>)}</div></div>
           {redactionMode && <div className="history-redaction-toolbar" aria-live="polite"><div><strong>选择要屏蔽的报告条目</strong><span>点击下方带边框的整项；未直接呈现的条目可在完整列表中补充。</span></div><div><span>已选择 {newSelectionCount} 项</span><button className="button secondary" disabled={redactionBusy} onClick={closeRedactionMode}>取消</button><button className="button primary small" disabled={redactionBusy || !newSelectionCount} onClick={applyRedactions}>{redactionBusy ? "正在生成…" : "生成屏蔽版"}</button></div></div>}
           {redactionMode && <details className="history-redaction-list"><summary>查看全部可屏蔽项 <span>{redactionTargets.length}</span></summary><RedactionTargetGroups targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onToggle={toggleRedaction} /></details>}
           {!redactionMode && detailModule !== "all" && <div className="history-module-focus"><span>当前模块：{MODULE_OPTIONS.find(([key]) => key === detailModule)?.[1] || detailModule}</span><button onClick={() => setDetailModule("all")}>查看全部</button></div>}

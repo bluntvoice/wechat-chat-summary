@@ -128,6 +128,8 @@ export type HistoryChat = {
 };
 
 export type HistoryReport = {
+  report_variant?: "normal" | "anonymous";
+  source_report_id?: string;
   report_id: string;
   chat_id: string;
   display_name: string;
@@ -168,6 +170,8 @@ export type HistoryReportDetail = Omit<HistoryReport, "modules"> & {
 };
 
 export type HistorySearchHit = {
+  report_variant?: "normal" | "anonymous";
+  source_report_id?: string;
   report_id: string;
   chat_id: string;
   chat_name: string;

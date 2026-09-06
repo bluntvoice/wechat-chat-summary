@@ -45,6 +45,7 @@ def allocate_report_paths(
     chat_name: str,
     start_time: str,
     end_time: str,
+    *, min_version: int = 1,
 ) -> ReportPaths:
     """按“群聊/导出图+报告数据”结构分配一个不覆盖旧文件的新版本。"""
 
@@ -57,7 +58,7 @@ def allocate_report_paths(
         chat_dir / "导出图" / start_date.strftime("%Y") / start_date.strftime("%m")
     )
 
-    version = 1
+    version = max(1, min_version)
     while True:
         suffix = "" if version == 1 else f"_v{version}"
         data_dir = data_root / f"{date_label}报告数据{suffix}"

@@ -6,6 +6,10 @@ WeChatDataAnalysis 是独立的前置数据源，需要单独下载安装并保�
 
 默认从仓库根目录执行下面的命令。
 
+历史中心的匿名版通过 `anonymization.py` 对正常 Report Schema 做本地确定性派生，复用 HTML / PNG 渲染与 HistoryStore，不构造 AI 客户端。新正常报告只额外保存成员首次发言顺序；旧报告缺失时按原时间范围读取数据源。匿名导出仅保留允许字段，不包含成员映射和成员级统计。
+
+历史重新生成经 `desktop_bridge._regenerate` 取得历史群聊和时间后进入 `_generate` / CLI 主流程，使用当前配置。跨进程任务锁防止同群同日重复提交，完整输出后才创建新 revision。SQLite v4 为正常版与匿名派生版增加关联及独立唯一约束；Report Schema 保持 2.2，旧报告缺失 variant 时视为 normal。
+
 ## 配置 `.env`
 
 复制样例文件：

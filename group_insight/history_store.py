@@ -18,7 +18,7 @@ from .report_model import BLOCKED_OBSERVATION_PHRASES
 from .report_schema import SCHEMA_VERSION, upgrade_legacy_report
 
 
-DATABASE_SCHEMA_VERSION = 3
+DATABASE_SCHEMA_VERSION = 4
 
 HISTORY_MODULE_ORDER = (
     "summary",
@@ -285,6 +285,26 @@ class HistoryStore:
                 stats if isinstance(stats, dict) else {},
             )
 
+    @classmethod
+    def _migrate_v3_to_v4(cls, connection: sqlite3.Connection) -> None:
+        """重建唯一约束，让每个 normal revision 拥有一个匿名派生版。"""
+        statement = next(s for s in BASE_SCHEMA_STATEMENTS if "CREATE TABLE IF NOT EXISTS reports (" in s)
+        statement = statement.replace("IF NOT EXISTS reports (", "reports_new (").replace(
+            "UNIQUE(chat_id, period_start, period_end, version)",
+            "report_variant TEXT NOT NULL DEFAULT 'normal', source_report_id TEXT NOT NULL DEFAULT '', "
+            "UNIQUE(chat_id, period_start, period_end, version, report_variant)")
+        connection.execute(statement)
+        columns = [row[1] for row in connection.execute("PRAGMA table_info(reports)")]
+        names = ",".join(columns)
+        connection.execute(f"INSERT INTO reports_new ({names}) SELECT {names} FROM reports")
+        connection.execute("DROP TABLE reports")
+        connection.execute("ALTER TABLE reports_new RENAME TO reports")
+        connection.execute("CREATE INDEX reports_history_lookup_idx ON reports(chat_id, period_start, period_end, version DESC)")
+        connection.execute("CREATE INDEX reports_date_idx ON reports(report_date DESC, generated_at DESC)")
+        connection.execute("CREATE UNIQUE INDEX anonymous_source_idx ON reports(source_report_id) WHERE report_variant='anonymous'")
+        if connection.execute("PRAGMA foreign_key_check").fetchone():
+            raise RuntimeError("历史数据库关联校验失败。")
+
     def _ensure_schema(self) -> None:
         current_version = int(self.connection.execute("PRAGMA user_version").fetchone()[0])
         if current_version > DATABASE_SCHEMA_VERSION:
@@ -295,11 +315,14 @@ class HistoryStore:
             1: self._migrate_v0_to_v1,
             2: self._migrate_v1_to_v2,
             3: self._migrate_v2_to_v3,
+            4: self._migrate_v3_to_v4,
         }
         for target_version in range(current_version + 1, DATABASE_SCHEMA_VERSION + 1):
             migration = migrations.get(target_version)
             if migration is None:
                 raise RuntimeError(f"缺少 SQLite migration: v{target_version - 1} -> v{target_version}")
+            if target_version == 4:
+                self.connection.execute("PRAGMA foreign_keys = OFF")
             self.connection.execute("BEGIN IMMEDIATE")
             try:
                 migration(self.connection)
@@ -312,6 +335,8 @@ class HistoryStore:
             except Exception:
                 self.connection.rollback()
                 raise
+            finally:
+                self.connection.execute("PRAGMA foreign_keys = ON")
         with self.connection:
             self.connection.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('report_schema_version', ?)",
@@ -681,11 +706,11 @@ class HistoryStore:
             """WITH ranked AS (
                    SELECT r.*,
                           ROW_NUMBER() OVER (
-                            PARTITION BY r.chat_id, r.period_start, r.period_end
+                            PARTITION BY r.chat_id, r.period_start, r.period_end, r.report_variant
                             ORDER BY r.version DESC, r.generated_at DESC, r.report_id DESC
                           ) AS version_rank
                    FROM reports AS r
-                   WHERE r.chat_id=?
+                   WHERE r.chat_id=? AND r.report_variant='normal'
                      AND substr(r.period_end, 1, 10) >= ?
                      AND substr(r.period_start, 1, 10) <= ?
                )
@@ -726,6 +751,15 @@ class HistoryStore:
     ) -> str:
         metadata = document["metadata"]
         chat = metadata["chat"]
+        variant = metadata.get("report_variant", "normal")
+        source_id = str(metadata.get("source_report_id") or "")
+        if variant not in {"normal", "anonymous"}:
+            raise ValueError(f"未知报告类型: {variant}")
+        if variant == "anonymous":
+            source = self.connection.execute("SELECT chat_id FROM reports WHERE report_id=? AND report_variant='normal'", (source_id,)).fetchone()
+            if source is None:
+                raise ValueError("匿名版的来源正常报告不存在。")
+            chat = {**chat, "id": source["chat_id"]}
         period = metadata["period"]
         ai = metadata.get("ai", {})
         exports = metadata.get("exports", {})
@@ -749,8 +783,8 @@ class HistoryStore:
                        report_id, chat_id, report_date, period_start, period_end, version,
                        schema_version, generated_at, provider, model, headline, one_line_summary,
                        message_count, participant_count, resource_count, json_path, html_path,
-                       png_path, stats_json, content_json)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       png_path, stats_json, content_json, report_variant, source_report_id)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(report_id) DO UPDATE SET
                      generated_at=excluded.generated_at, provider=excluded.provider,
                      model=excluded.model, headline=excluded.headline,
@@ -760,7 +794,9 @@ class HistoryStore:
                      resource_count=excluded.resource_count,
                      json_path=excluded.json_path, html_path=excluded.html_path,
                      png_path=excluded.png_path, stats_json=excluded.stats_json,
-                     content_json=excluded.content_json""",
+                     content_json=excluded.content_json,
+                     report_variant=excluded.report_variant,
+                     source_report_id=excluded.source_report_id""",
                 (
                     report_id, chat["id"], period["report_date"], period["start"], period["end"],
                     int(metadata.get("version") or 1), document.get("schema_version", ""), generated_at,
@@ -769,7 +805,7 @@ class HistoryStore:
                     int(stats.get("message_count") or 0), int(stats.get("participant_count") or 0),
                     int(resources.get("count") or 0), str(exports.get("json") or ""),
                     str(exports.get("html") or ""), str(exports.get("png") or ""),
-                    json.dumps(stats, ensure_ascii=False), json.dumps(content, ensure_ascii=False),
+                    json.dumps(stats, ensure_ascii=False), json.dumps(content, ensure_ascii=False), variant, source_id,
                 ),
             )
             self.connection.execute("DELETE FROM resources WHERE report_id=?", (report_id,))
@@ -813,30 +849,31 @@ class HistoryStore:
                         str(item.get("time_label") or ""), str(item.get("notice") or ""),
                     ),
                 )
-            self.connection.execute(
-                "INSERT INTO daily_stats VALUES(?,?,?,?,?,?,?,?,?)",
-                (
-                    chat["id"], period["report_date"], report_id,
-                    int(stats.get("message_count") or 0), int(stats.get("effective_message_count") or 0),
-                    int(stats.get("participant_count") or 0), int(stats.get("effective_char_count") or 0),
-                    int(stats.get("resource_breakdown", {}).get("link", link_count)),
-                    int(stats.get("resource_breakdown", {}).get("file", file_count)),
-                ),
-            )
-            stat_rows = daily_stats
-            if stat_rows is None and str(period.get("start") or "")[:10] == str(period.get("end") or "")[:10]:
-                stat_rows = [{"date": period["report_date"], **stats}]
-            for stat_row in stat_rows or []:
-                stat_date = str(stat_row.get("date") or "").strip()
-                if not stat_date:
-                    continue
-                self._write_chat_daily_stats(
-                    self.connection,
-                    str(chat["id"]),
-                    stat_date,
-                    stat_row,
-                    str(stat_row.get("calculated_at") or generated_at),
+            if variant == "normal":
+                self.connection.execute(
+                    "INSERT INTO daily_stats VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        chat["id"], period["report_date"], report_id,
+                        int(stats.get("message_count") or 0), int(stats.get("effective_message_count") or 0),
+                        int(stats.get("participant_count") or 0), int(stats.get("effective_char_count") or 0),
+                        int(stats.get("resource_breakdown", {}).get("link", link_count)),
+                        int(stats.get("resource_breakdown", {}).get("file", file_count)),
+                    ),
                 )
+                stat_rows = daily_stats
+                if stat_rows is None and str(period.get("start") or "")[:10] == str(period.get("end") or "")[:10]:
+                    stat_rows = [{"date": period["report_date"], **stats}]
+                for stat_row in stat_rows or []:
+                    stat_date = str(stat_row.get("date") or "").strip()
+                    if not stat_date:
+                        continue
+                    self._write_chat_daily_stats(
+                        self.connection,
+                        str(chat["id"]),
+                        stat_date,
+                        stat_row,
+                        str(stat_row.get("calculated_at") or generated_at),
+                    )
         return report_id
 
     @staticmethod
@@ -858,6 +895,8 @@ class HistoryStore:
 
     def _report_summary(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
+            "report_variant": str(row["report_variant"]),
+            "source_report_id": str(row["source_report_id"]),
             "report_id": str(row["report_id"]),
             "chat_id": str(row["chat_id"]),
             "display_name": str(row["display_name"]),
@@ -893,7 +932,7 @@ class HistoryStore:
                        MAX(r.report_date) AS latest_report_date,
                        MAX(r.generated_at) AS latest_generated_at
                 FROM chats AS c
-                JOIN reports AS r ON r.chat_id = c.chat_id
+                JOIN reports AS r ON r.chat_id = c.chat_id AND r.report_variant='normal'
                 {where_sql}
                 GROUP BY c.chat_id, c.display_name
                 ORDER BY latest_generated_at DESC, c.display_name COLLATE NOCASE, c.chat_id
@@ -923,7 +962,7 @@ class HistoryStore:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """为桌面端返回可分页的历史报告列表；默认每个时间范围只取最新版本。"""
+        """为桌面端返回可分页的历史报告列表；默认只列每个范围的最新正常版。"""
 
         module_key = self._normalize_module_filter(module_filter)
         if version_strategy not in {"latest", "all"}:
@@ -933,7 +972,7 @@ class HistoryStore:
         clauses: list[str] = []
         parameters: list[Any] = []
         if version_strategy == "latest":
-            clauses.append("version_rank = 1")
+            clauses.extend(("version_rank = 1", "ranked.report_variant = 'normal'"))
         if chat_id:
             clauses.append("ranked.chat_id = ?")
             parameters.append(chat_id)
@@ -974,7 +1013,7 @@ class HistoryStore:
             f"""WITH ranked AS (
                     SELECT r.*, c.display_name,
                            ROW_NUMBER() OVER (
-                             PARTITION BY r.chat_id, r.period_start, r.period_end
+                             PARTITION BY r.chat_id, r.period_start, r.period_end, r.report_variant
                              ORDER BY r.version DESC, r.generated_at DESC, r.report_id DESC
                            ) AS version_rank
                     FROM reports AS r
@@ -1078,7 +1117,9 @@ class HistoryStore:
             """SELECT r.*, c.display_name
                FROM reports AS r JOIN chats AS c ON c.chat_id = r.chat_id
                WHERE r.chat_id=? AND r.period_start=? AND r.period_end=?
-               ORDER BY r.version DESC, r.generated_at DESC, r.report_id DESC""",
+               ORDER BY r.version DESC,
+                        CASE r.report_variant WHEN 'normal' THEN 0 ELSE 1 END,
+                        r.generated_at DESC, r.report_id DESC""",
             (anchor["chat_id"], anchor["period_start"], anchor["period_end"]),
         ).fetchall()
         return [self._report_summary(row) for row in rows]
@@ -1183,12 +1224,13 @@ class HistoryStore:
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM reports AS newer "
                 "WHERE newer.chat_id = r.chat_id AND newer.period_start = r.period_start "
-                "AND newer.period_end = r.period_end AND newer.version > r.version)"
+                "AND newer.period_end = r.period_end AND newer.report_variant = r.report_variant AND newer.version > r.version)"
             )
         base_where = " AND ".join(clauses) if clauses else "1=1"
         select_sql = """SELECT f.report_id, f.module_key, f.chat_name, f.title, f.body,
                                r.chat_id, r.report_date, r.period_start, r.period_end,
-                               r.version, r.generated_at, r.one_line_summary
+                               r.version, r.generated_at, r.one_line_summary,
+                               r.report_variant, r.source_report_id
                         FROM report_search_fts AS f
                         JOIN reports AS r ON r.report_id = f.report_id"""
         candidates: list[sqlite3.Row] = []
@@ -1233,6 +1275,8 @@ class HistoryStore:
                     "period_start": str(row["period_start"]),
                     "period_end": str(row["period_end"]),
                     "version": int(row["version"]),
+                    "report_variant": str(row["report_variant"]),
+                    "source_report_id": str(row["source_report_id"]),
                     "generated_at": str(row["generated_at"]),
                     "module_key": module,
                     "module_label": HISTORY_MODULE_LABELS.get(module, module),
@@ -1266,7 +1310,7 @@ class HistoryStore:
         result = {"scanned": 0, "imported": 0, "skipped": 0, "failed": 0}
         if not export_root.is_dir():
             return result
-        for path in export_root.glob("*/报告数据/*报告数据*/*_群聊总结*.json"):
+        for path in sorted(export_root.glob("*/报告数据/*报告数据*/*_群聊总结*.json"), key=lambda p: ("-匿名版" in p.stem, str(p))):
             result["scanned"] += 1
             stat = path.stat()
             cached = self.connection.execute(
@@ -1278,6 +1322,12 @@ class HistoryStore:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 document = upgrade_legacy_report(payload, path)
+                if document.get("metadata", {}).get("report_variant") == "anonymous":
+                    source = self.connection.execute("SELECT png_path FROM reports WHERE report_id=? AND report_variant='normal'", (document["metadata"].get("source_report_id"),)).fetchone()
+                    if source is None:
+                        raise ValueError("匿名报告缺少来源，请先导入正常报告。")
+                    image = Path(source["png_path"])
+                    document["metadata"]["exports"] = {"json": str(path), "html": str(path.with_suffix(".html")), "png": str(image.with_name(image.stem + "-匿名版" + image.suffix))}
                 report_id = self.upsert_report(document)
                 with self.connection:
                     self.connection.execute(
@@ -1289,10 +1339,23 @@ class HistoryStore:
                 result["failed"] += 1
         return result
 
+    def delete_report(self, report_id: str) -> None:
+        """删除单个 revision 及它的派生版，不影响其他 revision。"""
+        rows = self.connection.execute("SELECT report_id FROM reports WHERE report_id=? OR source_report_id=?", (report_id, report_id)).fetchall()
+        if not rows:
+            raise ValueError("历史报告不存在。")
+        with self.connection:
+            for row in rows:
+                identifier = row["report_id"]
+                self.connection.execute("DELETE FROM report_search_fts WHERE report_id=?", (identifier,))
+                self.connection.execute("DELETE FROM imported_files WHERE report_id=?", (identifier,))
+                self.connection.execute("DELETE FROM reports WHERE report_id=?", (identifier,))
+
     def summarized_chat_ids(self) -> list[str]:
         rows = self.connection.execute(
             """SELECT r.chat_id, MAX(r.generated_at) AS latest_generated_at
                FROM reports AS r
+               WHERE r.report_variant='normal'
                GROUP BY r.chat_id
                ORDER BY latest_generated_at DESC, r.chat_id"""
         ).fetchall()

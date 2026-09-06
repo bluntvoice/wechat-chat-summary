@@ -99,6 +99,26 @@ test("history default view follows report sections without duplicate activity to
   assert.match(styles, /\.history-segment-list[^\n]+repeat\(2/);
 });
 
+test("history keeps derived anonymous reports in the right-side version switcher", () => {
+  assert.match(history, /version_strategy: "latest"/);
+  assert.match(history, /匿名版 · 来源 v\$\{version\.version\}/);
+  assert.match(history, /查看原报告 · v\{detail\.version\}/);
+  assert.match(history, /detail\?\.period_start === report\.period_start/);
+  assert.match(history, /hit\.report_variant === "anonymous" \? "匿名版 · " : ""/);
+});
+
+test("history anonymous derivation and regeneration have separate guarded actions", () => {
+  assert.match(history, /bridge<GenerationResult>\(action === "anonymous" \? "anonymous_report" : "delete_report"/);
+  assert.match(history, /generation\.runGeneration\(selected\.chat_id, selected\.display_name/);
+  assert.match(history, /detail\.report_variant !== "anonymous"/);
+  assert.match(history, /detail\.period_start\.slice\(0, 10\) === detail\.period_end\.slice\(0, 10\)/);
+  assert.match(history, /updated\.report_id\) setSelectedReportId\(updated\.report_id\)/);
+  assert.match(history, /不会修改原报告/);
+  assert.match(history, /并会产生 AI API 调用/);
+  assert.match(generation, /reportId \? "regenerate_report" : "generate"/);
+  assert.match(generation, /if \(!scheduled && !reportId\) await saveSettings\(false\)/);
+});
+
 test("member observation hides only a name duplicated by its card title", () => {
   assert.match(history, /function MemberObservationView/);
   assert.match(history, /memberName && memberName === resolvedTitle/);

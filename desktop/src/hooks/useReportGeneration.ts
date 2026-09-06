@@ -28,6 +28,7 @@ export function useReportGeneration({
   const [progress, setProgress] = useState<Progress | null>(null);
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [batchResults, setBatchResults] = useState<BatchGenerationItem[]>([]);
+  const generationGuard = useRef(false);
   const progressTimer = useRef<number | null>(null);
   const elapsedTimer = useRef<number | null>(null);
 
@@ -60,6 +61,7 @@ export function useReportGeneration({
     end: string,
     rangeMode: "single" | "custom",
     scale?: ProgressScale,
+    reportId?: string,
   ) {
     const jobId = crypto.randomUUID();
     const startedAt = Date.now();
@@ -76,7 +78,8 @@ export function useReportGeneration({
         .catch(() => undefined);
     }, 900);
     try {
-      return await bridge<GenerationResult>("generate", {
+      return await bridge<GenerationResult>(reportId ? "regenerate_report" : "generate", {
+        report_id: reportId,
         job_id: jobId,
         chat: targetChatId,
         chat_name: targetChatName,
@@ -112,7 +115,10 @@ export function useReportGeneration({
     end: string,
     rangeMode: "single" | "custom",
     scheduled = false,
+    reportId?: string,
   ) {
+    if (generationGuard.current) throw new Error("已有生成任务正在执行。");
+    generationGuard.current = true;
     const startedAt = Date.now();
     setBusy(true);
     setResult(null);
@@ -120,8 +126,8 @@ export function useReportGeneration({
     beforeGeneration();
     setMessage(scheduled ? `正在执行 ${targetChatName || "已设群聊"} 的定时日报…` : "正在生成总结，进度会按真实处理阶段更新。");
     try {
-      if (!scheduled) await saveSettings(false);
-      const generated = await generateOne(targetChatId, targetChatName, start, end, rangeMode);
+      if (!scheduled && !reportId) await saveSettings(false);
+      const generated = await generateOne(targetChatId, targetChatName, start, end, rangeMode, undefined, reportId);
       const summarizedChatIds = await refreshedChatIds(targetChatId, generated.summarized_chat_ids || []);
       setResult(generated);
       setProgress({
@@ -149,6 +155,7 @@ export function useReportGeneration({
       throw error;
     } finally {
       stopProgressTimers();
+      generationGuard.current = false;
       setBusy(false);
     }
   }
@@ -218,6 +225,7 @@ export function useReportGeneration({
       return completed;
     } finally {
       stopProgressTimers();
+      generationGuard.current = false;
       setBusy(false);
     }
   }

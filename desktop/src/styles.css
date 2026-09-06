@@ -570,3 +570,9 @@ label em, .mini-segmented button, .archive-preview span, .schedule-date-mode > s
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: rgba(15,30,20,.3); }
+.dialog-card { width: min(500px, 100%); padding: 24px; border-radius: 10px; background: #fff; box-shadow: 0 16px 60px #0002; }
+.dialog-card h2 { margin: 0 0 16px; font-size: 18px; }
+.dialog-card p { line-height: 1.75; font-size: 14px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }

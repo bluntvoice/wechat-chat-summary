@@ -231,6 +231,9 @@ def build_report_document(
         "schema_version": SCHEMA_VERSION,
         "metadata": {
             "report_id": make_report_id(chat_id, start_time, end_time, version),
+            "report_variant": "normal",
+            "generation_source": "normal",
+            "member_first_seen_order": ctx.get("member_first_seen_order", []),
             "chat": {"id": chat_id, "name": chat_name},
             "period": {
                 "start": start_time,

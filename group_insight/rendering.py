@@ -251,6 +251,8 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
     chat = metadata.get("chat", {})
     period = metadata.get("period", {})
     names = _member_names(stats)
+    if metadata.get("report_variant") == "anonymous":
+        names = {name: name for name in re.findall(r"群友\d{2,}", str(content))}
 
     def resolved(value: Any) -> str:
         return _esc(_resolve(value, names))

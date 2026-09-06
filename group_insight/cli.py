@@ -295,6 +295,8 @@ def main() -> None:
         low_similarity_threshold=args.topic_sim_threshold,
         min_chunk_messages=args.topic_min_chunk_messages,
     )
+    from .anonymization import first_seen_members
+    ctx["member_first_seen_order"] = first_seen_members(messages)
     stats = build_local_stats(messages)
     daily_stats = build_chat_daily_stats(messages)
     extracted_resources = extract_resources(messages)
@@ -318,11 +320,14 @@ def main() -> None:
         output_root = Path(args.output_root).expanduser() if args.output_root else DEFAULT_OUTPUT_ROOT
         if output_root is None:
             raise SystemExit("未配置报告导出目录。请传 --output-root 或设置 GROUP_INSIGHT_OUTPUT_ROOT。")
+        with HistoryStore() as history:
+            highest = history.connection.execute("SELECT coalesce(max(version), 0) FROM reports WHERE chat_id=? AND period_start=? AND period_end=? AND report_variant='normal'", (ctx["username"], args.start, args.end)).fetchone()[0]
         report_paths = allocate_report_paths(
             output_root,
             ctx["display_name"],
             args.start,
             args.end,
+            min_version=highest + 1,
         )
         output_dir = report_paths.data_dir
         output_stem = report_paths.data_stem
@@ -331,164 +336,184 @@ def main() -> None:
         chat_report_dir = report_paths.chat_dir
         report_version = report_paths.version
 
-    snapshot_dir = ensure_dir(output_dir / "snapshot")
+    try:
+        snapshot_dir = ensure_dir(output_dir / "snapshot")
 
-    def build_run_signature() -> dict[str, Any]:
-        """构造本次运行的缓存签名。"""
+        def build_run_signature() -> dict[str, Any]:
+            """构造本次运行的缓存签名。"""
 
-        return {
-            "llm_model": model,
-            "dry_run": bool(args.dry_run),
-            "llm_thinking_enabled": thinking_enabled,
-            "llm_reasoning_effort": reasoning_effort,
-            "max_workers": max(1, args.max_workers),
-            "reduce_fan_in": max(2, args.reduce_fan_in),
-            "start_time": args.start,
-            "end_time": args.end,
-            "message_count": len(messages),
-            "first_message_time": messages[0].time if messages else "",
-            "last_message_time": messages[-1].time if messages else "",
-            "chunk_plan": chunk_plan,
-            "chunk_ids": [chunk.id for chunk in chunks],
-            "chunk_ranges": [
-                {
-                    "id": chunk.id,
-                    "start": chunk.start_time,
-                    "end": chunk.end_time,
-                    "message_count": chunk.message_count,
-                }
-                for chunk in chunks
-            ],
+            return {
+                "llm_model": model,
+                "dry_run": bool(args.dry_run),
+                "llm_thinking_enabled": thinking_enabled,
+                "llm_reasoning_effort": reasoning_effort,
+                "max_workers": max(1, args.max_workers),
+                "reduce_fan_in": max(2, args.reduce_fan_in),
+                "start_time": args.start,
+                "end_time": args.end,
+                "message_count": len(messages),
+                "first_message_time": messages[0].time if messages else "",
+                "last_message_time": messages[-1].time if messages else "",
+                "chunk_plan": chunk_plan,
+                "chunk_ids": [chunk.id for chunk in chunks],
+                "chunk_ranges": [
+                    {
+                        "id": chunk.id,
+                        "start": chunk.start_time,
+                        "end": chunk.end_time,
+                        "message_count": chunk.message_count,
+                    }
+                    for chunk in chunks
+                ],
+            }
+
+        run_signature = build_run_signature()
+        invalidate_cached_outputs_if_needed(output_dir, run_signature)
+
+        def write_snapshot_files() -> None:
+            """写出本次运行的调试与回溯快照。"""
+
+            write_json(snapshot_dir / "chunk_plan.json", chunk_plan)
+            write_json(snapshot_dir / "stats.json", stats)
+            write_json(snapshot_dir / "run_signature.json", run_signature)
+
+        write_snapshot_files()
+
+        client = None if args.dry_run else create_llm_client(
+            api_key=api_key,
+            model=model,
+            api_url=api_url,
+            allow_json_repair=bool(args.allow_json_repair),
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
+            provider=provider,
+        )
+        balance_before = None if args.dry_run else capture_balance_snapshot(client, "before")
+
+        effective_max_workers = max(1, args.max_workers)
+        if client is not None:
+            reduce_call_count = estimate_reduce_call_count(len(chunks), max(2, args.reduce_fan_in))
+            map_call_count = len(chunks)
+            effort_label = f"effort={getattr(client, 'reasoning_effort', '')} " if getattr(client, "thinking_enabled", False) else ""
+            print(
+                "[LLMPlan] "
+                f"provider={client.provider}/{client.model} "
+                f"thinking={'enabled' if getattr(client, 'thinking_enabled', False) else 'disabled'} "
+                f"{effort_label}"
+                f"mode={chunk_plan.get('mode')} "
+                f"map_calls={map_call_count} reduce_calls={reduce_call_count} final_calls=1 "
+                f"estimated_tokens={chunk_plan.get('estimated_tokens', 0)} "
+                f"fan_in={max(2, args.reduce_fan_in)}",
+                flush=True,
+            )
+
+        # 固定流程按 map -> reduce -> final 逐级汇总。
+        progress.update("map", 20, "正在分片分析群聊内容…", completed=0, total=len(chunks))
+        map_results = run_map_stage(
+            chunks,
+            output_dir=output_dir,
+            dry_run=args.dry_run,
+            client=client,
+            max_workers=effective_max_workers,
+            progress_callback=lambda completed, total: progress.update(
+                "map", 20 + round(40 * completed / max(1, total)),
+                f"正在分析第 {completed}/{total} 个内容片段…", completed=completed, total=total,
+            ),
+        )
+        progress.update("reduce", 63, "正在合并各时段主题…")
+        reduced_bundles = run_reduce_stage(
+            map_results,
+            output_dir=output_dir,
+            dry_run=args.dry_run,
+            client=client,
+            fan_in=max(2, args.reduce_fan_in),
+            progress_callback=lambda completed, total: progress.update(
+                "reduce", 63 + round(12 * completed / max(1, total)),
+                f"正在合并主题（{completed}/{total}）…", completed=completed, total=total,
+            ),
+        )
+        progress.update("final", 78, "正在生成结构化日报与资源主题…")
+        final_report = run_final_stage(
+            chat_name=ctx["display_name"],
+            start_time=args.start,
+            end_time=args.end,
+            stats=stats,
+            bundles=reduced_bundles,
+            output_dir=output_dir,
+            dry_run=args.dry_run,
+            client=client,
+            resources=compact_resources_for_prompt(extracted_resources),
+        )
+        balance_after = None if args.dry_run else capture_balance_snapshot(client, "after")
+
+        resource_catalog = build_resource_catalog(
+            extracted_resources,
+            final_report.get("resource_groups", []),
+            final_report.get("sections", []) or final_report.get("theme_cards", []),
+        )
+        json_output_path = output_dir / f"{output_stem}.json"
+        html_output_path = output_dir / f"{output_stem}.html"
+        exports = {
+            "json": str(json_output_path.resolve()),
+            "html": str(html_output_path.resolve()),
+            "png": "" if args.no_image else str(image_output_path.resolve()),
         }
-
-    run_signature = build_run_signature()
-    invalidate_cached_outputs_if_needed(output_dir, run_signature)
-
-    def write_snapshot_files() -> None:
-        """写出本次运行的调试与回溯快照。"""
-
-        write_json(snapshot_dir / "chunk_plan.json", chunk_plan)
-        write_json(snapshot_dir / "stats.json", stats)
-        write_json(snapshot_dir / "run_signature.json", run_signature)
-
-    write_snapshot_files()
-
-    client = None if args.dry_run else create_llm_client(
-        api_key=api_key,
-        model=model,
-        api_url=api_url,
-        allow_json_repair=bool(args.allow_json_repair),
-        thinking_enabled=thinking_enabled,
-        reasoning_effort=reasoning_effort,
-        provider=provider,
-    )
-    balance_before = None if args.dry_run else capture_balance_snapshot(client, "before")
-
-    effective_max_workers = max(1, args.max_workers)
-    if client is not None:
-        reduce_call_count = estimate_reduce_call_count(len(chunks), max(2, args.reduce_fan_in))
-        map_call_count = len(chunks)
-        effort_label = f"effort={getattr(client, 'reasoning_effort', '')} " if getattr(client, "thinking_enabled", False) else ""
-        print(
-            "[LLMPlan] "
-            f"provider={client.provider}/{client.model} "
-            f"thinking={'enabled' if getattr(client, 'thinking_enabled', False) else 'disabled'} "
-            f"{effort_label}"
-            f"mode={chunk_plan.get('mode')} "
-            f"map_calls={map_call_count} reduce_calls={reduce_call_count} final_calls=1 "
-            f"estimated_tokens={chunk_plan.get('estimated_tokens', 0)} "
-            f"fan_in={max(2, args.reduce_fan_in)}",
-            flush=True,
+        progress.update("rendering", 84, "正在生成统一报告数据…")
+        payload = build_report_document(
+            ctx=ctx,
+            start_time=args.start,
+            end_time=args.end,
+            version=report_version,
+            stats=stats,
+            report=final_report,
+            resources=resource_catalog,
+            exports=exports,
+            chunk_count=len(chunks),
+            chunk_plan=chunk_plan,
+            dry_run=args.dry_run,
+            provider=provider,
+            model=model,
         )
+        payload["metadata"]["generation_source"] = os.environ.get("GROUP_INSIGHT_GENERATION_SOURCE", "normal")
+        if os.environ.get("GROUP_INSIGHT_REGENERATED_FROM"):
+            payload["metadata"]["regenerated_from_report_id"] = os.environ["GROUP_INSIGHT_REGENERATED_FROM"]
+        from .report_schema import validate_report_schema_2_2
+        validate_report_schema_2_2(payload)
+        write_json(json_output_path, payload)
 
-    # 固定流程按 map -> reduce -> final 逐级汇总。
-    progress.update("map", 20, "正在分片分析群聊内容…", completed=0, total=len(chunks))
-    map_results = run_map_stage(
-        chunks,
-        output_dir=output_dir,
-        dry_run=args.dry_run,
-        client=client,
-        max_workers=effective_max_workers,
-        progress_callback=lambda completed, total: progress.update(
-            "map", 20 + round(40 * completed / max(1, total)),
-            f"正在分析第 {completed}/{total} 个内容片段…", completed=completed, total=total,
-        ),
-    )
-    progress.update("reduce", 63, "正在合并各时段主题…")
-    reduced_bundles = run_reduce_stage(
-        map_results,
-        output_dir=output_dir,
-        dry_run=args.dry_run,
-        client=client,
-        fan_in=max(2, args.reduce_fan_in),
-        progress_callback=lambda completed, total: progress.update(
-            "reduce", 63 + round(12 * completed / max(1, total)),
-            f"正在合并主题（{completed}/{total}）…", completed=completed, total=total,
-        ),
-    )
-    progress.update("final", 78, "正在生成结构化日报与资源主题…")
-    final_report = run_final_stage(
-        chat_name=ctx["display_name"],
-        start_time=args.start,
-        end_time=args.end,
-        stats=stats,
-        bundles=reduced_bundles,
-        output_dir=output_dir,
-        dry_run=args.dry_run,
-        client=client,
-        resources=compact_resources_for_prompt(extracted_resources),
-    )
-    balance_after = None if args.dry_run else capture_balance_snapshot(client, "after")
-
-    resource_catalog = build_resource_catalog(
-        extracted_resources,
-        final_report.get("resource_groups", []),
-        final_report.get("sections", []) or final_report.get("theme_cards", []),
-    )
-    json_output_path = output_dir / f"{output_stem}.json"
-    html_output_path = output_dir / f"{output_stem}.html"
-    exports = {
-        "json": str(json_output_path.resolve()),
-        "html": str(html_output_path.resolve()),
-        "png": "" if args.no_image else str(image_output_path.resolve()),
-    }
-    progress.update("rendering", 84, "正在生成统一报告数据…")
-    payload = build_report_document(
-        ctx=ctx,
-        start_time=args.start,
-        end_time=args.end,
-        version=report_version,
-        stats=stats,
-        report=final_report,
-        resources=resource_catalog,
-        exports=exports,
-        chunk_count=len(chunks),
-        chunk_plan=chunk_plan,
-        dry_run=args.dry_run,
-        provider=provider,
-        model=model,
-    )
-    write_json(json_output_path, payload)
-
-    # 生成 HTML 和 PNG，最后按需发送到微信会话。
-    progress.update("rendering", 88, "正在排版 HTML 报告…")
-    html_text = render_html_report(payload)
-    html_output_path.write_text(html_text, encoding="utf-8")
-    image_error = ""
-    send_requested, send_targets, send_text = resolve_send_delivery(args)
-    send_results: list[tuple[str, str, str]] = []
-    if not args.no_image:
-        progress.update("image", 92, "正在导出日报长图…")
-        image_error = export_report_image(
-            html_output_path,
-            image_output_path,
-            viewport_width=max(480, args.image_width),
-            timeout_ms=max(5000, args.image_timeout_ms),
-            dpi=max(1, args.image_dpi),
-        )
-    progress.update("history", 97, "正在保存历史索引…")
-    with HistoryStore() as history:
-        history.upsert_report(payload, daily_stats=daily_stats)
+        # 生成 HTML 和 PNG，最后按需发送到微信会话。
+        progress.update("rendering", 88, "正在排版 HTML 报告…")
+        html_text = render_html_report(payload)
+        html_output_path.write_text(html_text, encoding="utf-8")
+        image_error = ""
+        send_requested, send_targets, send_text = resolve_send_delivery(args)
+        send_results: list[tuple[str, str, str]] = []
+        if not args.no_image:
+            progress.update("image", 92, "正在导出日报长图…")
+            image_error = export_report_image(
+                html_output_path,
+                image_output_path,
+                viewport_width=max(480, args.image_width),
+                timeout_ms=max(5000, args.image_timeout_ms),
+                dpi=max(1, args.image_dpi),
+            )
+        if not args.no_image and (image_error or not image_output_path.is_file()):
+            json_output_path.unlink(missing_ok=True)
+            html_output_path.unlink(missing_ok=True)
+            image_output_path.unlink(missing_ok=True)
+            raise RuntimeError(f"PNG 生成失败: {image_error or '未生成图片'}")
+        progress.update("history", 97, "正在保存历史索引…")
+        with HistoryStore() as history:
+            history.upsert_report(payload, daily_stats=daily_stats)
+    except BaseException:
+        if not args.output_dir:
+            import shutil
+            cleanup_dir = output_dir.resolve()
+            expected_root = (chat_report_dir / "报告数据").resolve()
+            if cleanup_dir.parent == expected_root and cleanup_dir.name.startswith(date_label + "报告数据"):
+                image_output_path.unlink(missing_ok=True)
+                shutil.rmtree(cleanup_dir)
+        raise
     if send_requested:
         if args.no_image:
             send_results = [(target, "failed", "已指定 --no-image，无法发送 PNG。") for target in send_targets]
@@ -600,6 +625,7 @@ def main() -> None:
             {
                 "completed": True,
                 "protocol_version": 1,
+                "report_id": payload["metadata"]["report_id"],
                 "version": report_version,
                 "chat_dir": str(chat_report_dir.resolve()),
                 "data_dir": str(output_dir.resolve()),
