@@ -60,6 +60,28 @@
   和 `git diff --check`。
 - 修改桌面端后还需运行 `npm test`、`npm run build` 与 `cargo check`；缓存位置可配置，但不得依赖个人盘符或用户名。
 
+### Windows 命令与路径解析
+
+- Windows 命令必须直接使用 PowerShell 7.6.4 或更新的稳定版本执行；当前开发机首选
+  `C:\Users\jhj33\AppData\Local\Programs\PowerShell\7\pwsh.exe`，不得回退到 Windows
+  PowerShell 5.1 或 WindowsApps 执行别名。
+- 使用 `functions.exec` 编排命令时，`shell`、`cmd`、`workdir` 等 JavaScript 字符串只要包含
+  Windows 反斜杠，就必须使用 `String.raw`；不得把未转义的 Windows 路径直接写入 JavaScript
+  普通字符串或模板字符串。`String.raw` 只保证反斜杠不被转义，不能屏蔽模板中的反引号和
+  `${...}`；命令正文包含这些内容时不得继续内联，必须改用独立 `.ps1` 脚本或无模板分隔符的
+  参数传递方式。
+- PowerShell、Python、Git 和支持正斜杠的 Windows API 中，普通文件系统路径优先写成
+  `C:/path/to/file`。注册表子键、UNC 路径或明确要求反斜杠的原生命令参数必须保留原格式，并放在
+  `String.raw` 或独立 `.ps1` 脚本中。
+- 不得在外层 PowerShell 中再次拼接或嵌套 `pwsh -Command`，也不得使用 `Invoke-Expression`、
+  不必要的 `cmd /c` 或字符串拼接执行复杂命令。调用工具时应直接指定 PowerShell 7 为 shell，
+  并使用 `login=false`。
+- 多行、包含注册表操作、管理员提升或复杂引号的命令应优先写入独立 `.ps1` 脚本，通过
+  `pwsh.exe -NoProfile -File <script> <arguments>` 调用；参数使用参数数组、PowerShell splatting
+  或 `-LiteralPath` 传递，不在命令字符串中手工转义。
+- 路径解析或引号错误时，必须先确认命令尚未产生修改，再修正解析层；不得在目标不清晰时重复执行
+  删除、移动、注册表或环境变量写入命令。
+
 ## 版本、构建与发布规则
 
 - `desktop/package.json` 是桌面版本的人工输入源；`package-lock.json`、`tauri.conf.json`、
@@ -179,6 +201,14 @@
 - WeChatDataAnalysis 是需要单独下载安装并运行的数据源。生成页只显示简洁的未就绪状态及“重新检测 / 如何配置”入口；现有指南负责“安装 → 启动并准备数据 → 返回重新检测”三步说明；设置页长期提供 API 地址、连接状态、官方主页与 Releases 入口。仅凭本地 API 连接失败不得断言软件未安装，也不得返回 `not_installed`。
 - 生成百分比只允许来自后端真实阶段事件；界面耗时可使用本地时钟持续刷新，不得让百分比随时间伪增长。
   历史详情和人工屏蔽列表必须解析 `[[user:...]]` 成员占位符，不展示内部 ID、Schema 或原始对象键。
+- 手动生成、软件内定时生成和历史重新生成必须复用同一主 generation pipeline。每次生成使用应用级
+  immutable task context，至少固定 `task_id/source/chat_id/chat_name/date_range/started_at/status/progress`；
+  进度框只能读取真实任务上下文，不得读取当前 `selectedChat`、`selectedDate` 或其他表单状态。
+- 软件内定时总结支持多个群聊独立任务，每个稳定 `chat_id` 最多一项；群名只作显示并可按 ID 刷新，
+  不得按名称重绑。旧单群配置必须幂等迁移；到期任务按 `chat_id + report_date` 去重并串行执行，单项失败
+  不得阻断后续任务。停用保留配置，删除必须二次确认；不得扩展为 Service、Task Scheduler 或云调度。
+- 报告“相关原话”的署名和日期时间必须与话题正文共用基础字号；署名保持蓝色粗体，日期时间使用同字号
+  的次级颜色。HTML 与 Playwright PNG 共享该样式，不批量改写旧报告。
 - 历史中心默认详情必须与报告一级板块一致：今日总览由详情头部承载，其后为今日速览、今日主要话题、
   AI 今日观察、今日活跃情况和报告结尾。新报告不生成讨论落点；话题内问题、风险、原话及资源不得在默认详情重复拆卡，旧报告已有讨论落点继续原样显示；
   今日活跃情况不得重复详情头部已有的统计总数；成员观察卡片标题已显示昵称时不得再次显示相同的 `name` 字段。
@@ -188,6 +218,13 @@
 - 更新检查必须由用户在关于页手动触发，只访问本项目官方 GitHub Stable Release；不得启动检查、后台
   检查、自动降级或把 Prerelease 推送给普通通道。正式 installer 和 `.sha256` 使用现有 Release 精确
   命名，下载到系统临时目录，校验一致并经用户确认后方可启动；只有启动成功才退出当前软件。
+- 更新判断先比较数值基础版本，再比较显式构建通道；同版本 Stable 高于 Test / Prerelease，本地版本
+  数值更高时不得降级。通道必须由构建 metadata 注入，不能主要依赖 exe 文件名。
+- 更新界面只能显示真实下载字节和可用的真实百分比，下载完成后必须明确进入 SHA-256 校验阶段。
+  `check_failed/download_failed/verify_failed/install_failed` 均须可恢复；下载重试清理不完整文件，校验失败
+  禁止安装并重新下载，安装启动失败优先复用仍有效的已校验安装包。前后端均须阻止并发更新操作。
+- Release Notes 必须保留 LF / CRLF、空行、段落、无序 / 有序列表和安全的基础粗体；长内容置于有界
+  滚动区域，不直接执行 Release HTML。
 - 安装器只可递归替换或删除安装根目录中的 `program`，不得删除 App Local Data、SQLite、API/MCP
   设置、热力图缓存、用户报告目录或安装根目录中的其他用户文件。SHA-256 只能表述为文件完整性校验；
   当前不宣称 Windows 代码签名。

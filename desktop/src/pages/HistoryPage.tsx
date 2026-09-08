@@ -376,7 +376,8 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       let updated: GenerationResult;
       if (action === "regenerate") {
         updated = await generation.runGeneration(selected.chat_id, selected.display_name,
-          selected.period_start.slice(0, 10), selected.period_end.slice(0, 10), "single", false, selected.report_id);
+          selected.period_start.slice(0, 10), selected.period_end.slice(0, 10), "single",
+          { source: "regenerate", reportId: selected.report_id });
       } else {
         updated = await bridge<GenerationResult>(action === "anonymous" ? "anonymous_report" : "delete_report", {report_id: selected.report_id});
       }

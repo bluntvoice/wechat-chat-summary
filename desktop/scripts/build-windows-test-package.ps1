@@ -137,6 +137,7 @@ if (-not $env:CARGO_HOME) { $env:CARGO_HOME = Join-Path $cacheRoot "cargo-home" 
 $env:CARGO_TARGET_DIR = $cargoTarget
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
+$env:WECHAT_CHAT_SUMMARY_BUILD_CHANNEL = $PackageKind.ToLowerInvariant()
 
 if (-not $SkipDependencyInstall) {
     Write-Host "[1/5] 安装/校验 Python 与前端依赖"

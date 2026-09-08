@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const packageInfo = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const versionScript = fileURLToPath(new URL("../scripts/version.mjs", import.meta.url));
 const releaseWorkflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+const testWorkflow = readFileSync(new URL("../../.github/workflows/build-test.yml", import.meta.url), "utf8");
+const packageScript = readFileSync(new URL("../scripts/build-windows-test-package.ps1", import.meta.url), "utf8");
 
 test("release version guard accepts a source version already staged for the target patch", () => {
   const result = spawnSync(process.execPath, [versionScript, "--assert-not-lower", packageInfo.version], {
@@ -28,4 +30,11 @@ test("release workflow only requires version-file diffs when the target was not 
   assert.match(releaseWorkflow, /version_changed=/);
   assert.match(releaseWorkflow, /VERSION_CHANGED/);
   assert.match(releaseWorkflow, /if \(\$env:VERSION_CHANGED -eq "true"\)/);
+});
+
+test("test workflow stages the target version only in the runner and injects an explicit channel", () => {
+  assert.match(testWorkflow, /target_version:/);
+  assert.match(testWorkflow, /node scripts\/version\.mjs --set \$env:TARGET_VERSION/);
+  assert.match(testWorkflow, /-PackageKind Test/);
+  assert.match(packageScript, /WECHAT_CHAT_SUMMARY_BUILD_CHANNEL = \$PackageKind\.ToLowerInvariant\(\)/);
 });

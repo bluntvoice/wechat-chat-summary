@@ -60,7 +60,9 @@ struct UpdateInner {
     available: Mutex<Option<AvailableUpdate>>,
     verified: Mutex<Option<VerifiedUpdate>>,
     cancel_requested: AtomicBool,
+    action_running: AtomicBool,
     downloading: AtomicBool,
+    installing: AtomicBool,
 }
 
 #[derive(Clone, Default)]
@@ -73,14 +75,18 @@ pub struct UpdateCheckResult {
     status: String,
     current_version: String,
     latest_version: String,
+    current_channel: String,
+    latest_channel: String,
     release_url: String,
     published_at: Option<String>,
     notes_summary: String,
+    release_notes: String,
     installer_size: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DownloadProgress {
+    phase: String,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
     percent: Option<u8>,
@@ -95,6 +101,66 @@ pub struct DownloadResult {
 
 struct DownloadGuard {
     inner: Arc<UpdateInner>,
+}
+
+struct InstallGuard {
+    inner: Arc<UpdateInner>,
+}
+
+struct UpdateActionGuard {
+    inner: Arc<UpdateInner>,
+}
+
+impl UpdateActionGuard {
+    fn acquire(inner: &Arc<UpdateInner>) -> Result<Self, String> {
+        if inner.action_running.swap(true, Ordering::SeqCst) {
+            return Err("已有更新操作正在执行，请稍后重试。".to_string());
+        }
+        Ok(Self {
+            inner: inner.clone(),
+        })
+    }
+}
+
+impl Drop for UpdateActionGuard {
+    fn drop(&mut self) {
+        self.inner.action_running.store(false, Ordering::SeqCst);
+    }
+}
+
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        self.inner.installing.store(false, Ordering::SeqCst);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildChannel {
+    Stable,
+    Prerelease,
+    Test,
+}
+
+impl BuildChannel {
+    fn current() -> Self {
+        match option_env!("WECHAT_CHAT_SUMMARY_BUILD_CHANNEL")
+            .unwrap_or("stable")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "test" => Self::Test,
+            "prerelease" => Self::Prerelease,
+            _ => Self::Stable,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Prerelease => "prerelease",
+            Self::Test => "test",
+        }
+    }
 }
 
 impl Drop for DownloadGuard {
@@ -188,9 +254,30 @@ fn summarize_release_notes(body: Option<&str>) -> String {
     }
 }
 
+fn base_version(version: &Version) -> Version {
+    Version::new(version.major, version.minor, version.patch)
+}
+
+fn should_offer_stable_update(
+    current: &Version,
+    current_channel: BuildChannel,
+    remote: &Version,
+) -> bool {
+    let current_base = base_version(current);
+    let remote_base = base_version(remote);
+    if remote_base > current_base {
+        return true;
+    }
+    if remote_base < current_base {
+        return false;
+    }
+    current_channel != BuildChannel::Stable || !current.pre.is_empty()
+}
+
 fn resolve_release(
     release: GitHubRelease,
     current_version: &str,
+    current_channel: BuildChannel,
 ) -> Result<(UpdateCheckResult, Option<AvailableUpdate>), String> {
     if release.draft || release.prerelease {
         return Err("普通更新通道只接受已发布的 Stable Release。".to_string());
@@ -201,16 +288,20 @@ fn resolve_release(
     validate_release_page_url(&release.html_url, &remote.to_string())?;
     let latest_version = remote.to_string();
     let notes_summary = summarize_release_notes(release.body.as_deref());
+    let release_notes = release.body.clone().unwrap_or_default();
     let base = UpdateCheckResult {
         status: "latest".to_string(),
         current_version: current.to_string(),
         latest_version: latest_version.clone(),
+        current_channel: current_channel.as_str().to_string(),
+        latest_channel: BuildChannel::Stable.as_str().to_string(),
         release_url: release.html_url.clone(),
         published_at: release.published_at.clone(),
         notes_summary: notes_summary.clone(),
+        release_notes,
         installer_size: None,
     };
-    if remote <= current {
+    if !should_offer_stable_update(&current, current_channel, &remote) {
         return Ok((base, None));
     }
 
@@ -263,9 +354,11 @@ fn fetch_latest_release(client: &Client) -> Result<GitHubRelease, String> {
 fn check_update_inner(
     inner: &Arc<UpdateInner>,
     current_version: &str,
+    current_channel: BuildChannel,
 ) -> Result<UpdateCheckResult, String> {
-    if inner.downloading.load(Ordering::SeqCst) {
-        return Err("更新正在下载，请稍后再检查。".to_string());
+    let _action_guard = UpdateActionGuard::acquire(inner)?;
+    if inner.downloading.load(Ordering::SeqCst) || inner.installing.load(Ordering::SeqCst) {
+        return Err("更新任务正在执行，请稍后再检查。".to_string());
     }
     *inner
         .available
@@ -276,7 +369,7 @@ fn check_update_inner(
         .lock()
         .map_err(|_| "更新状态锁已损坏。".to_string())? = None;
     let release = fetch_latest_release(&http_client(CHECK_TIMEOUT)?)?;
-    let (result, available) = resolve_release(release, current_version)?;
+    let (result, available) = resolve_release(release, current_version, current_channel)?;
     *inner
         .available
         .lock()
@@ -383,6 +476,7 @@ fn copy_download<R: Read, W: Write>(
     let mut downloaded = 0_u64;
     let mut hasher = Sha256::new();
     progress(DownloadProgress {
+        phase: "downloading".to_string(),
         downloaded_bytes: 0,
         total_bytes: expected_total,
         percent: expected_total.map(|_| 0),
@@ -409,6 +503,7 @@ fn copy_download<R: Read, W: Write>(
             .filter(|total| *total > 0)
             .map(|total| ((downloaded.saturating_mul(100) / total).min(100)) as u8);
         progress(DownloadProgress {
+            phase: "downloading".to_string(),
             downloaded_bytes: downloaded,
             total_bytes: expected_total,
             percent,
@@ -498,6 +593,10 @@ fn download_update_inner(
     app: &AppHandle,
     inner: Arc<UpdateInner>,
 ) -> Result<DownloadResult, String> {
+    let _action_guard = UpdateActionGuard::acquire(&inner)?;
+    if inner.installing.load(Ordering::SeqCst) {
+        return Err("安装程序正在启动，请勿重复操作。".to_string());
+    }
     if inner.downloading.swap(true, Ordering::SeqCst) {
         return Err("更新正在下载，请勿重复操作。".to_string());
     }
@@ -505,6 +604,10 @@ fn download_update_inner(
         inner: inner.clone(),
     };
     inner.cancel_requested.store(false, Ordering::SeqCst);
+    *inner
+        .verified
+        .lock()
+        .map_err(|_| "更新状态锁已损坏。".to_string())? = None;
     let update = inner
         .available
         .lock()
@@ -521,17 +624,20 @@ fn download_update_inner(
         &update.version,
         &update.checksum.name,
     )?;
+    *inner
+        .verified
+        .lock()
+        .map_err(|_| "更新状态锁已损坏。".to_string())? = None;
 
     let target_dir = prepare_target_dir(&update.version)?;
-
-    let client = http_client(DOWNLOAD_TIMEOUT)?;
-    let checksum_text = read_small_text(open_download(&client, &update.checksum)?)?;
-    let expected_hash = parse_checksum(&checksum_text, &update.installer.name)?;
     let part_path = target_dir.join(format!("{}.part", update.installer.name));
     let installer_path = target_dir.join(&update.installer.name);
     remove_owned_file(&part_path)?;
     remove_owned_file(&installer_path)?;
     let result = (|| {
+        let client = http_client(DOWNLOAD_TIMEOUT)?;
+        let checksum_text = read_small_text(open_download(&client, &update.checksum)?)?;
+        let expected_hash = parse_checksum(&checksum_text, &update.installer.name)?;
         let mut response = open_download(&client, &update.installer)?;
         let content_length = response.content_length();
         if content_length.unwrap_or(update.installer.size) > MAX_INSTALLER_BYTES {
@@ -551,6 +657,15 @@ fn download_update_inner(
                 let _ = app.emit("update-download-progress", payload);
             },
         )?;
+        let _ = app.emit(
+            "update-download-progress",
+            DownloadProgress {
+                phase: "verifying".to_string(),
+                downloaded_bytes: bytes,
+                total_bytes: content_length,
+                percent: Some(100),
+            },
+        );
         verify_hash(&expected_hash, &actual_hash)?;
         fs::rename(&part_path, &installer_path)
             .map_err(|_| "无法完成更新临时文件写入。".to_string())?;
@@ -632,10 +747,13 @@ pub async fn check_update(
     state: State<'_, UpdateProcessState>,
 ) -> Result<UpdateCheckResult, String> {
     let current_version = app.package_info().version.to_string();
+    let current_channel = BuildChannel::current();
     let inner = state.inner.clone();
-    tauri::async_runtime::spawn_blocking(move || check_update_inner(&inner, &current_version))
-        .await
-        .map_err(|_| "检查更新任务异常结束。".to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        check_update_inner(&inner, &current_version, current_channel)
+    })
+    .await
+    .map_err(|_| "检查更新任务异常结束。".to_string())?
 }
 
 #[tauri::command]
@@ -675,6 +793,16 @@ pub fn launch_verified_update(
     app: AppHandle,
     state: State<'_, UpdateProcessState>,
 ) -> Result<(), String> {
+    let _action_guard = UpdateActionGuard::acquire(&state.inner)?;
+    if state.inner.downloading.load(Ordering::SeqCst) {
+        return Err("更新仍在下载或校验，暂时不能启动安装。".to_string());
+    }
+    if state.inner.installing.swap(true, Ordering::SeqCst) {
+        return Err("安装程序正在启动，请勿重复操作。".to_string());
+    }
+    let _guard = InstallGuard {
+        inner: state.inner.clone(),
+    };
     let verified = state
         .inner
         .verified
@@ -732,21 +860,21 @@ mod tests {
     #[test]
     fn semver_comparison_handles_double_digit_minor_and_no_downgrade() {
         assert_eq!(
-            resolve_release(release("1.10.0"), "1.9.0")
+            resolve_release(release("1.10.0"), "1.9.0", BuildChannel::Stable)
                 .unwrap()
                 .0
                 .status,
             "available"
         );
         assert_eq!(
-            resolve_release(release("1.9.0"), "1.10.0")
+            resolve_release(release("1.9.0"), "1.10.0", BuildChannel::Stable)
                 .unwrap()
                 .0
                 .status,
             "latest"
         );
         assert_eq!(
-            resolve_release(release("1.10.0"), "1.10.0")
+            resolve_release(release("1.10.0"), "1.10.0", BuildChannel::Stable)
                 .unwrap()
                 .0
                 .status,
@@ -755,13 +883,65 @@ mod tests {
     }
 
     #[test]
+    fn stable_update_priority_covers_stable_prerelease_and_test_builds() {
+        let stable_1_1 = Version::parse("1.1.0").unwrap();
+        let stable_1_2 = Version::parse("1.2.0").unwrap();
+        let stable_1_3 = Version::parse("1.3.0").unwrap();
+        let prerelease_1_2 = Version::parse("1.2.0-beta.1").unwrap();
+
+        assert!(should_offer_stable_update(
+            &stable_1_1,
+            BuildChannel::Stable,
+            &stable_1_2
+        ));
+        assert!(!should_offer_stable_update(
+            &stable_1_2,
+            BuildChannel::Stable,
+            &stable_1_2
+        ));
+        assert!(should_offer_stable_update(
+            &stable_1_2,
+            BuildChannel::Test,
+            &stable_1_2
+        ));
+        assert!(should_offer_stable_update(
+            &prerelease_1_2,
+            BuildChannel::Prerelease,
+            &stable_1_2
+        ));
+        assert!(should_offer_stable_update(
+            &stable_1_1,
+            BuildChannel::Test,
+            &stable_1_2
+        ));
+        assert!(!should_offer_stable_update(
+            &stable_1_3,
+            BuildChannel::Test,
+            &stable_1_2
+        ));
+    }
+
+    #[test]
+    fn release_notes_preserve_line_endings_blank_lines_and_lists() {
+        let mut item = release("1.2.0");
+        let notes = "## 版本亮点\r\n\r\n- 第一项\r\n- 第二项\r\n\r\n1. 步骤一\r\n2. 步骤二";
+        item.body = Some(notes.to_string());
+        let result = resolve_release(item, "1.1.0", BuildChannel::Stable)
+            .unwrap()
+            .0;
+        assert_eq!(result.release_notes, notes);
+        assert_eq!(result.current_channel, "stable");
+        assert_eq!(result.latest_channel, "stable");
+    }
+
+    #[test]
     fn draft_and_prerelease_are_rejected() {
         let mut draft = release("1.0.0");
         draft.draft = true;
-        assert!(resolve_release(draft, "0.9.0").is_err());
+        assert!(resolve_release(draft, "0.9.0", BuildChannel::Stable).is_err());
         let mut prerelease = release("1.0.0");
         prerelease.prerelease = true;
-        assert!(resolve_release(prerelease, "0.9.0").is_err());
+        assert!(resolve_release(prerelease, "0.9.0", BuildChannel::Stable).is_err());
         assert!(parse_release_version("v1.0.0-rc.1").is_err());
     }
 
@@ -769,18 +949,18 @@ mod tests {
     fn installer_selection_requires_exact_unique_assets() {
         let mut missing = release("1.0.0");
         missing.assets.clear();
-        assert!(resolve_release(missing, "0.9.0").is_err());
+        assert!(resolve_release(missing, "0.9.0", BuildChannel::Stable).is_err());
 
         let mut missing_checksum = release("1.0.0");
         missing_checksum
             .assets
             .retain(|asset| !asset.name.ends_with(".sha256"));
-        assert!(resolve_release(missing_checksum, "0.9.0").is_err());
+        assert!(resolve_release(missing_checksum, "0.9.0", BuildChannel::Stable).is_err());
 
         let mut duplicated = release("1.0.0");
         duplicated.assets.push(duplicated.assets[0].clone());
-        assert!(resolve_release(duplicated, "0.9.0").is_err());
-        let resolved = resolve_release(release("1.0.0"), "0.9.0")
+        assert!(resolve_release(duplicated, "0.9.0", BuildChannel::Stable).is_err());
+        let resolved = resolve_release(release("1.0.0"), "0.9.0", BuildChannel::Stable)
             .unwrap()
             .1
             .unwrap();
@@ -869,6 +1049,40 @@ mod tests {
         assert_eq!(progress.last().unwrap().percent, None);
     }
 
+    struct ByteAtATimeReader {
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+
+    impl Read for ByteAtATimeReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.offset >= self.bytes.len() {
+                return Ok(0);
+            }
+            buffer[0] = self.bytes[self.offset];
+            self.offset += 1;
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn download_progress_can_report_zero_quarters_and_completion() {
+        let cancel = AtomicBool::new(false);
+        let mut progress = Vec::new();
+        copy_download(
+            &mut ByteAtATimeReader {
+                bytes: b"data".to_vec(),
+                offset: 0,
+            },
+            &mut Vec::new(),
+            Some(4),
+            &cancel,
+            |item| progress.push(item.percent.unwrap()),
+        )
+        .unwrap();
+        assert_eq!(progress, vec![0, 25, 50, 75, 100]);
+    }
+
     struct InterruptedReader {
         sent: bool,
     }
@@ -907,6 +1121,34 @@ mod tests {
     }
 
     #[test]
+    fn failed_at_forty_percent_can_restart_from_zero_and_complete() {
+        let cancel = AtomicBool::new(false);
+        let mut failed_progress = Vec::new();
+        let first = copy_download(
+            &mut InterruptedReader { sent: false },
+            &mut Vec::new(),
+            Some(10),
+            &cancel,
+            |item| failed_progress.push(item.percent.unwrap()),
+        );
+        assert!(first.is_err());
+        assert_eq!(failed_progress, vec![0, 40]);
+
+        let mut retry_progress = Vec::new();
+        let payload = b"0123456789";
+        let retry = copy_download(
+            &mut Cursor::new(payload),
+            &mut Vec::new(),
+            Some(payload.len() as u64),
+            &cancel,
+            |item| retry_progress.push(item.percent.unwrap()),
+        );
+        assert!(retry.is_ok());
+        assert_eq!(retry_progress.first(), Some(&0));
+        assert_eq!(retry_progress.last(), Some(&100));
+    }
+
+    #[test]
     fn update_files_use_the_system_temporary_directory() {
         let target = safe_version_dir("1.2.3").unwrap();
         assert!(target.starts_with(std::env::temp_dir()));
@@ -925,5 +1167,14 @@ mod tests {
 
         launch_and_exit(|| Ok(()), || exited.set(true)).unwrap();
         assert!(exited.get());
+    }
+
+    #[test]
+    fn a_single_backend_guard_serializes_check_download_and_install_actions() {
+        let inner = Arc::new(UpdateInner::default());
+        let first = UpdateActionGuard::acquire(&inner).unwrap();
+        assert!(UpdateActionGuard::acquire(&inner).is_err());
+        drop(first);
+        assert!(UpdateActionGuard::acquire(&inner).is_ok());
     }
 }

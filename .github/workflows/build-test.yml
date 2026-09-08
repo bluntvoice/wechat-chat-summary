@@ -2,6 +2,12 @@ name: Build Windows test installer
 
 on:
   workflow_dispatch:
+    inputs:
+      target_version:
+        description: "测试安装包目标基础版本（不带 v，例如 1.2.0）"
+        required: true
+        default: "1.2.0"
+        type: string
 
 permissions:
   contents: read
@@ -53,10 +59,18 @@ jobs:
           python -m pip install -r requirements.txt -r desktop/requirements-build.txt
           npm ci --prefix desktop
 
-      - name: Check version consistency
+      - name: Set ephemeral test package version
         working-directory: desktop
         shell: pwsh
-        run: npm run version:check
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          if ($env:TARGET_VERSION -notmatch '^\d+\.\d+\.\d+$') {
+            throw "测试安装包目标版本必须使用 x.y.z。"
+          }
+          node scripts/version.mjs --assert-not-lower $env:TARGET_VERSION
+          node scripts/version.mjs --set $env:TARGET_VERSION
+          npm run version:check
 
       - name: Run updater tests
         shell: pwsh

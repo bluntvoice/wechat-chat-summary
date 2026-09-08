@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import { bridge } from "../services/desktopBridge";
-import type { BatchGenerationItem, GenerationResult, Progress, Settings } from "../types/desktop";
+import { useGenerationTaskContext } from "../contexts/GenerationTaskContext";
+import type { BatchGenerationItem, GenerationResult, GenerationSource, Progress, Settings } from "../types/desktop";
 
 type GenerationOptions = {
   settings: Settings;
@@ -24,13 +25,13 @@ export function useReportGeneration({
   saveSettings,
   beforeGeneration,
 }: GenerationOptions) {
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<Progress | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [batchResults, setBatchResults] = useState<BatchGenerationItem[]>([]);
-  const generationGuard = useRef(false);
+  const { currentTask, startTask, updateProgress, finishTask } = useGenerationTaskContext();
   const progressTimer = useRef<number | null>(null);
   const elapsedTimer = useRef<number | null>(null);
+  const lastProgress = useRef<Progress>({ stage: "waiting", percent: 0, message: "等待分析引擎启动…", elapsed_seconds: 0 });
 
   function stopProgressTimers() {
     if (progressTimer.current) window.clearInterval(progressTimer.current);
@@ -41,40 +42,46 @@ export function useReportGeneration({
 
   useEffect(() => stopProgressTimers, []);
 
-  function applyProgress(snapshot: Progress, startedAt: number, scale?: ProgressScale) {
+  function applyProgress(taskId: string, snapshot: Progress, startedAt: number, scale?: ProgressScale) {
     const elapsedBase = scale?.batchStartedAt ?? startedAt;
     const percent = scale
       ? Math.round(((scale.index + Math.max(0, Math.min(100, snapshot.percent)) / 100) / scale.total) * 100)
       : snapshot.percent;
-    setProgress({
+    const nextProgress = {
       ...snapshot,
       percent,
       message: scale ? `${scale.label} · ${snapshot.message}` : snapshot.message,
       elapsed_seconds: Math.floor((Date.now() - elapsedBase) / 1000),
-    });
+    };
+    lastProgress.current = nextProgress;
+    updateProgress(taskId, nextProgress);
   }
 
   async function generateOne(
+    taskId: string,
     targetChatId: string,
     targetChatName: string,
     start: string,
     end: string,
     rangeMode: "single" | "custom",
+    source: GenerationSource,
     scale?: ProgressScale,
     reportId?: string,
   ) {
-    const jobId = crypto.randomUUID();
+    const jobId = `${taskId}-${crypto.randomUUID()}`;
     const startedAt = Date.now();
-    applyProgress({ stage: "waiting", percent: 0, message: "等待分析引擎启动…", elapsed_seconds: 0 }, startedAt, scale);
+        applyProgress(taskId, { stage: "waiting", percent: 0, message: "等待分析引擎启动…", elapsed_seconds: 0 }, startedAt, scale);
     elapsedTimer.current = window.setInterval(() => {
-      setProgress((current) => current ? {
-        ...current,
+      const nextProgress = {
+        ...lastProgress.current,
         elapsed_seconds: Math.floor((Date.now() - (scale?.batchStartedAt ?? startedAt)) / 1000),
-      } : current);
+      };
+      lastProgress.current = nextProgress;
+      updateProgress(taskId, nextProgress);
     }, 500);
     progressTimer.current = window.setInterval(() => {
       bridge<Progress>("get_progress", { job_id: jobId })
-        .then((snapshot) => applyProgress(snapshot, startedAt, scale))
+        .then((snapshot) => applyProgress(taskId, snapshot, startedAt, scale))
         .catch(() => undefined);
     }, 900);
     try {
@@ -87,6 +94,7 @@ export function useReportGeneration({
         start: `${start} 00:00:00`,
         end: `${end} 23:59:59`,
         export_root: settings.export_root,
+        generation_source: source,
       });
     } finally {
       stopProgressTimers();
@@ -114,23 +122,24 @@ export function useReportGeneration({
     start: string,
     end: string,
     rangeMode: "single" | "custom",
-    scheduled = false,
-    reportId?: string,
+    options: { source?: GenerationSource; reportId?: string } = {},
   ) {
-    if (generationGuard.current) throw new Error("已有生成任务正在执行。");
-    generationGuard.current = true;
+    const source = options.source || "manual";
+    const reportId = options.reportId;
+    const taskId = crypto.randomUUID();
+    startTask({ task_id: taskId, source, chat_id: targetChatId, chat_name: targetChatName, start_date: start, end_date: end });
     const startedAt = Date.now();
-    setBusy(true);
+    setLocalBusy(true);
     setResult(null);
     setBatchResults([]);
     beforeGeneration();
-    setMessage(scheduled ? `正在执行 ${targetChatName || "已设群聊"} 的定时日报…` : "正在生成总结，进度会按真实处理阶段更新。");
+    setMessage(source === "scheduled" ? `正在执行 ${targetChatName || "已设群聊"} 的定时日报…` : source === "regenerate" ? `正在重新生成 ${targetChatName} 的历史报告…` : "正在生成总结，进度会按真实处理阶段更新。");
     try {
-      if (!scheduled && !reportId) await saveSettings(false);
-      const generated = await generateOne(targetChatId, targetChatName, start, end, rangeMode, undefined, reportId);
+      if (source === "manual" && !reportId) await saveSettings(false);
+      const generated = await generateOne(taskId, targetChatId, targetChatName, start, end, rangeMode, source, undefined, reportId);
       const summarizedChatIds = await refreshedChatIds(targetChatId, generated.summarized_chat_ids || []);
       setResult(generated);
-      setProgress({
+      finishTask(taskId, "success", {
         stage: "completed",
         percent: 100,
         message: "报告生成完成",
@@ -142,21 +151,20 @@ export function useReportGeneration({
         last_chat_name: targetChatName,
         summarized_chat_ids: summarizedChatIds,
       }));
-      setMessage(scheduled ? "定时日报已生成，PNG 与 HTML 均可直接打开。" : "报告已生成，PNG 与 HTML 均可直接打开。");
+      setMessage(source === "scheduled" ? "定时日报已生成，PNG 与 HTML 均可直接打开。" : "报告已生成，PNG 与 HTML 均可直接打开。");
       return generated;
     } catch (error) {
-      setProgress((current) => ({
+      finishTask(taskId, "failed", {
         stage: "failed",
-        percent: current?.percent || 0,
+        percent: lastProgress.current.percent || 0,
         message: "生成失败",
         elapsed_seconds: Math.floor((Date.now() - startedAt) / 1000),
-      }));
+      });
       setMessage(error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
       stopProgressTimers();
-      generationGuard.current = false;
-      setBusy(false);
+      setLocalBusy(false);
     }
   }
 
@@ -166,8 +174,10 @@ export function useReportGeneration({
     dates: string[],
     preserveExisting = false,
   ) {
+    const taskId = crypto.randomUUID();
+    startTask({ task_id: taskId, source: "manual", chat_id: targetChatId, chat_name: targetChatName, start_date: dates[0] || "", end_date: dates.at(-1) || "" });
     const batchStartedAt = Date.now();
-    setBusy(true);
+    setLocalBusy(true);
     setResult(null);
     beforeGeneration();
     if (preserveExisting) {
@@ -184,7 +194,7 @@ export function useReportGeneration({
         setMessage(`${label} · 正在生成单日报告…`);
         let item: BatchGenerationItem;
         try {
-          const generated = await generateOne(targetChatId, targetChatName, date, date, "single", {
+          const generated = await generateOne(taskId, targetChatId, targetChatName, date, date, "single", "manual", {
             index,
             total: dates.length,
             label,
@@ -215,7 +225,7 @@ export function useReportGeneration({
           summarized_chat_ids: summarizedChatIds,
         }));
       }
-      setProgress({
+      finishTask(taskId, failed.length ? "failed" : "success", {
         stage: failed.length ? "completed_with_errors" : "completed",
         percent: 100,
         message: failed.length ? "批量任务已完成，部分日期失败" : "批量任务已完成",
@@ -223,17 +233,26 @@ export function useReportGeneration({
       });
       setMessage(`逐日生成完成：成功 ${successes.length} 天，跳过 ${skipped.length} 天，失败 ${failed.length} 天。`);
       return completed;
+    } catch (error) {
+      finishTask(taskId, "failed", {
+        stage: "failed",
+        percent: lastProgress.current.percent || 0,
+        message: "生成失败",
+        elapsed_seconds: Math.floor((Date.now() - batchStartedAt) / 1000),
+      });
+      setMessage(error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       stopProgressTimers();
-      generationGuard.current = false;
-      setBusy(false);
+      setLocalBusy(false);
     }
   }
 
   return {
-    busy,
-    setBusy,
-    progress,
+    busy: localBusy || Boolean(currentTask && ["queued", "running"].includes(currentTask.status)),
+    setBusy: setLocalBusy,
+    progress: currentTask?.progress || null,
+    currentTask,
     result,
     setResult,
     batchResults,
