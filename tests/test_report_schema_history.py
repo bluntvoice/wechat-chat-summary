@@ -172,6 +172,8 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertIn("PNG 也必须保留这段讨论脉络", html)
         self.assertIn("PNG 也必须保留引用原话", html)
         self.assertIn("这是原话保留原因", html)
+        self.assertIn("--topic-body-size:14px", html)
+        self.assertIn(".quote-meta{font-size:var(--topic-body-size)", html)
         self.assertNotIn("body.export-png .html-detail", html)
         self.assertNotIn("resource-group:nth-of-type", html)
         self.assertNotIn("new URLSearchParams", html)
@@ -452,7 +454,7 @@ class ReportSchemaHistoryTests(unittest.TestCase):
                     "time_ranges": [{"start": "09:00", "end": "09:30"}, {"start": "16:00", "end": "16:20"}],
                     "discussion_flow": "先提出清单，再补充交付顺序。",
                     "outcome": {"content": "分批交付。", "tone": "formal", "confidence": 0.9},
-                    "quotes": [{"speaker": "小甲", "quote": "先把清单定下来。"}],
+                    "quotes": [{"speaker": "小甲", "time": "2026-09-03 09:18", "quote": "先把清单定下来。"}],
                     "action_items": [{"task": "整理最终清单", "tone": "formal", "confidence": 0.9}],
                 }],
                 "ai_observations": [{"title": "讨论特点", "content": "讨论由问题确认逐步转向执行安排。"}],
@@ -479,6 +481,13 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("先提出清单，再补充交付顺序。", html)
         self.assertIn("先把清单定下来。", html)
+        self.assertIn('class="quote-speaker"', html)
+        self.assertIn('class="quote-time">2026-09-03 09:18</span>', html)
+        self.assertIn('--topic-body-size:14px', html)
+        self.assertIn('.discussion-flow{line-height:1.72;font-size:var(--topic-body-size)}', html)
+        self.assertIn('.quote-meta{font-size:var(--topic-body-size)', html)
+        self.assertIn('.quote-speaker{color:#3478bd;font-weight:800}', html)
+        self.assertIn('.quote-time,.quote-separator{color:var(--muted);font-weight:400}', html)
         self.assertNotIn("整理最终清单", html)
         self.assertNotIn("讨论落点", html)
         self.assertNotIn("分批交付。", html)

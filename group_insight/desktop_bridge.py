@@ -165,6 +165,11 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
     export_root = Path(str(payload.get("export_root") or settings.get("export_root"))).expanduser()
     export_root.mkdir(parents=True, exist_ok=True)
     job_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("job_id") or "current"))[:80] or "current"
+    generation_source = "regenerate" if payload.get("regenerated_from_report_id") else str(
+        payload.get("generation_source") or "manual"
+    ).strip().lower()
+    if generation_source not in {"manual", "scheduled", "regenerate"}:
+        raise ValueError("生成来源必须是 manual、scheduled 或 regenerate。")
     jobs_dir = ensure_desktop_data_dir() / "jobs"
     progress_path = jobs_dir / f"{job_id}.json"
     result_path = jobs_dir / f"{job_id}.result.json"
@@ -219,7 +224,7 @@ def _generate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
                 else "OPENAI_COMPATIBLE_API_KEY"
             ): api_key,
             "GROUP_INSIGHT_NO_VENV_REDIRECT": "1",
-            "GROUP_INSIGHT_GENERATION_SOURCE": "regenerate" if payload.get("regenerated_from_report_id") else "normal",
+            "GROUP_INSIGHT_GENERATION_SOURCE": generation_source,
             "GROUP_INSIGHT_REGENERATED_FROM": str(payload.get("regenerated_from_report_id") or ""),
         }
     )

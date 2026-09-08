@@ -22,9 +22,11 @@ test("update checks are manual and expose all user-facing states", () => {
   assert.doesNotMatch(mountEffects, /check_update/);
   assert.match(aboutPage, /onClick=\{checkForUpdates\}/);
   assert.match(aboutPage, /正在检查…/);
-  assert.match(aboutPage, /已是最新版本/);
-  assert.match(aboutPage, /发现新版本 v/);
-  assert.match(aboutPage, /检查更新失败，请稍后重试/);
+  assert.match(aboutPage, /已是最新正式版本/);
+  for (const status of ["update_available", "downloading", "verifying", "ready_to_install", "installing", "check_failed", "download_failed", "verify_failed", "install_failed"]) {
+    assert.match(aboutPage, new RegExp(`"${status}"`));
+  }
+  assert.match(aboutPage, /检查更新失败，可直接重新检查/);
 });
 
 test("About uses matching lightweight actions and states the network boundary", () => {
@@ -34,9 +36,31 @@ test("About uses matching lightweight actions and states the network boundary", 
   assert.match(aboutPage, /className="spinning"/);
   assert.match(aboutPage, /secondary about-action[^>]+onClick=\{copyProjectUrl\}/);
   assert.match(aboutPage, /secondary about-action[^>]+onClick=\{checkForUpdates\}/);
-  assert.match(aboutPage, /仅在点击检查更新后访问 GitHub/);
+  assert.match(aboutPage, /仅在点击检查更新后访问本项目官方 GitHub Stable Release/);
   assert.match(aboutPage, /不上传聊天、API Key、历史数据库、报告或群聊名称/);
   assert.match(aboutPage, /尚未进行代码签名/);
+});
+
+test("updater keeps release context and offers stage-specific retries", () => {
+  assert.match(aboutPage, /setProgress\(\{ phase: "downloading", downloaded_bytes: 0, total_bytes: null, percent: null \}\)/);
+  assert.match(aboutPage, /setErrorDetail\(""\)/);
+  assert.match(aboutPage, /更新下载失败，已清理不完整文件，可直接重新下载/);
+  assert.match(aboutPage, /安装包校验失败，损坏文件已废弃，请重新下载/);
+  assert.match(aboutPage, /已校验安装包仍保留，可直接重新安装/);
+  assert.match(aboutPage, />重新下载</);
+  assert.match(aboutPage, />重新安装</);
+  assert.match(aboutPage, /actionGuard\.current/);
+  assert.match(updater, /installing\.swap\(true, Ordering::SeqCst\)/);
+  assert.match(updater, /phase: "verifying"\.to_string\(\)/);
+});
+
+test("build channel is explicit and same-version Stable can replace Test", () => {
+  assert.match(updater, /WECHAT_CHAT_SUMMARY_BUILD_CHANNEL/);
+  assert.match(updater, /BuildChannel::Test/);
+  assert.match(updater, /BuildChannel::Prerelease/);
+  assert.match(updater, /should_offer_stable_update/);
+  assert.match(updater, /current_channel/);
+  assert.match(updater, /latest_channel/);
 });
 
 test("all desktop version files remain synchronized", () => {

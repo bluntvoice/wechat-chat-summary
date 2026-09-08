@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sys
 import json
+import os
+import subprocess
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +12,7 @@ from unittest.mock import patch
 
 from group_insight.desktop_bridge import (
     _ensure_daily_stats,
+    _generate,
     _list_chats,
     _redact_report,
     _refresh_history_state,
@@ -28,6 +31,49 @@ from tests.test_history_center import history_document
 
 
 class DesktopBridgeTests(unittest.TestCase):
+    def test_generation_source_is_validated_and_forwarded_to_shared_pipeline(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": str(Path(temp_dir) / "data")}
+        ):
+            root = Path(temp_dir) / "reports"
+            root.mkdir()
+            exports = {
+                "json_path": str(root / "report.json"),
+                "html_path": str(root / "report.html"),
+                "png_path": str(root / "report.png"),
+            }
+            for path in exports.values():
+                Path(path).write_bytes(b"test")
+            captured_sources: list[str] = []
+
+            def fake_run(command, **kwargs):
+                captured_sources.append(kwargs["env"]["GROUP_INSIGHT_GENERATION_SOURCE"])
+                result_path = Path(command[command.index("--result-file") + 1])
+                result_path.write_text(
+                    json.dumps({"protocol_version": 1, "completed": True, **exports}),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(command, 0, "ok", "")
+
+            settings = {
+                "provider": "deepseek", "api_key": "test-key",
+                "api_url": "https://api.deepseek.com", "model": "deepseek-v4-flash",
+                "wechat_api_url": "http://127.0.0.1:10392", "export_root": str(root),
+            }
+            base = {
+                "chat": "room@chatroom", "chat_name": "测试群",
+                "start": "2026-09-08 00:00:00", "end": "2026-09-08 23:59:59",
+                "export_root": str(root), "range_mode": "single",
+            }
+            with patch("group_insight.desktop_bridge.subprocess.run", side_effect=fake_run):
+                _generate(settings, {**base, "job_id": "manual", "generation_source": "manual"})
+                _generate(settings, {**base, "job_id": "scheduled", "generation_source": "scheduled"})
+                _generate(settings, {**base, "job_id": "regenerate", "regenerated_from_report_id": "old-report"})
+                with self.assertRaisesRegex(ValueError, "生成来源"):
+                    _generate(settings, {**base, "job_id": "invalid", "generation_source": "other"})
+
+            self.assertEqual(captured_sources, ["manual", "scheduled", "regenerate"])
+
     def test_heatmap_daily_stats_never_construct_an_ai_client(self) -> None:
         from group_insight.wechat_data_api import ChatReference
 

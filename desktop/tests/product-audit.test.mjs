@@ -116,7 +116,8 @@ test("history anonymous derivation and regeneration have separate guarded action
   assert.match(history, /不会修改原报告/);
   assert.match(history, /并会产生 AI API 调用/);
   assert.match(generation, /reportId \? "regenerate_report" : "generate"/);
-  assert.match(generation, /if \(!scheduled && !reportId\) await saveSettings\(false\)/);
+  assert.match(generation, /if \(source === "manual" && !reportId\) await saveSettings\(false\)/);
+  assert.match(history, /\{ source: "regenerate", reportId: selected\.report_id \}/);
 });
 
 test("member observation hides only a name duplicated by its card title", () => {

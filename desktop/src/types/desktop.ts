@@ -21,6 +21,8 @@ export type Settings = {
   schedule_last_attempt_date: string;
   schedule_last_run_date: string;
   schedule_last_status: string;
+  schedule_config_version: number;
+  schedule_tasks: ScheduleTask[];
   mcp_enabled: boolean;
   mcp_port: number;
   mcp_host?: string;
@@ -41,6 +43,20 @@ export type McpServerStatus = {
 };
 
 export type Chat = { id: string; name: string; summarized?: boolean };
+
+export type ScheduleTask = {
+  task_id: string;
+  chat_id: string;
+  chat_name: string;
+  time: string;
+  date_mode: "today" | "yesterday";
+  enabled: boolean;
+  created_at: string;
+  last_attempt_date: string;
+  last_run_at: string;
+  last_report_date: string;
+  last_run_status: "" | "pending" | "running" | "success" | "failed";
+};
 
 export type HeatmapMetric = "message_count" | "participant_count" | "effective_message_count";
 
@@ -201,6 +217,20 @@ export type Progress = {
   elapsed_seconds: number;
 };
 
+export type GenerationSource = "manual" | "scheduled" | "regenerate";
+export type GenerationTaskStatus = "queued" | "running" | "success" | "failed" | "cancelled";
+export type GenerationTask = {
+  task_id: string;
+  source: GenerationSource;
+  chat_id: string;
+  chat_name: string;
+  start_date: string;
+  end_date: string;
+  started_at: string;
+  status: GenerationTaskStatus;
+  progress: Progress;
+};
+
 export type RedactionTarget = {
   id: string;
   module_key: string;
@@ -233,6 +263,8 @@ export const INITIAL_SETTINGS: Settings = {
   schedule_last_attempt_date: "",
   schedule_last_run_date: "",
   schedule_last_status: "",
+  schedule_config_version: 2,
+  schedule_tasks: [],
   mcp_enabled: false,
   mcp_port: 8765,
 };

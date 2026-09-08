@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -141,6 +142,84 @@ class DesktopConfigTests(unittest.TestCase):
             )
             with self.assertRaises(ValueError):
                 save_desktop_settings({"range_output_mode": "weekly"})
+
+    def test_legacy_single_schedule_is_migrated_once_and_persisted(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            config_path = Path(temp_dir, "config.json")
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "schedule_enabled": True,
+                        "schedule_time": "21:45",
+                        "schedule_date_mode": "yesterday",
+                        "schedule_chat_id": "room@chatroom",
+                        "schedule_chat_name": "迁移测试群",
+                        "schedule_last_attempt_date": "2026-09-07",
+                        "schedule_last_run_date": "2026-09-06",
+                        "schedule_last_status": "success",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            first = load_desktop_settings()
+            second = load_desktop_settings()
+            self.assertEqual(first["schedule_config_version"], 2)
+            self.assertEqual(len(first["schedule_tasks"]), 1)
+            self.assertEqual(second["schedule_tasks"], first["schedule_tasks"])
+            task = first["schedule_tasks"][0]
+            self.assertEqual(task["chat_id"], "room@chatroom")
+            self.assertEqual(task["chat_name"], "迁移测试群")
+            self.assertEqual(task["time"], "21:45")
+            self.assertEqual(task["date_mode"], "yesterday")
+            self.assertTrue(task["enabled"])
+            self.assertEqual(task["last_report_date"], "2026-09-06")
+            persisted = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["schedule_tasks"], first["schedule_tasks"])
+
+    def test_multiple_schedule_tasks_persist_by_stable_chat_id(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            tasks = [
+                {
+                    "task_id": "task-a", "chat_id": "a@chatroom", "chat_name": "A群",
+                    "time": "22:30", "date_mode": "today", "enabled": True,
+                    "created_at": "2026-09-08T10:00:00", "last_attempt_date": "",
+                    "last_run_at": "", "last_report_date": "", "last_run_status": "",
+                },
+                {
+                    "task_id": "task-b", "chat_id": "b@chatroom", "chat_name": "B群",
+                    "time": "23:00", "date_mode": "yesterday", "enabled": False,
+                    "created_at": "2026-09-08T10:01:00", "last_attempt_date": "",
+                    "last_run_at": "", "last_report_date": "", "last_run_status": "",
+                },
+            ]
+            saved = save_desktop_settings({"schedule_tasks": tasks})
+            loaded = load_desktop_settings()
+            self.assertEqual(saved["schedule_tasks"], loaded["schedule_tasks"])
+            self.assertEqual([item["chat_id"] for item in loaded["schedule_tasks"]], ["a@chatroom", "b@chatroom"])
+            self.assertFalse(loaded["schedule_tasks"][1]["enabled"])
+
+            renamed = [{**loaded["schedule_tasks"][0], "chat_name": "A群新名称"}, loaded["schedule_tasks"][1]]
+            refreshed = save_desktop_settings({"schedule_tasks": renamed})
+            self.assertEqual(refreshed["schedule_tasks"][0]["chat_id"], "a@chatroom")
+            self.assertEqual(refreshed["schedule_tasks"][0]["chat_name"], "A群新名称")
+
+    def test_schedule_tasks_reject_duplicate_or_missing_chat_ids(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            base = {
+                "task_id": "task-a", "chat_id": "a@chatroom", "chat_name": "A群",
+                "time": "22:30", "date_mode": "today", "enabled": True,
+            }
+            with self.assertRaisesRegex(ValueError, "同一群聊"):
+                save_desktop_settings({"schedule_tasks": [base, {**base, "task_id": "task-b"}]})
+            with self.assertRaisesRegex(ValueError, "缺少群聊 ID"):
+                save_desktop_settings({"schedule_tasks": [{**base, "chat_id": ""}]})
 
 
 if __name__ == "__main__":

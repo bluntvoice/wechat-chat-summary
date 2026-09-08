@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import re
 import shutil
 import sqlite3
 import uuid
@@ -31,6 +32,9 @@ LEGACY_MIGRATION_MARKER = ".legacy-data-migration-v1.json"
 MIGRATED_DATA_FILES = ("config.json", "secrets.env", "history.sqlite3")
 MCP_DEFAULT_HOST = "127.0.0.1"
 MCP_DEFAULT_PORT = 8765
+SCHEDULE_CONFIG_VERSION = 2
+SCHEDULE_TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+SCHEDULE_STATUSES = {"", "pending", "running", "success", "failed"}
 
 
 def normalize_desktop_model(provider: str, model: str) -> str:
@@ -177,6 +181,8 @@ def default_settings() -> dict[str, Any]:
         "schedule_last_attempt_date": "",
         "schedule_last_run_date": "",
         "schedule_last_status": "",
+        "schedule_config_version": SCHEDULE_CONFIG_VERSION,
+        "schedule_tasks": [],
         "summarized_chat_ids": [],
         "mcp_enabled": False,
         "mcp_port": MCP_DEFAULT_PORT,
@@ -189,6 +195,95 @@ def _config_path() -> Path:
 
 def _secret_path() -> Path:
     return ensure_desktop_data_dir() / "secrets.env"
+
+
+def _schedule_task_id(chat_id: str) -> str:
+    """为旧单群配置生成稳定 ID，重复迁移不会产生第二条任务。"""
+
+    digest = hashlib.sha256(chat_id.encode("utf-8")).hexdigest()[:16]
+    return f"schedule-{digest}"
+
+
+def _normalize_schedule_tasks(value: Any) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("定时总结任务必须是数组。")
+    result: list[dict[str, Any]] = []
+    seen_chat_ids: set[str] = set()
+    seen_task_ids: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise ValueError("定时总结任务格式无效。")
+        chat_id = str(raw.get("chat_id") or "").strip()
+        if not chat_id:
+            raise ValueError("定时总结任务缺少群聊 ID。")
+        if chat_id in seen_chat_ids:
+            raise ValueError("同一群聊只能设置一个定时总结任务。")
+        task_id = re.sub(r"[^A-Za-z0-9_-]", "", str(raw.get("task_id") or ""))[:80]
+        task_id = task_id or _schedule_task_id(chat_id)
+        if task_id in seen_task_ids:
+            raise ValueError("定时总结任务 ID 重复。")
+        schedule_time = str(raw.get("time") or "22:30").strip()
+        if not SCHEDULE_TIME_PATTERN.fullmatch(schedule_time):
+            raise ValueError("定时总结时间必须使用 HH:MM 格式。")
+        date_mode = str(raw.get("date_mode") or "today").strip().lower()
+        if date_mode not in {"today", "yesterday"}:
+            raise ValueError("定时报告日期仅支持 today 或 yesterday。")
+        last_status = str(raw.get("last_run_status") or "").strip().lower()
+        if last_status not in SCHEDULE_STATUSES:
+            last_status = ""
+        result.append(
+            {
+                "task_id": task_id,
+                "chat_id": chat_id,
+                "chat_name": str(raw.get("chat_name") or chat_id).strip() or chat_id,
+                "time": schedule_time,
+                "date_mode": date_mode,
+                "enabled": bool(raw.get("enabled", True)),
+                "created_at": str(raw.get("created_at") or ""),
+                "last_attempt_date": str(raw.get("last_attempt_date") or ""),
+                "last_run_at": str(raw.get("last_run_at") or ""),
+                "last_report_date": str(raw.get("last_report_date") or ""),
+                "last_run_status": last_status,
+            }
+        )
+        seen_chat_ids.add(chat_id)
+        seen_task_ids.add(task_id)
+    return result
+
+
+def _migrate_legacy_schedule(
+    settings: dict[str, Any], raw_payload: dict[str, Any]
+) -> bool:
+    """把旧单群配置幂等迁移为任务数组，并保留旧字段供兼容读取。"""
+
+    if "schedule_tasks" in raw_payload:
+        settings["schedule_tasks"] = _normalize_schedule_tasks(raw_payload["schedule_tasks"])
+        settings["schedule_config_version"] = SCHEDULE_CONFIG_VERSION
+        return False
+    chat_id = str(raw_payload.get("schedule_chat_id") or "").strip()
+    if not chat_id:
+        settings["schedule_tasks"] = []
+        settings["schedule_config_version"] = SCHEDULE_CONFIG_VERSION
+        return False
+    settings["schedule_tasks"] = _normalize_schedule_tasks(
+        [
+            {
+                "task_id": _schedule_task_id(chat_id),
+                "chat_id": chat_id,
+                "chat_name": raw_payload.get("schedule_chat_name") or chat_id,
+                "time": raw_payload.get("schedule_time") or "22:30",
+                "date_mode": raw_payload.get("schedule_date_mode") or "today",
+                "enabled": bool(raw_payload.get("schedule_enabled", False)),
+                "last_attempt_date": raw_payload.get("schedule_last_attempt_date") or "",
+                "last_report_date": raw_payload.get("schedule_last_run_date") or "",
+                "last_run_status": raw_payload.get("schedule_last_status") or "",
+            }
+        ]
+    )
+    settings["schedule_config_version"] = SCHEDULE_CONFIG_VERSION
+    return True
 
 
 def _load_secrets(legacy_provider: str = "deepseek") -> dict[str, str]:
@@ -240,10 +335,20 @@ def load_desktop_api_key(provider: str) -> str:
 def load_desktop_settings(*, include_secret: bool = False) -> dict[str, Any]:
     settings = default_settings()
     path = _config_path()
+    raw_payload: dict[str, Any] = {}
     if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
+            raw_payload = payload
             settings.update(payload)
+    migrated = _migrate_legacy_schedule(settings, raw_payload)
+    if migrated:
+        persisted = dict(raw_payload)
+        persisted["schedule_config_version"] = SCHEDULE_CONFIG_VERSION
+        persisted["schedule_tasks"] = settings["schedule_tasks"]
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(persisted, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
     provider = str(settings.get("provider") or "deepseek").strip().lower()
     secrets = _load_secrets(provider)
     secret = secrets.get(provider, "")
@@ -283,6 +388,8 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
         "schedule_last_attempt_date",
         "schedule_last_run_date",
         "schedule_last_status",
+        "schedule_config_version",
+        "schedule_tasks",
         "summarized_chat_ids",
         "mcp_enabled",
         "mcp_port",
@@ -312,6 +419,8 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
     if schedule_date_mode not in {"today", "yesterday"}:
         raise ValueError("定时报告日期仅支持 today 或 yesterday。")
     current["schedule_date_mode"] = schedule_date_mode
+    current["schedule_config_version"] = SCHEDULE_CONFIG_VERSION
+    current["schedule_tasks"] = _normalize_schedule_tasks(current.get("schedule_tasks", []))
     range_output_mode = str(current.get("range_output_mode") or "daily").strip().lower()
     if range_output_mode not in {"daily", "combined"}:
         raise ValueError("自定义日期生成方式仅支持 daily 或 combined。")
