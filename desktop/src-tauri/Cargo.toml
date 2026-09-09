@@ -1,6 +1,6 @@
 [package]
 name = "wechat-chat-summary-desktop"
-version = "1.1.0"
+version = "1.2.0"
 description = "Windows desktop client for local WeChat group summaries"
 authors = ["bluntvoice"]
 edition = "2021"

@@ -1,7 +1,9 @@
 # 群聊拾遗（wechat-chat-summary）
 
 <!-- release-readme:badges:start -->
-[![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) [![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)](https://github.com/bluntvoice/wechat-chat-summary/releases)
+![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)
+
+![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)
 <!-- release-readme:badges:end -->
 
 一个基于本地微信聊天数据的微信群聊统计、AI 总结与历史回顾工具。
@@ -11,7 +13,7 @@
 除了生成单次总结外，项目还提供历史报告管理、全文搜索、群聊活跃热力图、内容屏蔽、多群定时生成以及 MCP Server 等功能。
 
 <!-- release-readme:current-version:start -->
-> 当前版本：**v1.1.0**
+> 当前版本：**v1.2.0**
 <!-- release-readme:current-version:end -->
 <!-- release-readme:release-status:start -->
 > 当前主要面向 Windows 桌面环境。
@@ -194,8 +196,8 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 当前正式版本主要面向 Windows x64。用户可从 [最新版下载页](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) 下载：
 
 ```text
-WeChat-Chat-Summary_1.1.0_x64-setup.exe
-WeChat-Chat-Summary_1.1.0_x64-setup.exe.sha256
+WeChat-Chat-Summary_1.2.0_x64-setup.exe
+WeChat-Chat-Summary_1.2.0_x64-setup.exe.sha256
 ```
 
 安装步骤：
@@ -407,6 +409,16 @@ wechat-chat-summary
 
 <!-- release-readme:history -->
 
+### v1.2.0
+
+- **新增**：定时总结升级为多群独立任务管理，支持添加、编辑、启停、删除、旧配置自动迁移，以及多任务串行执行、群聊与日期去重和失败隔离；
+- **新增**：AI 模型改为始终可展开的可编辑选择框，支持填写任意非空模型标识，并按 Provider 记忆连接测试成功的模型供后续直接选择；
+- **修复**：手动生成、定时生成和历史重新生成统一绑定真实任务上下文，切换群聊、日期或页面不再改变进度框中的任务身份；
+- **修复**：完善 Stable、Prerelease 与 Test 构建通道判断，同版本测试包或预发布包可以升级到正式版；下载、校验或安装程序启动失败后可按对应阶段重试，并阻止并发更新任务；
+- **优化**：软件内更新对话框完整展示 Release Notes、真实下载百分比与字节数，并明确显示 SHA-256 文件完整性校验阶段；
+- **优化**：“相关原话”的署名和日期时间改用话题正文基础字号，HTML 与 PNG 保持一致；
+- **优化**：调整 README 顶部 Release 与 Downloads 徽章的顺序和同排展示，版本与下载入口更清晰。
+
 ### v1.1.0
 
 - 新增匿名版报告，可在历史中心基于已有正常报告一键生成；
@@ -486,8 +498,7 @@ wechat-chat-summary
 - Windows x64 正式安装包通过 GitHub Releases 提供；
 - Stable / Prerelease 发布流程已经建立；
 - 测试安装包继续用于正式发布前验收；
-- 用户可在关于页手动检查正式更新、阅读完整 Release Notes、查看真实下载进度并进行 SHA-256 完整性校验；
-- Test / Prerelease 构建可识别同一数值版本的 Stable，下载、校验或安装启动失败后可按阶段重试；
+- 用户可在关于页手动检查更新、下载正式安装包并进行 SHA-256 完整性校验；
 - 软件启动时不会自动检查更新，也不会后台周期检查；
 - Windows 安装包当前仍未进行代码签名。
 <!-- release-readme:development-status:end -->
