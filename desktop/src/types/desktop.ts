@@ -5,6 +5,7 @@ export type Settings = {
   provider: "deepseek" | "openai-compatible";
   api_url: string;
   model: string;
+  remembered_models: Record<"deepseek" | "openai-compatible", string[]>;
   thinking: boolean;
   reasoning_effort: "high" | "max";
   export_root: string;
@@ -247,6 +248,7 @@ export const INITIAL_SETTINGS: Settings = {
   provider: "deepseek",
   api_url: "https://api.deepseek.com/chat/completions",
   model: "deepseek-v4-flash",
+  remembered_models: { deepseek: [], "openai-compatible": [] },
   thinking: false,
   reasoning_effort: "high",
   export_root: "",

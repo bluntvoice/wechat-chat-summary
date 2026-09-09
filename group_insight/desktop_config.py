@@ -35,6 +35,7 @@ MCP_DEFAULT_PORT = 8765
 SCHEDULE_CONFIG_VERSION = 2
 SCHEDULE_TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 SCHEDULE_STATUSES = {"", "pending", "running", "success", "failed"}
+AI_PROVIDERS = ("deepseek", "openai-compatible")
 
 
 def normalize_desktop_model(provider: str, model: str) -> str:
@@ -47,6 +48,31 @@ def normalize_desktop_model(provider: str, model: str) -> str:
             raise ValueError("模型名称不能为空。")
         return normalized_model
     return normalize_deepseek_model(normalized_model)
+
+
+def _normalize_remembered_models(value: Any) -> dict[str, list[str]]:
+    """规范化通过连接测试的模型记录，并保留服务商模型标识的原始大小写。"""
+
+    if value in (None, ""):
+        return {provider: [] for provider in AI_PROVIDERS}
+    if not isinstance(value, dict):
+        raise ValueError("已验证模型记录必须是 JSON 对象。")
+    result: dict[str, list[str]] = {}
+    for provider in AI_PROVIDERS:
+        raw_models = value.get(provider, [])
+        if raw_models in (None, ""):
+            raw_models = []
+        if not isinstance(raw_models, list):
+            raise ValueError("已验证模型记录必须按 AI Provider 保存为数组。")
+        models: list[str] = []
+        for raw_model in raw_models:
+            if not isinstance(raw_model, str):
+                raise ValueError("已验证模型标识必须是文本。")
+            model = normalize_desktop_model(provider, raw_model)
+            if model not in models:
+                models.append(model)
+        result[provider] = models
+    return result
 
 
 def _fallback_app_local_data_dir() -> Path:
@@ -165,6 +191,7 @@ def default_settings() -> dict[str, Any]:
         "provider": "deepseek",
         "api_url": DEFAULT_API_URL,
         "model": DEFAULT_DEEPSEEK_MODEL,
+        "remembered_models": {provider: [] for provider in AI_PROVIDERS},
         "thinking": False,
         "reasoning_effort": DEFAULT_DEEPSEEK_REASONING_EFFORT,
         "export_root": str(DEFAULT_OUTPUT_ROOT or ""),
@@ -341,6 +368,9 @@ def load_desktop_settings(*, include_secret: bool = False) -> dict[str, Any]:
         if isinstance(payload, dict):
             raw_payload = payload
             settings.update(payload)
+    settings["remembered_models"] = _normalize_remembered_models(
+        settings.get("remembered_models")
+    )
     migrated = _migrate_legacy_schedule(settings, raw_payload)
     if migrated:
         persisted = dict(raw_payload)
@@ -372,6 +402,7 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
         "provider",
         "api_url",
         "model",
+        "remembered_models",
         "thinking",
         "reasoning_effort",
         "export_root",
@@ -402,6 +433,9 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("AI Provider 仅支持 DeepSeek 或 OpenAI Compatible。")
     current["model"] = normalize_desktop_model(
         current["provider"], str(current.get("model") or "")
+    )
+    current["remembered_models"] = _normalize_remembered_models(
+        current.get("remembered_models")
     )
     current["api_url"] = normalize_chat_completions_url(
         str(current.get("api_url") or ""), current["provider"]
@@ -440,3 +474,19 @@ def save_desktop_settings(values: dict[str, Any]) -> dict[str, Any]:
     temporary.replace(_config_path())
     _write_secrets(secrets)
     return load_desktop_settings(include_secret=False)
+
+
+def remember_desktop_model(provider: str, model: str) -> dict[str, Any]:
+    """把已通过连接测试的模型置于对应 Provider 的最近记录首位。"""
+
+    normalized_provider = (provider or "").strip().lower()
+    if normalized_provider not in AI_PROVIDERS:
+        raise ValueError("AI Provider 仅支持 DeepSeek 或 OpenAI Compatible。")
+    normalized_model = normalize_desktop_model(normalized_provider, model)
+    current = load_desktop_settings(include_secret=False)
+    remembered = _normalize_remembered_models(current.get("remembered_models"))
+    remembered[normalized_provider] = [
+        normalized_model,
+        *(item for item in remembered[normalized_provider] if item != normalized_model),
+    ]
+    return save_desktop_settings({"remembered_models": remembered})

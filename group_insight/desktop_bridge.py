@@ -18,6 +18,7 @@ from .desktop_config import (
     ensure_desktop_data_dir,
     load_desktop_api_key,
     load_desktop_settings,
+    remember_desktop_model,
     save_desktop_settings,
 )
 from .fetching import fetch_structured_messages
@@ -651,7 +652,12 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "list_chats":
         return _list_chats(settings)
     if command == "test_ai":
-        return _test_ai(settings)
+        result = _test_ai(settings)
+        saved = remember_desktop_model(
+            str(result.get("provider") or settings.get("provider") or ""),
+            str(result.get("model") or ""),
+        )
+        return {**result, "remembered_models": saved["remembered_models"]}
     if command == "generate":
         with report_lock(f"generate:{payload.get('chat')}:{str(payload.get('start'))[:10]}:{str(payload.get('end'))[:10]}"):
             return _generate(settings, payload)

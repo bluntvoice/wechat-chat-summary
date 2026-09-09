@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { CircleHelp, Download, RefreshCw } from "lucide-react";
+import { ChevronDown, CircleHelp, Download, RefreshCw } from "lucide-react";
 
 import { bridge, invokeDesktop, openExternalUrl } from "../services/desktopBridge";
 import {
@@ -11,6 +11,110 @@ import {
 import { INITIAL_SETTINGS, type McpServerStatus, type Settings } from "../types/desktop";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
+const DEEPSEEK_MODEL_SUGGESTIONS = ["deepseek-v4-flash", "deepseek-v4-pro"];
+
+function ModelCombobox({
+  provider,
+  value,
+  rememberedModels,
+  onChange,
+}: {
+  provider: Settings["provider"];
+  value: string;
+  rememberedModels: string[];
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const options = Array.from(new Set([
+    ...(provider === "deepseek" ? DEEPSEEK_MODEL_SUGGESTIONS : []),
+    ...rememberedModels,
+  ]));
+  const listboxId = `model-options-${provider}`;
+
+  useEffect(() => {
+    setOpen(false);
+    setActiveIndex(0);
+  }, [provider]);
+
+  function chooseModel(model: string) {
+    onChange(model);
+    setOpen(false);
+    inputRef.current?.focus();
+  }
+
+  return <div
+    className="model-combobox"
+    ref={rootRef}
+    onBlur={(event) => {
+      if (!rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false);
+    }}
+  >
+    <div className="model-combobox-control">
+      <input
+        ref={inputRef}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-activedescendant={open && options.length ? `${listboxId}-${activeIndex}` : undefined}
+        placeholder={provider === "deepseek" ? "例如 deepseek-v4-flash" : "例如 gpt-4.1-mini"}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) => open
+              ? Math.min(current + 1, Math.max(0, options.length - 1))
+              : Math.max(0, options.indexOf(value)));
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) => open
+              ? Math.max(0, current - 1)
+              : Math.max(0, options.length - 1));
+          } else if (event.key === "Enter" && open && options[activeIndex]) {
+            event.preventDefault();
+            chooseModel(options[activeIndex]);
+          } else if (event.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="model-combobox-toggle"
+        aria-label={open ? "收起模型选项" : "展开模型选项"}
+        aria-expanded={open}
+        aria-controls={listboxId}
+        onClick={() => {
+          setOpen((current) => !current);
+          setActiveIndex(Math.max(0, options.indexOf(value)));
+        }}
+      >
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+    </div>
+    {open && <div className="model-combobox-options" id={listboxId} role="listbox">
+      {options.length ? options.map((model, index) => <button
+        type="button"
+        id={`${listboxId}-${index}`}
+        role="option"
+        aria-selected={model === value}
+        className={index === activeIndex ? "active" : undefined}
+        key={model}
+        onMouseEnter={() => setActiveIndex(index)}
+        onClick={() => chooseModel(model)}
+      >
+        <span>{model}</span>
+        <small>{DEEPSEEK_MODEL_SUGGESTIONS.includes(model) ? "内置建议" : "已通过连接测试"}</small>
+      </button>) : <p>暂无已验证模型；测试成功后会自动加入这里。</p>}
+    </div>}
+  </div>;
+}
 
 export default function SettingsPage({
   active,
@@ -121,7 +225,12 @@ export default function SettingsPage({
     setMessage("正在发送最小 JSON 连接测试…");
     try {
       const payload = { ...settings, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}) };
-      const result = await bridge<{ model: string; response_model: string }>("test_ai", { settings: payload });
+      const result = await bridge<{
+        model: string;
+        response_model: string;
+        remembered_models: Settings["remembered_models"];
+      }>("test_ai", { settings: payload });
+      setSettings((current) => ({ ...current, remembered_models: result.remembered_models }));
       setMessage(`AI API 连接成功；响应模型：${result.response_model || result.model}。`);
     } catch (error) {
       setMessage(`AI API 连接失败：${error instanceof Error ? error.message : String(error)}`);
@@ -214,19 +323,18 @@ export default function SettingsPage({
 
       <section className="settings-section">
         <div className="settings-section-head"><div><span>2</span><h2>AI API 模式</h2></div><button className="button secondary" disabled={busy} onClick={testAi}>测试 API</button></div>
-        <div className="field-grid">
-          <label><span>AI 服务类型</span><select value={settings.provider} onChange={(event) => changeProvider(event.target.value as Settings["provider"])}><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible</option></select></label>
-          <label>
+        <div className="field-grid ai-provider-grid">
+          <label className="ai-provider-field"><span>AI 服务类型</span><select value={settings.provider} onChange={(event) => changeProvider(event.target.value as Settings["provider"])}><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible</option></select></label>
+          <label className="ai-model-field">
             <span>模型</span>
-            <input
-              list={settings.provider === "deepseek" ? "deepseek-model-suggestions" : undefined}
-              placeholder={settings.provider === "deepseek" ? "例如 deepseek-v4-flash" : "例如 gpt-4.1-mini"}
+            <ModelCombobox
+              provider={settings.provider}
               value={settings.model}
-              onChange={(event) => setSettings({ ...settings, model: event.target.value })}
+              rememberedModels={settings.remembered_models[settings.provider] ?? []}
+              onChange={(model) => setSettings((current) => ({ ...current, model }))}
             />
-            <small className="field-hint">可直接输入服务商当前支持的模型标识；建议项不会限制新模型。</small>
-            {settings.provider === "deepseek" && <datalist id="deepseek-model-suggestions"><option value="deepseek-v4-flash">DeepSeek V4 Flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro</option></datalist>}
           </label>
+          <small className="field-hint wide ai-model-hint">可直接输入任意非空模型标识；下拉列表始终可展开，测试成功的模型会保存在本机供后续选择。</small>
           <label className="wide"><span>{settings.provider === "deepseek" ? "API URL" : "Base URL / Chat Completions URL"}</span><input placeholder={settings.provider === "deepseek" ? DEEPSEEK_URL : "https://example.com/v1"} value={settings.api_url} onChange={(event) => setSettings({ ...settings, api_url: event.target.value })} /></label>
           <label className="wide"><span>API Key {keyConfigured && !apiKey ? <em>本机已保存</em> : null}</span><input type="password" autoComplete="off" placeholder={keyConfigured ? "留空则继续使用当前 Provider 已保存的 Key" : "输入 API Key"} value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label>
         </div>

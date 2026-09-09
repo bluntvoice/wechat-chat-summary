@@ -31,9 +31,23 @@ test("generic provider settings do not render DeepSeek-only controls", () => {
   assert.match(settingsPage, /Reasoning Effort/);
 });
 
-test("model identifiers stay editable while DeepSeek suggestions remain optional", () => {
-  assert.match(settingsPage, /<input\s+[\s\S]*?list=\{settings\.provider === "deepseek"/);
-  assert.match(settingsPage, /<datalist id="deepseek-model-suggestions">/);
-  assert.match(settingsPage, /建议项不会限制新模型/);
+test("model identifiers stay editable and the options can always be opened", () => {
+  assert.match(settingsPage, /function ModelCombobox/);
+  assert.match(settingsPage, /aria-autocomplete="list"/);
+  assert.match(settingsPage, /aria-label=\{open \? "收起模型选项" : "展开模型选项"\}/);
+  assert.match(settingsPage, /可直接输入任意非空模型标识/);
+  assert.doesNotMatch(settingsPage, /<datalist/);
   assert.doesNotMatch(settingsPage, /settings\.provider === "deepseek" \? <select value=\{settings\.model\}/);
+});
+
+test("successful API tests refresh persisted provider-specific model options", () => {
+  assert.match(settingsPage, /remembered_models: Settings\["remembered_models"\]/);
+  assert.match(settingsPage, /rememberedModels=\{settings\.remembered_models\[settings\.provider\]/);
+  assert.match(settingsPage, /测试成功的模型会保存在本机供后续选择/);
+});
+
+test("AI provider and model controls share one aligned grid row", () => {
+  assert.match(settingsPage, /field-grid ai-provider-grid/);
+  assert.match(settingsPage, /className="ai-provider-field"/);
+  assert.match(settingsPage, /className="ai-model-field"/);
 });

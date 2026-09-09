@@ -11,6 +11,7 @@ from group_insight.desktop_config import (
     load_desktop_api_key,
     load_desktop_settings,
     normalize_desktop_model,
+    remember_desktop_model,
     save_desktop_settings,
 )
 
@@ -113,6 +114,22 @@ class DesktopConfigTests(unittest.TestCase):
             normalize_desktop_model("deepseek", "  ")
         with self.assertRaises(ValueError):
             normalize_desktop_model("openai-compatible", "")
+
+    def test_verified_models_are_remembered_per_provider_and_persisted(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            remember_desktop_model("openai-compatible", " vendor/model-new ")
+            remember_desktop_model("deepseek", "deepseek-v4-pro")
+            remember_desktop_model("openai-compatible", "vendor/model-new")
+            loaded = load_desktop_settings()
+            self.assertEqual(loaded["remembered_models"]["deepseek"], ["deepseek-v4-pro"])
+            self.assertEqual(
+                loaded["remembered_models"]["openai-compatible"],
+                ["vendor/model-new"],
+            )
+            persisted = json.loads(Path(temp_dir, "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["remembered_models"], loaded["remembered_models"])
 
     def test_schedule_can_be_enabled_and_disabled(self):
         with TemporaryDirectory() as temp_dir, patch.dict(

@@ -128,6 +128,32 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertTrue(result["model_verified"])
         self.assertEqual(result["response_model"], "deepseek-v4-flash")
 
+    def test_successful_ai_test_persists_model_for_future_selection(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ), patch(
+            "group_insight.desktop_bridge._test_ai",
+            return_value={
+                "connected": True,
+                "provider": "openai-compatible",
+                "model": "vendor/model-new",
+                "response_model": "vendor/model-new",
+                "model_verified": True,
+            },
+        ):
+            result = handle("test_ai", {
+                "settings": {
+                    "provider": "openai-compatible",
+                    "api_url": "https://vendor.example/v1",
+                    "model": "vendor/model-new",
+                    "api_key": "test-key",
+                }
+            })
+        self.assertEqual(
+            result["remembered_models"]["openai-compatible"],
+            ["vendor/model-new"],
+        )
+
     def test_wechat_connection_reports_unreachable_without_claiming_not_installed(self) -> None:
         detail = (
             "无法连接 WeChatDataAnalysis 本地 API (http://127.0.0.1:10392)。"

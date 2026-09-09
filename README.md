@@ -75,7 +75,7 @@ AI 总结
 - DeepSeek；
 - OpenAI Compatible。
 
-模型标识、API URL 和 API Key 均可按服务商当前信息手动填写；DeepSeek 的当前模型建议仅用于辅助输入，不会限制后续新模型。
+模型标识、API URL 和 API Key 均可按服务商当前信息手动填写；模型列表在已有输入时仍可展开，连接测试成功的模型会按 Provider 保存在本机供后续直接选择。DeepSeek 的当前模型建议仅用于辅助输入，不会限制后续新模型。
 
 AI 分析会整理总体情况、主要讨论话题、讨论脉络、重要结论、开放问题、风险、引用、链接和文件，以及 AI 综合观察。玩笑、调侃、反话和低可信内容会经过严肃性与可信度过滤；“讨论弱点 / 不足 / 短板”类负面复盘标题不会进入报告。
 
@@ -314,7 +314,7 @@ PNG 适合手机纵向阅读与分享；HTML 适合在电脑上查看完整报�
 
 ### AI API
 
-软件自身的“生成总结”调用用户配置的 DeepSeek 或 OpenAI Compatible API。模型标识可直接填写任意非空的服务商当前值，DeepSeek V4 Flash / Pro 只是输入建议；API 连接测试仍核验实际响应模型。DeepSeek 支持其专属的 Thinking、Reasoning Effort 和余额查询；通用 OpenAI Compatible 请求不会自动携带 DeepSeek 专属字段。
+软件自身的“生成总结”调用用户配置的 DeepSeek 或 OpenAI Compatible API。模型标识可直接填写任意非空的服务商当前值，已有文字时仍能展开模型列表；API 连接测试会核验实际响应模型，并把测试成功的模型按 Provider 保存在本机供后续选择。DeepSeek V4 Flash / Pro 只是输入建议。DeepSeek 支持其专属的 Thinking、Reasoning Effort 和余额查询；通用 OpenAI Compatible 请求不会自动携带 DeepSeek 专属字段。
 
 ### MCP Server
 
