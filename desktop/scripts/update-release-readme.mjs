@@ -98,7 +98,7 @@ export function updateReleaseReadme({ readme, version, channel, summary = "" }) 
   updated = replaceMarkedBlock(
     updated,
     "badges",
-    "![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)\n\n![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)",
+    "[![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) [![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)](https://github.com/bluntvoice/wechat-chat-summary/releases)",
     eol,
   );
   updated = replaceMarkedBlock(updated, "current-version", `> 当前版本：**v${version}**`, eol);

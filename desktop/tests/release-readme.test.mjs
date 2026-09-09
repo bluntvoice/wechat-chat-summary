@@ -42,12 +42,19 @@ function fixture() {
 
 const summary = "首个正式稳定版本。\n\n- 完成正式发布闭环；\n- 提供历史报告中心。";
 const repositoryReadme = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../README.md");
+const expectedBadges = "[![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) [![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)](https://github.com/bluntvoice/wechat-chat-summary/releases)";
+
+function badgeBlock(readme) {
+  const match = readme.match(/<!-- release-readme:badges:start -->\r?\n(.*?)\r?\n<!-- release-readme:badges:end -->/s);
+  assert.ok(match, "README 应包含受控徽标区块");
+  return match[1];
+}
 
 test("Stable Release 更新正式状态并插入简版版本日志", () => {
   const result = updateReleaseReadme({ readme: fixture(), version: "1.0.0", channel: "stable", summary });
   assert.equal(result.changed, true);
   assert.match(result.content, /> 当前版本：\*\*v1\.0\.0\*\*/);
-  assert.match(result.content, /github\/downloads\/bluntvoice\/wechat-chat-summary\/total/);
+  assert.equal(badgeBlock(result.content), expectedBadges);
   assert.match(result.content, /当前提供 Windows x64 正式安装版本/);
   assert.match(result.content, /WeChat-Chat-Summary_1\.0\.0_x64-setup\.exe\.sha256/);
   assert.match(result.content, /### v1\.0\.0\n\n首个正式稳定版本/);
@@ -87,6 +94,7 @@ test("Stable 更新只替换受控区域中的版本号", () => {
 
 test("仓库 README 可由任意后续 Stable 版本更新", () => {
   const readme = fs.readFileSync(repositoryReadme, "utf8");
+  assert.equal(badgeBlock(readme), expectedBadges);
   assert.match(readme, /> 当前版本：\*\*v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\*\*/);
   const result = updateReleaseReadme({ readme, version: "99.0.0", channel: "stable", summary });
   assert.match(result.content, /> 当前版本：\*\*v99\.0\.0\*\*/);

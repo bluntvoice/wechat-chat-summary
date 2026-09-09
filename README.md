@@ -1,9 +1,7 @@
 # 群聊拾遗（wechat-chat-summary）
 
 <!-- release-readme:badges:start -->
-![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)
-
-![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)
+[![GitHub Release](https://img.shields.io/github/v/release/bluntvoice/wechat-chat-summary?style=flat&label=Release)](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) [![GitHub Downloads](https://img.shields.io/github/downloads/bluntvoice/wechat-chat-summary/total?style=flat&label=Downloads)](https://github.com/bluntvoice/wechat-chat-summary/releases)
 <!-- release-readme:badges:end -->
 
 一个基于本地微信聊天数据的微信群聊统计、AI 总结与历史回顾工具。
