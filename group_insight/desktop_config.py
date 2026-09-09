@@ -38,7 +38,7 @@ SCHEDULE_STATUSES = {"", "pending", "running", "success", "failed"}
 
 
 def normalize_desktop_model(provider: str, model: str) -> str:
-    """规范化桌面端模型，并阻止 DeepSeek 非法模型名静默保存。"""
+    """规范化桌面端模型；保留非空的服务商自定义模型标识。"""
 
     normalized_provider = (provider or "deepseek").strip().lower()
     normalized_model = (model or "").strip()

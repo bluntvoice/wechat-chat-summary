@@ -216,7 +216,17 @@ export default function SettingsPage({
         <div className="settings-section-head"><div><span>2</span><h2>AI API 模式</h2></div><button className="button secondary" disabled={busy} onClick={testAi}>测试 API</button></div>
         <div className="field-grid">
           <label><span>AI 服务类型</span><select value={settings.provider} onChange={(event) => changeProvider(event.target.value as Settings["provider"])}><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible</option></select></label>
-          <label><span>模型</span>{settings.provider === "deepseek" ? <select value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })}><option value="deepseek-v4-flash">DeepSeek V4 Flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro</option></select> : <input placeholder="例如 gpt-4.1-mini" value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} />}</label>
+          <label>
+            <span>模型</span>
+            <input
+              list={settings.provider === "deepseek" ? "deepseek-model-suggestions" : undefined}
+              placeholder={settings.provider === "deepseek" ? "例如 deepseek-v4-flash" : "例如 gpt-4.1-mini"}
+              value={settings.model}
+              onChange={(event) => setSettings({ ...settings, model: event.target.value })}
+            />
+            <small className="field-hint">可直接输入服务商当前支持的模型标识；建议项不会限制新模型。</small>
+            {settings.provider === "deepseek" && <datalist id="deepseek-model-suggestions"><option value="deepseek-v4-flash">DeepSeek V4 Flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro</option></datalist>}
+          </label>
           <label className="wide"><span>{settings.provider === "deepseek" ? "API URL" : "Base URL / Chat Completions URL"}</span><input placeholder={settings.provider === "deepseek" ? DEEPSEEK_URL : "https://example.com/v1"} value={settings.api_url} onChange={(event) => setSettings({ ...settings, api_url: event.target.value })} /></label>
           <label className="wide"><span>API Key {keyConfigured && !apiKey ? <em>本机已保存</em> : null}</span><input type="password" autoComplete="off" placeholder={keyConfigured ? "留空则继续使用当前 Provider 已保存的 Key" : "输入 API Key"} value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label>
         </div>

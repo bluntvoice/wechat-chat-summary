@@ -30,3 +30,10 @@ test("generic provider settings do not render DeepSeek-only controls", () => {
   assert.match(settingsPage, /Base URL \/ Chat Completions URL/);
   assert.match(settingsPage, /Reasoning Effort/);
 });
+
+test("model identifiers stay editable while DeepSeek suggestions remain optional", () => {
+  assert.match(settingsPage, /<input\s+[\s\S]*?list=\{settings\.provider === "deepseek"/);
+  assert.match(settingsPage, /<datalist id="deepseek-model-suggestions">/);
+  assert.match(settingsPage, /建议项不会限制新模型/);
+  assert.doesNotMatch(settingsPage, /settings\.provider === "deepseek" \? <select value=\{settings\.model\}/);
+});

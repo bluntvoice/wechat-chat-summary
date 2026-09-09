@@ -67,6 +67,7 @@ h1 { margin: 0; font: 700 29px/1.2 "STZhongsong", "Microsoft YaHei UI", serif; l
 label { display: grid; gap: 7px; color: #526159; font-size: 12px; }
 label > span { display: flex; justify-content: space-between; align-items: center; min-height: 17px; }
 label em { color: var(--green); font-style: normal; font-size: 11px; }
+.field-hint { color: var(--muted); font-size: var(--font-caption); font-weight: 400; line-height: 1.5; }
 input, select { width: 100%; height: 38px; border: 1px solid #cdd9d2; border-radius: 6px; background: white; color: var(--ink); padding: 0 11px; transition: border-color .16s, box-shadow .16s; }
 input:hover, select:hover { border-color: #9fb6a9; }
 input:focus, select:focus { border-color: var(--green); }

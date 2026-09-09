@@ -38,21 +38,21 @@ class LLMClientProtocol:
         raise NotImplementedError
 
 
-DEEPSEEK_TEXT_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
-LEGACY_DEEPSEEK_MODELS = {
+DEEPSEEK_MODEL_ALIASES = {
+    "deepseek-v4-flash": "deepseek-v4-flash",
+    "deepseek-v4-pro": "deepseek-v4-pro",
     "deepseek-chat": "deepseek-v4-flash",
     "deepseek-reasoner": "deepseek-v4-flash",
 }
 
 
 def normalize_deepseek_model(model: str) -> str:
-    """规范化并校验当前支持的 DeepSeek 文本模型。"""
+    """兼容旧别名，并允许用户填写服务商当前支持的新模型标识。"""
 
-    normalized = LEGACY_DEEPSEEK_MODELS.get((model or "").strip().lower(), (model or "").strip().lower())
-    if normalized not in DEEPSEEK_TEXT_MODELS:
-        choices = "、".join(sorted(DEEPSEEK_TEXT_MODELS))
-        raise ValueError(f"DeepSeek 模型必须选择：{choices}")
-    return normalized
+    configured = (model or "").strip()
+    if not configured:
+        raise ValueError("模型名称不能为空。")
+    return DEEPSEEK_MODEL_ALIASES.get(configured.lower(), configured)
 
 
 def normalize_chat_completions_url(value: str, provider: str) -> str:

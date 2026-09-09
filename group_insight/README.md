@@ -59,8 +59,9 @@ GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 - 群聊、时间窗、API Key、发送目标等关键输入缺失时，优先直接修正参数或仓库根目录 `.env`。
 - 主流程固定走 `map -> reduce -> final`，不再暴露 `direct_range` / `topic-first` 这类分支模式。
 - LLM 返回 JSON 自动修复按显式开关理解，默认关闭；需要时显式传 `--allow-json-repair`。
+- DeepSeek 与 OpenAI Compatible 的模型标识均接受用户填写的任意非空值；已知 DeepSeek 名称只是推荐值，不是限制新模型的白名单。
 - DeepSeek 默认显式传 `max_tokens` 预算，避免 JSON 输出链路在思考模式或异常情况下失控扩张；如需改预算，优先从命令行参数或代码常量调整。
-- 通用 OpenAI Compatible Provider 不发送 `thinking` 或 `reasoning_effort`；这些字段、余额接口和模型校验仅属于 DeepSeek。
+- 通用 OpenAI Compatible Provider 不发送 `thinking` 或 `reasoning_effort`；这些字段和余额接口仅属于 DeepSeek，连接测试则对两种 Provider 都核验实际响应模型。
 - LLM 花费改为按任务前后余额快照对比，不再在每次请求后动态打印 usage 计费估算。
 - 文档只保留当前推荐参数，不再展开旧兼容入口。
 

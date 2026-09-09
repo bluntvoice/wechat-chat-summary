@@ -39,13 +39,17 @@ class LLMProviderTests(unittest.TestCase):
         self.assertEqual(payload["reasoning_effort"], "max")
         self.assertEqual(build_deepseek_balance_url(client.api_url), "https://api.deepseek.com/user/balance")
 
-    def test_deepseek_model_validation_is_not_applied_to_generic_provider(self):
-        with self.assertRaises(ValueError):
-            DeepSeekClient(api_key="secret", model="vendor-model")
-        client = OpenAICompatibleClient(
+    def test_provider_model_names_accept_new_values_and_reject_blank_values(self):
+        deepseek_client = DeepSeekClient(api_key="secret", model="DeepSeek-V5-Preview")
+        generic_client = OpenAICompatibleClient(
             api_key="secret", model="vendor-model", api_url="https://vendor.example/v1"
         )
-        self.assertEqual(client.model, "vendor-model")
+        self.assertEqual(deepseek_client.model, "DeepSeek-V5-Preview")
+        self.assertEqual(generic_client.model, "vendor-model")
+        with self.assertRaises(ValueError):
+            DeepSeekClient(api_key="secret", model="  ")
+        with self.assertRaises(ValueError):
+            OpenAICompatibleClient(api_key="secret", model="", api_url="https://vendor.example/v1")
 
     def test_url_normalization_accepts_base_or_full_endpoint(self):
         self.assertEqual(

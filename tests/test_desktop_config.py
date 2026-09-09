@@ -96,11 +96,23 @@ class DesktopConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 save_desktop_settings({"api_key": "first-line\nOPENAI_COMPATIBLE_API_KEY=injected"})
 
-    def test_deepseek_model_is_normalized_and_invalid_values_are_rejected(self):
+    def test_model_names_accept_new_provider_values_and_reject_blank_values(self):
         self.assertEqual(normalize_desktop_model("deepseek", " DeepSeek-V4-Flash "), "deepseek-v4-flash")
         self.assertEqual(normalize_desktop_model("deepseek", "deepseek-chat"), "deepseek-v4-flash")
+        self.assertEqual(normalize_desktop_model("deepseek", " DeepSeek-V5-Preview "), "DeepSeek-V5-Preview")
+        self.assertEqual(normalize_desktop_model("openai-compatible", " vendor/model-new "), "vendor/model-new")
+        with TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"WECHAT_CHAT_SUMMARY_DATA_DIR": temp_dir}
+        ):
+            saved = save_desktop_settings(
+                {"provider": "deepseek", "model": " DeepSeek-V5-Preview "}
+            )
+            self.assertEqual(saved["model"], "DeepSeek-V5-Preview")
+            self.assertEqual(load_desktop_settings()["model"], "DeepSeek-V5-Preview")
         with self.assertRaises(ValueError):
-            normalize_desktop_model("deepseek", "deepseek-v4-flahs")
+            normalize_desktop_model("deepseek", "  ")
+        with self.assertRaises(ValueError):
+            normalize_desktop_model("openai-compatible", "")
 
     def test_schedule_can_be_enabled_and_disabled(self):
         with TemporaryDirectory() as temp_dir, patch.dict(
