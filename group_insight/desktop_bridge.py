@@ -8,6 +8,7 @@ import subprocess
 import sys
 import re
 import copy
+import shutil
 import tempfile
 from .anonymization import anonymize_report, first_seen_members
 from .report_lock import report_lock
@@ -28,7 +29,7 @@ from .progress import read_progress
 from .llm import DeepSeekClient, OpenAICompatibleClient, normalize_chat_completions_url
 from .redaction import list_redaction_targets, redact_report_document
 from .rendering import render_html_report
-from .report_paths import allocate_report_paths
+from .report_paths import allocate_report_paths, build_report_date_label
 from .report_schema import upgrade_legacy_report, validate_report_schema_2_2
 from .settings import DEFAULT_REPORT_IMAGE_TIMEOUT_MS, DEFAULT_REPORT_IMAGE_WIDTH
 from .transport import export_report_image
@@ -373,6 +374,18 @@ def _load_report_document(payload: dict[str, Any]) -> tuple[Path, dict[str, Any]
     return source_path, upgrade_legacy_report(raw, source_path)
 
 
+def _render_report_files(document: dict[str, Any], html_path: Path, png_path: Path,
+                         dpi: int, render_info: dict[str, Any] | None = None) -> None:
+    """Share local JSON-to-HTML-to-validated-PNG rendering across variants."""
+    html_path.write_text(render_html_report(document), encoding="utf-8")
+    error = export_report_image(
+        html_path, png_path, viewport_width=DEFAULT_REPORT_IMAGE_WIDTH,
+        timeout_ms=DEFAULT_REPORT_IMAGE_TIMEOUT_MS, dpi=dpi, render_info=render_info,
+    )
+    if error or not png_path.is_file():
+        raise RuntimeError(f"PNG 生成失败: {error or '未生成图片'}")
+
+
 def _get_redaction_targets(payload: dict[str, Any]) -> dict[str, Any]:
     _source_path, document = _load_report_document(payload)
     return {
@@ -415,16 +428,10 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
         exports=exports,
     )
     json_path.write_text(json.dumps(redacted, ensure_ascii=False, indent=2), encoding="utf-8")
-    html_path.write_text(render_html_report(redacted), encoding="utf-8")
-    image_error = export_report_image(
-        html_path,
-        paths.image_path,
-        viewport_width=DEFAULT_REPORT_IMAGE_WIDTH,
-        timeout_ms=DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
-        dpi=max(1, int(settings.get("image_dpi") or 300)),
-    )
-    if image_error or not paths.image_path.exists():
-        raise RuntimeError(f"屏蔽版 PNG 生成失败: {image_error or '未生成图片'}")
+    try:
+        _render_report_files(redacted, html_path, paths.image_path, max(1, int(settings.get("image_dpi") or 300)))
+    except RuntimeError as exc:
+        raise RuntimeError(f"屏蔽版 {exc}") from exc
     with HistoryStore() as history:
         history.upsert_report(redacted)
         summarized_chat_ids = history.summarized_chat_ids()
@@ -474,10 +481,100 @@ def _regenerate(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
         raise
 
 
+def _history_png_path(detail: dict[str, Any]) -> Path:
+    """Use the indexed export path, or reconstruct a missing legacy path in the known layout."""
+    recorded = str(detail["exports"]["png"]["path"] or "").strip()
+    if recorded:
+        return Path(recorded)
+    json_path = Path(detail["exports"]["json"]["path"])
+    if json_path.parent.parent.name != "报告数据":
+        raise ValueError("历史记录未保存 PNG 路径，且无法从报告目录安全确定导出位置。")
+    label = build_report_date_label(detail["period_start"], detail["period_end"])
+    suffix = "" if int(detail["version"]) == 1 else f"_v{detail['version']}"
+    variant = "-匿名版" if detail.get("report_variant") == "anonymous" else ""
+    date = detail["period_start"][:10]
+    return json_path.parent.parent.parent / "导出图" / date[:4] / date[5:7] / f"{label}报告{suffix}{variant}.png"
+
+
+def _index_history_png_path(report_id: str, png_path: Path) -> None:
+    with HistoryStore() as history, history.connection:
+        history.connection.execute(
+            "UPDATE reports SET png_path=? WHERE report_id=?", (str(png_path), report_id),
+        )
+
+
+def _regenerate_report_image(payload: dict[str, Any]) -> dict[str, Any]:
+    """Re-render one indexed report from JSON without touching AI, chat data or revisions."""
+    report_id = str(payload.get("report_id") or "").strip()
+    if not report_id:
+        raise ValueError("请先选择一份历史报告。")
+    with HistoryStore() as history:
+        initial = history.get_report_detail(report_id)
+    lock_id = str(initial.get("source_report_id") or report_id)
+    with report_lock("derive:" + lock_id):
+        with HistoryStore() as history:
+            detail = history.get_report_detail(report_id)
+        json_path = Path(str(detail["exports"]["json"]["path"] or ""))
+        if not json_path.is_file():
+            raise ValueError("报告 JSON 已移动或不存在，无法重新生成导出图。")
+        _source_path, document = _load_report_document({"json_path": str(json_path)})
+        metadata = document.get("metadata")
+        if (not isinstance(metadata, dict) or not isinstance(metadata.get("chat"), dict)
+                or not isinstance(metadata.get("period"), dict)
+                or not isinstance(document.get("content"), dict) or not isinstance(document.get("stats"), dict)
+                or not document["content"].get("headline")):
+            raise ValueError("报告 JSON 结构不完整，无法重新生成导出图。")
+        if metadata.get("report_id") != report_id or int(metadata.get("version") or 0) != int(detail["version"]):
+            raise ValueError("报告 JSON 与历史记录的 ID 或版本不一致。")
+        png_path = _history_png_path(detail)
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        render_info: dict[str, Any] = {}
+        with tempfile.TemporaryDirectory(prefix="regenerate-image-", dir=png_path.parent) as temporary:
+            staging = Path(temporary)
+            staged_html = staging / "report.html"
+            staged_png = staging / "report.png"
+            settings = load_desktop_settings(include_secret=False)
+            try:
+                _render_report_files(document, staged_html, staged_png,
+                    max(1, int(settings.get("image_dpi") or 300)), render_info)
+            except Exception as exc:
+                raise RuntimeError(f"重新生成导出图失败：{exc}。原导出图未被修改。") from exc
+            unindexed = not detail["exports"]["png"]["path"]
+            backup = staging / "previous.png"
+            if unindexed and png_path.is_file():
+                shutil.copy2(png_path, backup)
+            installed = False
+            try:
+                os.replace(staged_png, png_path)
+                installed = True
+                if unindexed:
+                    _index_history_png_path(report_id, png_path)
+            except Exception as exc:
+                if installed:
+                    try:
+                        if backup.is_file():
+                            os.replace(backup, png_path)
+                        else:
+                            png_path.unlink(missing_ok=True)
+                    except Exception as restore_exc:
+                        raise RuntimeError(f"重新生成导出图失败，且无法自动恢复原导出图：{restore_exc}") from exc
+                raise RuntimeError(f"重新生成导出图失败：{exc}。原导出图未被修改。") from exc
+        return {
+            "completed": True, "ai_called": False, "report_id": report_id,
+            "version": int(detail["version"]), "png_path": str(png_path),
+            "render_info": render_info,
+        }
+
+
 def _delete_report(payload: dict[str, Any]) -> dict[str, Any]:
     from uuid import uuid4
     report_id = str(payload.get("report_id") or "")
-    with report_lock("derive:" + report_id), HistoryStore() as history:
+    with HistoryStore() as history:
+        initial = history.get_report_detail(report_id)
+    # An anonymous image regeneration locks its source so source deletion and
+    # derived-file deletion cannot race with the replacement.
+    lock_id = str(initial.get("source_report_id") or report_id)
+    with report_lock("derive:" + lock_id), HistoryStore() as history:
         detail = history.get_report_detail(report_id)
         rows = history.connection.execute("SELECT json_path, html_path, png_path FROM reports WHERE report_id=? OR source_report_id=?", (report_id, report_id)).fetchall()
         moved = []
@@ -533,11 +630,10 @@ def _anonymous_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict
             staging = Path(temporary)
             staged = {kind: staging / path.name for kind, path in exports.items()}
             staged["json"].write_text(json.dumps(derived, ensure_ascii=False, indent=2), encoding="utf-8")
-            staged["html"].write_text(render_html_report(derived), encoding="utf-8")
-            error = export_report_image(staged["html"], staged["png"], viewport_width=DEFAULT_REPORT_IMAGE_WIDTH,
-                timeout_ms=DEFAULT_REPORT_IMAGE_TIMEOUT_MS, dpi=max(1, int(settings.get("image_dpi") or 300)))
-            if error or not staged["png"].is_file():
-                raise RuntimeError(f"匿名版 PNG 生成失败: {error or '未生成图片'}")
+            try:
+                _render_report_files(derived, staged["html"], staged["png"], max(1, int(settings.get("image_dpi") or 300)))
+            except RuntimeError as exc:
+                raise RuntimeError(f"匿名版 {exc}") from exc
             backups = {}
             installed = []
             try:
@@ -628,6 +724,8 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
                 limit=int(payload.get("limit") or 200),
                 offset=int(payload.get("offset") or 0),
             )
+    if command == "regenerate_report_image":
+        return _regenerate_report_image(payload)
     if command == "get_heatmap_data":
         return _get_heatmap_data(payload)
     if command == "ensure_daily_stats":

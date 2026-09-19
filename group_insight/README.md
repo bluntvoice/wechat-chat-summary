@@ -120,6 +120,7 @@ $env:GROUP_INSIGHT_NO_VENV_REDIRECT = "1"
 `_v3` 递增版本；多日总结使用 `YYYY-MM-DD_至_YYYY-MM-DD`。map 原始消息输入只在
 内存中参与分析，不会写入报告目录。PNG 默认写入 300 DPI 元数据，可通过
 `--image-dpi` 调整。
+Playwright 保持 2× 设备缩放；超长页按真实高度分段截取并无损拼接，最终 PNG 经尺寸校验后才写入 DPI 元数据并原子替换。历史中心的“重新生成导出图”只从所选报告 JSON 临时渲染 PNG，不改写已有 HTML/JSON 或历史版本。
 
 当前使用向后兼容的统一 `report schema 2.2`：PNG 与 HTML 呈现相同的完整信息，按
 “今日总览 → 今日速览 → 今日主要话题 → AI 今日观察 → 今日活跃情况 → 报告结尾”组织；

@@ -12,10 +12,11 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from group_insight.anonymization import anonymize_report, first_seen_members
-from group_insight.desktop_bridge import _anonymous_report, _regenerate, _delete_report
+from group_insight.desktop_bridge import _anonymous_report, _regenerate, _regenerate_report_image, _delete_report, handle
 from group_insight.history_store import HistoryStore
 from group_insight.models import StructuredMessage
 from group_insight.rendering import render_html_report
+from group_insight.redaction import redact_report_document
 from group_insight.report_lock import report_lock
 from group_insight.report_paths import allocate_report_paths
 from tests.test_history_center import history_document
@@ -177,6 +178,132 @@ class HistoryVariantIntegrationTests(unittest.TestCase):
                 _anonymous_report({}, {"report_id": self.document["metadata"]["report_id"]})
         for kind, content in before.items():
             self.assertEqual(Path(result[kind + "_path"]).read_bytes(), content)
+
+    def test_image_regeneration_keeps_document_html_id_and_revision(self):
+        report_id = self.document["metadata"]["report_id"]
+        paths = {kind: Path(path) for kind, path in self.document["metadata"]["exports"].items()}
+        json_before = paths["json"].read_bytes()
+        html_before = paths["html"].read_bytes()
+        html_mtime = paths["html"].stat().st_mtime_ns
+        old_png = paths["png"].read_bytes()
+
+        def replacement(_html, target, **_kwargs):
+            target.write_bytes(b"new-png")
+            return ""
+
+        with patch("group_insight.desktop_bridge.export_report_image", side_effect=replacement), \
+             patch("group_insight.desktop_bridge.fetch_structured_messages", side_effect=AssertionError("chat read")), \
+             patch("group_insight.desktop_bridge._generate", side_effect=AssertionError("AI generation")), \
+             patch("group_insight.desktop_bridge.load_desktop_api_key", side_effect=AssertionError("AI key read")):
+            result = handle("regenerate_report_image", {"report_id": report_id})
+        self.assertEqual(result["report_id"], report_id)
+        self.assertEqual(result["version"], 1)
+        self.assertFalse(result["ai_called"])
+        self.assertEqual(paths["json"].read_bytes(), json_before)
+        self.assertEqual(paths["html"].read_bytes(), html_before)
+        self.assertEqual(paths["html"].stat().st_mtime_ns, html_mtime)
+        self.assertNotEqual(paths["png"].read_bytes(), old_png)
+        with HistoryStore() as history:
+            self.assertEqual(history.connection.execute("SELECT COUNT(*) FROM reports").fetchone()[0], 1)
+            self.assertTrue(history.get_report_detail(report_id)["exports"]["png"]["exists"])
+
+    def test_image_regeneration_failure_preserves_old_png(self):
+        report_id = self.document["metadata"]["report_id"]
+        png = Path(self.document["metadata"]["exports"]["png"])
+        before = png.read_bytes()
+        with patch("group_insight.desktop_bridge.export_report_image", return_value="尺寸异常"):
+            with self.assertRaisesRegex(RuntimeError, "原导出图未被修改"):
+                _regenerate_report_image({"report_id": report_id})
+        self.assertEqual(png.read_bytes(), before)
+
+    def test_image_regeneration_rebuilds_missing_png_and_html(self):
+        report_id = self.document["metadata"]["report_id"]
+        png = Path(self.document["metadata"]["exports"]["png"])
+        html = Path(self.document["metadata"]["exports"]["html"])
+        png.unlink()
+        html.unlink()
+        with patch("group_insight.desktop_bridge.export_report_image", side_effect=self.image):
+            result = _regenerate_report_image({"report_id": report_id})
+        self.assertTrue(png.is_file())
+        self.assertFalse(html.exists())
+        self.assertEqual(result["report_id"], report_id)
+
+    def test_image_regeneration_supports_anonymous_version(self):
+        anonymous = self.anonymous()
+        report_id = anonymous["report_id"]
+        json_path = Path(anonymous["json_path"])
+        html_path = Path(anonymous["html_path"])
+        before = (json_path.read_bytes(), html_path.read_bytes(), html_path.stat().st_mtime_ns)
+        with patch("group_insight.desktop_bridge.export_report_image", side_effect=self.image):
+            result = _regenerate_report_image({"report_id": report_id})
+        self.assertEqual(result["report_id"], report_id)
+        self.assertEqual(result["version"], anonymous["version"])
+        self.assertEqual((json_path.read_bytes(), html_path.read_bytes(), html_path.stat().st_mtime_ns), before)
+        with HistoryStore() as history:
+            self.assertEqual(history.connection.execute("SELECT COUNT(*) FROM reports").fetchone()[0], 2)
+
+    def test_image_regeneration_supports_redacted_revision(self):
+        paths = {kind: str(self.root / f"redacted-v2.{kind}") for kind in ("json", "html", "png")}
+        redacted = redact_report_document(self.document, ["topics:0"], version=2, exports=paths)
+        self.save(redacted)
+        report_id = redacted["metadata"]["report_id"]
+        before = Path(paths["json"]).read_bytes()
+        with patch("group_insight.desktop_bridge.export_report_image", side_effect=self.image):
+            result = _regenerate_report_image({"report_id": report_id})
+        self.assertEqual(result["report_id"], report_id)
+        self.assertEqual(result["version"], 2)
+        self.assertEqual(Path(paths["json"]).read_bytes(), before)
+        with HistoryStore() as history:
+            self.assertEqual(history.connection.execute("SELECT COUNT(*) FROM reports").fetchone()[0], 2)
+
+    def test_image_regeneration_missing_json_has_clear_error(self):
+        report_id = self.document["metadata"]["report_id"]
+        Path(self.document["metadata"]["exports"]["json"]).unlink()
+        with self.assertRaisesRegex(ValueError, "报告 JSON 已移动或不存在"):
+            _regenerate_report_image({"report_id": report_id})
+
+    def test_image_regeneration_recovers_unindexed_png_in_known_layout(self):
+        report_id = self.document["metadata"]["report_id"]
+        original_json = Path(self.document["metadata"]["exports"]["json"])
+        data_dir = self.root / "测试群" / "报告数据" / "2026-08-31报告数据"
+        data_dir.mkdir(parents=True)
+        json_path = data_dir / "report.json"
+        json_path.write_bytes(original_json.read_bytes())
+        with HistoryStore() as history, history.connection:
+            history.connection.execute(
+                "UPDATE reports SET json_path=?, png_path='' WHERE report_id=?",
+                (str(json_path), report_id),
+            )
+        with patch("group_insight.desktop_bridge.export_report_image", side_effect=self.image):
+            result = _regenerate_report_image({"report_id": report_id})
+        expected = self.root / "测试群" / "导出图" / "2026" / "08" / "2026-08-31报告.png"
+        self.assertEqual(Path(result["png_path"]), expected)
+        self.assertTrue(expected.is_file())
+        with HistoryStore() as history:
+            self.assertEqual(history.get_report_detail(report_id)["exports"]["png"]["path"], str(expected))
+
+    def test_image_regeneration_restores_old_png_if_index_update_fails(self):
+        report_id = self.document["metadata"]["report_id"]
+        original_json = Path(self.document["metadata"]["exports"]["json"])
+        data_dir = self.root / "测试群" / "报告数据" / "2026-08-31报告数据"
+        data_dir.mkdir(parents=True)
+        json_path = data_dir / "report.json"
+        json_path.write_bytes(original_json.read_bytes())
+        png_path = self.root / "测试群" / "导出图" / "2026" / "08" / "2026-08-31报告.png"
+        png_path.parent.mkdir(parents=True)
+        png_path.write_bytes(b"old-png")
+        with HistoryStore() as history, history.connection:
+            history.connection.execute(
+                "UPDATE reports SET json_path=?, png_path='' WHERE report_id=?",
+                (str(json_path), report_id),
+            )
+        with patch("group_insight.desktop_bridge.export_report_image", side_effect=self.image), \
+             patch("group_insight.desktop_bridge._index_history_png_path", side_effect=OSError("index failed")):
+            with self.assertRaisesRegex(RuntimeError, "原导出图未被修改"):
+                _regenerate_report_image({"report_id": report_id})
+        self.assertEqual(png_path.read_bytes(), b"old-png")
+        with HistoryStore() as history:
+            self.assertEqual(history.get_report_detail(report_id)["exports"]["png"]["path"], "")
 
     def test_search_and_heatmap_no_identity_no_double_count(self):
         result = self.anonymous()

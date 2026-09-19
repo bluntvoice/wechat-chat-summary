@@ -114,10 +114,19 @@ test("history anonymous derivation and regeneration have separate guarded action
   assert.match(history, /detail\.period_start\.slice\(0, 10\) === detail\.period_end\.slice\(0, 10\)/);
   assert.match(history, /updated\.report_id\) setSelectedReportId\(updated\.report_id\)/);
   assert.match(history, /不会修改原报告/);
-  assert.match(history, /并会产生 AI API 调用/);
+  assert.match(history, /该操作会调用 AI，并创建新的报告版本/);
+  assert.match(history, /重新生成报告/);
   assert.match(generation, /reportId \? "regenerate_report" : "generate"/);
   assert.match(generation, /if \(source === "manual" && !reportId\) await saveSettings\(false\)/);
   assert.match(history, /\{ source: "regenerate", reportId: selected\.report_id \}/);
+});
+
+test("history image regeneration has a separate local action and keeps selection", () => {
+  assert.match(history, /bridge<GenerationResult>\("regenerate_report_image", \{ report_id: selected\.report_id \}\)/);
+  assert.match(history, /setDetail\(refreshed\)/);
+  assert.match(history, /导出图已重新生成，报告内容和版本未发生变化/);
+  assert.match(history, /disabled=\{operationBusy \|\| redactionBusy \|\| !detail\.exports\.json\.exists\}/);
+  assert.match(history, /不会重新读取群聊，不会调用 AI，也不会创建新的报告版本/);
 });
 
 test("member observation hides only a name duplicated by its card title", () => {

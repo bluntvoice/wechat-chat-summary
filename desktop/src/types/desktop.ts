@@ -116,6 +116,7 @@ export type BridgeResponse<T> = {
 
 export type GenerationResult = {
   completed: boolean;
+  ai_called?: boolean;
   protocol_version?: number;
   report_id?: string;
   version?: number;
@@ -126,6 +127,17 @@ export type GenerationResult = {
   json_path?: string;
   html_path?: string;
   png_path?: string;
+  render_info?: {
+    css_width: number;
+    css_height: number;
+    device_scale_factor: number;
+    expected_png_width: number;
+    expected_png_height: number;
+    actual_png_width: number;
+    actual_png_height: number;
+    segmented: boolean;
+    segment_count: number;
+  };
   summarized_chat_ids?: string[];
 };
 

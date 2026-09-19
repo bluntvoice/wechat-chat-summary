@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import shutil
 import struct
 import sys
+import tempfile
 import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
-from subprocess import DEVNULL, CalledProcessError, run
 from typing import Any
 
 from .common import normalize_text
@@ -24,6 +25,70 @@ from .settings import (
 
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+REPORT_DEVICE_SCALE_FACTOR = 2
+# Keep a margin below common Chromium raster/texture limits; these are policy
+# budgets rather than assumptions about a particular browser version.
+MAX_SINGLE_SCREENSHOT_DEVICE_HEIGHT = 12_000
+MAX_TILE_DEVICE_HEIGHT = 10_000
+PNG_DIMENSION_TOLERANCE = 2
+
+
+def plan_png_slices(css_height: int, device_scale_factor: float) -> list[tuple[int, int]]:
+    """Return contiguous CSS-pixel intervals, with an exact remainder tile."""
+    if css_height <= 0 or not math.isfinite(device_scale_factor) or device_scale_factor <= 0:
+        raise ValueError("报告页面高度或设备缩放比例无效。")
+    if math.ceil(css_height * device_scale_factor) <= MAX_SINGLE_SCREENSHOT_DEVICE_HEIGHT:
+        return [(0, css_height)]
+    tile_css_height = max(1, math.floor(MAX_TILE_DEVICE_HEIGHT / device_scale_factor))
+    return [(start, min(tile_css_height, css_height - start)) for start in range(0, css_height, tile_css_height)]
+
+
+def validate_png_dimensions(
+    image_path: Path, expected_width: int, expected_height: int, *, tolerance: int = PNG_DIMENSION_TOLERANCE,
+) -> tuple[int, int]:
+    """Check the encoded PNG structure and expected physical dimensions."""
+    from PIL import Image
+
+    with Image.open(image_path) as image:
+        if image.format != "PNG":
+            raise ValueError("导出文件不是 PNG。")
+        actual = image.size
+        image.verify()
+    if any(abs(actual[index] - expected) > tolerance for index, expected in enumerate((expected_width, expected_height))):
+        raise ValueError(
+            f"PNG 尺寸异常：预期 {expected_width}×{expected_height}，实际 {actual[0]}×{actual[1]}。"
+        )
+    return actual
+
+
+def _stitch_png_slices(parts: list[Path], intervals: list[tuple[int, int]],
+                       width: int, height: int, scale: float, output: Path) -> None:
+    """Paste decoded PNG pixels at their exact device-pixel offsets and save losslessly."""
+    from PIL import Image
+
+    canvas = None
+    try:
+        for part, (start, css_height) in zip(parts, intervals, strict=True):
+            top = round(start * scale)
+            bottom = round((start + css_height) * scale)
+            with Image.open(part) as tile:
+                tile.load()
+                if tile.size != (width, bottom - top):
+                    raise ValueError(
+                        f"PNG 分段尺寸异常：区段 {start}～{start + css_height} CSS px，"
+                        f"预期 {width}×{bottom - top}，实际 {tile.width}×{tile.height}。"
+                    )
+                if canvas is None:
+                    canvas = Image.new(tile.mode, (width, height))
+                elif tile.mode != canvas.mode:
+                    raise ValueError("PNG 分段色彩模式不一致。")
+                canvas.paste(tile, (0, top))
+        if canvas is None:
+            raise ValueError("没有可拼接的 PNG 分段。")
+        canvas.save(output, format="PNG")
+    finally:
+        if canvas is not None:
+            canvas.close()
 
 
 def set_png_dpi_metadata(image_path: Path, dpi: int = DEFAULT_REPORT_IMAGE_DPI) -> None:
@@ -99,6 +164,7 @@ def export_report_image_with_playwright(
     image_path: Path,
     viewport_width: int = DEFAULT_REPORT_IMAGE_WIDTH,
     timeout_ms: int = DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
+    render_info: dict[str, Any] | None = None,
 ) -> str:
     """使用 Playwright 将 HTML 报表导出为 PNG。
 
@@ -128,7 +194,7 @@ def export_report_image_with_playwright(
             try:
                 page = browser.new_page(
                     viewport={"width": viewport_width, "height": 1600},
-                    device_scale_factor=2,
+                    device_scale_factor=REPORT_DEVICE_SCALE_FACTOR,
                 )
                 page.goto(html_path.resolve().as_uri(), wait_until="load", timeout=timeout_ms)
                 page.wait_for_load_state("networkidle", timeout=timeout_ms)
@@ -141,7 +207,51 @@ def export_report_image_with_playwright(
                     }"""
                 )
                 page.wait_for_timeout(300)
-                page.screenshot(path=str(image_path), full_page=True, type="png")
+                dimensions = page.evaluate(
+                    """() => ({
+                        width: Math.max(document.documentElement.scrollWidth,
+                            document.body ? document.body.scrollWidth : 0, window.innerWidth),
+                        height: Math.max(document.documentElement.scrollHeight,
+                            document.body ? document.body.scrollHeight : 0),
+                        scale: window.devicePixelRatio
+                    })"""
+                )
+                css_width = int(dimensions["width"])
+                css_height = int(dimensions["height"])
+                scale = float(dimensions["scale"])
+                intervals = plan_png_slices(css_height, scale)
+                expected_width = round(css_width * scale)
+                expected_height = round(css_height * scale)
+                if css_width <= 0 or expected_width <= 0:
+                    raise ValueError("报告页面宽度无效。")
+                if len(intervals) == 1:
+                    page.screenshot(path=str(image_path), full_page=True, type="png")
+                else:
+                    # The report CSS has no fixed/sticky elements. Document-coordinate
+                    # clips avoid viewport scrolling and retain the exact 2x layout.
+                    with tempfile.TemporaryDirectory(prefix="png-slices-", dir=image_path.parent) as temporary:
+                        parts = []
+                        for index, (start, tile_height) in enumerate(intervals):
+                            part = Path(temporary) / f"part-{index:04d}.png"
+                            page.screenshot(
+                                path=str(part), full_page=True, type="png",
+                                clip={"x": 0, "y": start, "width": css_width, "height": tile_height},
+                            )
+                            parts.append(part)
+                        _stitch_png_slices(parts, intervals, expected_width, expected_height, scale, image_path)
+                actual_width, actual_height = validate_png_dimensions(
+                    image_path, expected_width, expected_height,
+                )
+                metrics = {
+                    "css_width": css_width, "css_height": css_height,
+                    "device_scale_factor": scale,
+                    "expected_png_width": expected_width, "expected_png_height": expected_height,
+                    "actual_png_width": actual_width, "actual_png_height": actual_height,
+                    "segmented": len(intervals) > 1, "segment_count": len(intervals),
+                }
+                if render_info is not None:
+                    render_info.update(metrics)
+                print(f"[PNGExport] {metrics}", file=sys.stderr, flush=True)
             finally:
                 browser.close()
         return ""
@@ -151,75 +261,39 @@ def export_report_image_with_playwright(
         return f"浏览器截图失败: {exc}"
 
 
-def export_report_image_with_chrome_cli(
-    html_path: Path,
-    image_path: Path,
-    viewport_width: int = DEFAULT_REPORT_IMAGE_WIDTH,
-    timeout_ms: int = DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
-) -> str:
-    """使用浏览器命令行兜底导出 PNG。"""
-
-    browser_executable = find_local_browser_executable()
-    if not browser_executable:
-        return "未找到可用的 Chrome/Edge 浏览器。"
-
-    try:
-        run(
-            [
-                browser_executable,
-                "--headless=new",
-                "--disable-gpu",
-                "--hide-scrollbars",
-                f"--window-size={viewport_width},1600",
-                f"--screenshot={str(image_path)}",
-                html_path.resolve().as_uri(),
-            ],
-            check=True,
-            stdout=DEVNULL,
-            stderr=DEVNULL,
-            timeout=max(10, math.ceil(timeout_ms / 1000)),
-        )
-        return ""
-    except CalledProcessError as exc:
-        return f"Chrome CLI 截图失败: {exc}"
-    except Exception as exc:
-        return f"Chrome CLI 渲染失败: {exc}"
-
-
 def export_report_image(
     html_path: Path,
     image_path: Path,
     viewport_width: int = DEFAULT_REPORT_IMAGE_WIDTH,
     timeout_ms: int = DEFAULT_REPORT_IMAGE_TIMEOUT_MS,
     dpi: int = DEFAULT_REPORT_IMAGE_DPI,
+    render_info: dict[str, Any] | None = None,
 ) -> str:
-    """优先用 Playwright 导出，失败后回退，并写入 DPI 元数据。"""
+    """Render and validate a PNG, then atomically install it with DPI metadata."""
 
-    error = export_report_image_with_playwright(
-        html_path,
-        image_path,
-        viewport_width=viewport_width,
-        timeout_ms=timeout_ms,
-    )
-    if not error and image_path.exists():
-        try:
-            set_png_dpi_metadata(image_path, dpi=dpi)
+    try:
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="report-png-", dir=image_path.parent) as temporary:
+            staged = Path(temporary) / "report.png"
+            info: dict[str, Any] = {}
+            error = export_report_image_with_playwright(
+                html_path, staged, viewport_width=viewport_width, timeout_ms=timeout_ms,
+                render_info=info,
+            )
+            if error:
+                return error
+            if not staged.is_file():
+                return "Playwright 未生成 PNG。"
+            # Pixel dimensions were checked before metadata is inserted. Recheck
+            # the final encoded file before it can replace an existing export.
+            set_png_dpi_metadata(staged, dpi=dpi)
+            validate_png_dimensions(staged, info["expected_png_width"], info["expected_png_height"])
+            os.replace(staged, image_path)
+            if render_info is not None:
+                render_info.update(info)
             return ""
-        except Exception as exc:
-            error = f"PNG DPI 元数据写入失败: {exc}"
-    fallback_error = export_report_image_with_chrome_cli(
-        html_path,
-        image_path,
-        viewport_width=viewport_width,
-        timeout_ms=timeout_ms,
-    )
-    if not fallback_error and image_path.exists():
-        try:
-            set_png_dpi_metadata(image_path, dpi=dpi)
-            return ""
-        except Exception as exc:
-            fallback_error = f"PNG DPI 元数据写入失败: {exc}"
-    return fallback_error or error or "未知截图错误"
+    except Exception as exc:
+        return f"PNG 导出失败，原导出图未被修改: {exc}"
 
 
 def send_report_png_to_chat(

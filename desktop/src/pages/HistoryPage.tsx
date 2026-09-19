@@ -1,4 +1,4 @@
-import { EyeOff, RefreshCw, UserRoundMinus, Trash2, FolderOpen } from "lucide-react";
+import { EyeOff, RefreshCw, Image, UserRoundMinus, Trash2, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useReportGeneration } from "../hooks/useReportGeneration";
@@ -354,9 +354,9 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
   const [redactionBusy, setRedactionBusy] = useState(false);
   const [message, setMessage] = useState("历史数据仅来自本机 SQLite，不搜索完整原始聊天正文。");
 
-  const [operation, setOperation] = useState<"anonymous" | "regenerate" | "delete" | null>(null);
+  const [operation, setOperation] = useState<"anonymous" | "regenerate" | "image" | "delete" | null>(null);
   const [operationBusy, setOperationBusy] = useState(false);
-  const [activeOperation, setActiveOperation] = useState<"anonymous" | "regenerate" | "delete" | null>(null);
+  const [activeOperation, setActiveOperation] = useState<"anonymous" | "regenerate" | "image" | "delete" | null>(null);
   const operationGuard = useRef(false);
   const pendingReport = useRef("");
   const generation = useReportGeneration({
@@ -372,12 +372,23 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
     setOperationBusy(true);
     setActiveOperation(action);
     setOperation(null);
+    let imageCompleted = false;
     try {
       let updated: GenerationResult;
       if (action === "regenerate") {
         updated = await generation.runGeneration(selected.chat_id, selected.display_name,
           selected.period_start.slice(0, 10), selected.period_end.slice(0, 10), "single",
           { source: "regenerate", reportId: selected.report_id });
+      } else if (action === "image") {
+        updated = await bridge<GenerationResult>("regenerate_report_image", { report_id: selected.report_id });
+        imageCompleted = true;
+        setDetail((current) => current?.report_id === selected.report_id
+          ? { ...current, exports: { ...current.exports, png: { path: updated.png_path || current.exports.png.path, exists: true } } }
+          : current);
+        const refreshed = await bridge<HistoryReportDetail>("get_history_report", { report_id: selected.report_id });
+        setDetail(refreshed);
+        setMessage("导出图已重新生成，报告内容和版本未发生变化。");
+        return;
       } else {
         updated = await bridge<GenerationResult>(action === "anonymous" ? "anonymous_report" : "delete_report", {report_id: selected.report_id});
       }
@@ -388,7 +399,11 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       setDetailModule("all");
       setMessage(action === "anonymous" ? "匿名版已生成，未调用 AI，原报告保持不变。" : action === "delete" ? "报告已删除。" : `已生成新版本 v${updated.version}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      const reason = error instanceof Error ? error.message : String(error);
+      setMessage(action === "image" && imageCompleted
+        ? `导出图已生成，但历史详情刷新失败：${reason}`
+        : action === "image" && !reason.includes("原导出图未被修改")
+          ? `${reason} 原导出图未被修改。` : reason);
     } finally {
       operationGuard.current = false;
       setOperationBusy(false);
@@ -612,11 +627,11 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
     <header className="topbar history-topbar"><div><h1>历史中心</h1></div><button className="button secondary" disabled={busy} onClick={() => refreshHistory(true)}>{busy ? "刷新中…" : "刷新与导入"}</button></header>
     <section className="notice history-notice" aria-live="polite"><strong>本地历史</strong><span>{message}</span></section>
     {operationBusy && activeOperation === "regenerate" && generation.progress && <section className="notice" aria-live="polite"><progress max={100} value={generation.progress.percent} /><span>{generation.progress.message} · {generation.progress.percent}% · {generation.progress.elapsed_seconds} 秒</span></section>}
-    {operationBusy && activeOperation !== "regenerate" && <section className="notice" role="status">正在处理本地报告…</section>}
+    {operationBusy && activeOperation !== "regenerate" && <section className="notice" role="status">{activeOperation === "image" ? "正在重新生成导出图…" : "正在处理本地报告…"}</section>}
     {operation && detail && <div className="dialog-backdrop"><section className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="history-operation-title">
-      <h2 id="history-operation-title">{operation === "anonymous" ? "生成匿名版" : operation === "regenerate" ? "重新生成报告" : "删除报告"}</h2>
-      {operation === "anonymous" ? <><p>匿名版会将可识别成员显示为“群友01、群友02……”并移除成员级活跃统计，不会修改原报告。</p><p>匿名处理仅针对成员身份，聊天正文中自行出现的姓名、联系方式或其他敏感信息不会自动删除。分享前仍需自行确认。</p></> : operation === "regenerate" ? <><p>将使用当前版本的生成逻辑和当前 AI 配置，重新生成该群聊在 {detail.report_date} 的报告。</p><p>重新生成会创建新的历史版本，不会删除当前报告，并会产生 AI API 调用。</p></> : <p>{versions.some(v => v.source_report_id === detail.report_id) ? "该报告存在匿名版，删除原报告将同时删除关联匿名版。" : "将删除该报告文件和历史记录。其他正常版本不受影响。"}</p>}
-      <div className="dialog-actions"><button className="button secondary" onClick={() => setOperation(null)}>取消</button><button className="button primary" onClick={performOperation}>{operation === "anonymous" ? "生成匿名版" : operation === "regenerate" ? "重新生成" : "确认删除"}</button></div>
+      <h2 id="history-operation-title">{operation === "anonymous" ? "生成匿名版" : operation === "regenerate" ? "重新生成报告" : operation === "image" ? "重新生成导出图" : "删除报告"}</h2>
+      {operation === "anonymous" ? <><p>匿名版会将可识别成员显示为“群友01、群友02……”并移除成员级活跃统计，不会修改原报告。</p><p>匿名处理仅针对成员身份，聊天正文中自行出现的姓名、联系方式或其他敏感信息不会自动删除。分享前仍需自行确认。</p></> : operation === "regenerate" ? <p>将重新读取该时间范围的群聊数据，并使用当前 AI 配置重新分析和生成报告。该操作会调用 AI，并创建新的报告版本，当前版本不会被删除。</p> : operation === "image" ? <p>将根据当前报告内容重新生成 PNG 导出图。不会重新读取群聊，不会调用 AI，也不会创建新的报告版本。当前报告 JSON 和 HTML 保持不变。</p> : <p>{versions.some(v => v.source_report_id === detail.report_id) ? "该报告存在匿名版，删除原报告将同时删除关联匿名版。" : "将删除该报告文件和历史记录。其他正常版本不受影响。"}</p>}
+      <div className="dialog-actions"><button className="button secondary" onClick={() => setOperation(null)}>取消</button><button className="button primary" onClick={performOperation}>{operation === "anonymous" ? "生成匿名版" : operation === "regenerate" ? "重新生成报告" : operation === "image" ? "重新生成导出图" : "确认删除"}</button></div>
     </section></div>}
     <div className="history-layout">
       <aside className="history-chat-pane">
@@ -656,10 +671,9 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
             <button className="button secondary" disabled={!detail.exports.html.exists} onClick={() => openExport(detail.exports.html.path)}>打开 HTML</button>
             <button className="button secondary" disabled={!detail.exports.json.exists} onClick={() => openExport(detail.exports.json.path)}>打开 JSON</button>
             {!redactionMode && detail.report_variant !== "anonymous" && <button className="button secondary inline-icon" disabled={redactionBusy || !detail.exports.json.exists} onClick={openRedactionMode}><EyeOff size={15} aria-hidden="true" />{redactionBusy ? "读取中…" : "屏蔽内容"}</button>}
-            {!redactionMode && detail.report_variant !== "anonymous" && <>
-              {detail.period_start.slice(0, 10) === detail.period_end.slice(0, 10) && <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy} onClick={() => setOperation("regenerate")}><RefreshCw size={15} />重新生成</button>}
-              <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy || !detail.exports.json.exists} onClick={() => setOperation("anonymous")}><UserRoundMinus size={15} />{versions.some(v => v.source_report_id === detail.report_id) ? "重新生成匿名版" : "生成匿名版"}</button>
-            </>}
+            {!redactionMode && detail.report_variant !== "anonymous" && detail.period_start.slice(0, 10) === detail.period_end.slice(0, 10) && <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy} onClick={() => setOperation("regenerate")}><RefreshCw size={15} />重新生成报告</button>}
+            {!redactionMode && <button className="button secondary inline-icon" title={!detail.exports.json.exists ? "报告 JSON 已移动或不存在，无法重新生成导出图。" : undefined} disabled={operationBusy || redactionBusy || !detail.exports.json.exists} onClick={() => setOperation("image")}><Image size={15} />重新生成导出图</button>}
+            {!redactionMode && detail.report_variant !== "anonymous" && <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy || !detail.exports.json.exists} onClick={() => setOperation("anonymous")}><UserRoundMinus size={15} />{versions.some(v => v.source_report_id === detail.report_id) ? "重新生成匿名版" : "生成匿名版"}</button>}
             {detail.report_variant === "anonymous" && <button className="button secondary" onClick={() => setSelectedReportId(detail.source_report_id || "")}>查看原报告 · v{detail.version}</button>}
             <button className="button secondary inline-icon" disabled={operationBusy} onClick={() => openExport(detail.exports.json.path.replace(/[\\/][^\\/]+$/, ""))}><FolderOpen size={15} />所在目录</button>
             <button className="button secondary inline-icon" disabled={operationBusy || redactionBusy} onClick={() => setOperation("delete")}><Trash2 size={15} />删除</button>
