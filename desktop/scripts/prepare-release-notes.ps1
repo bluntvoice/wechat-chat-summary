@@ -46,6 +46,15 @@ if (-not $changelog.Contains($anchor)) {
     throw "CHANGELOG 缺少自动插入锚点：$anchor"
 }
 
+$unreleasedPattern = '(?ms)^## \[Unreleased\][^\r\n]*\r?\n.*?(?=^## \[|\z)'
+$unreleasedMatcher = [regex]::new($unreleasedPattern)
+if ($unreleasedMatcher.Matches($changelog).Count -gt 1) {
+    throw "CHANGELOG 包含重复的 Unreleased 条目。"
+}
+if ($unreleasedMatcher.IsMatch($changelog)) {
+    $changelog = $unreleasedMatcher.Replace($changelog, "", 1)
+}
+
 $updated = $changelog.Replace($anchor, "$anchor`r`n`r`n$entry")
 $temporaryPath = "$changelogFullPath.tmp"
 try {

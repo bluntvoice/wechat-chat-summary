@@ -22,7 +22,7 @@ function findPowerShell() {
   return executable;
 }
 
-function runFixture(lineEnding, version) {
+function runFixture(lineEnding, version, withUnreleased = false) {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-release-notes-"));
   const notesPath = path.join(temporaryRoot, "notes.md");
   const changelogPath = path.join(temporaryRoot, "CHANGELOG.md");
@@ -30,7 +30,7 @@ function runFixture(lineEnding, version) {
     fs.writeFileSync(notesPath, `## 版本亮点${lineEnding}${lineEnding}- 换行兼容测试`, "utf8");
     fs.writeFileSync(
       changelogPath,
-      `# 更新日志${lineEnding}${lineEnding}<!-- 新版本由 release.yml 插入到此行之后 -->${lineEnding}`,
+      `# 更新日志${lineEnding}${lineEnding}<!-- 新版本由 release.yml 插入到此行之后 -->${lineEnding}${withUnreleased ? `${lineEnding}## [Unreleased]${lineEnding}${lineEnding}- 已纳入本次发布的修复${lineEnding}${lineEnding}## [1.2.0] - 2026-09-09${lineEnding}` : ""}`,
       "utf8",
     );
     const result = spawnSync(
@@ -53,6 +53,11 @@ function runFixture(lineEnding, version) {
     const changelog = fs.readFileSync(changelogPath, "utf8");
     assert.match(changelog, new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\]`, "m"));
     assert.match(changelog, /^### 版本亮点/m);
+    if (withUnreleased) {
+      assert.doesNotMatch(changelog, /^## \[Unreleased\]/m);
+      assert.doesNotMatch(changelog, /已纳入本次发布的修复/);
+      assert.match(changelog, /^## \[1\.2\.0\]/m);
+    }
   } finally {
     const safePrefix = `${path.resolve(os.tmpdir())}${path.sep}`;
     assert.ok(path.resolve(temporaryRoot).startsWith(safePrefix));
@@ -66,4 +71,8 @@ test("release notes script accepts CRLF heading", () => {
 
 test("release notes script accepts LF heading", () => {
   runFixture("\n", "9.9.2");
+});
+
+test("release notes script clears published Unreleased entries", () => {
+  runFixture("\r\n", "9.9.3", true);
 });
