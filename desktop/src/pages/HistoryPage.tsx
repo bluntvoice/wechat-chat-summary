@@ -218,7 +218,21 @@ function resourceDomain(value: string) {
   }
 }
 
-function TopicPreview({ value, memberNames }: { value: unknown; memberNames: Record<string, string> }) {
+function TopicPreview({
+  value,
+  memberNames,
+  editMode,
+  targetById,
+  selectedIds,
+  onToggle,
+}: {
+  value: unknown;
+  memberNames: Record<string, string>;
+  editMode: "redact" | "delete" | null;
+  targetById: Map<string, RedactionTarget>;
+  selectedIds: string[];
+  onToggle: (target: RedactionTarget) => void;
+}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return <ValueView value={value} memberNames={memberNames} />;
   }
@@ -239,7 +253,10 @@ function TopicPreview({ value, memberNames }: { value: unknown; memberNames: Rec
     {Boolean(topic.time_ranges) && <ValueView value={topic.time_ranges} memberNames={memberNames} fieldKey="time_ranges" />}
     {flow && <p className="history-topic-flow"><MemberText value={flow} memberNames={memberNames} /></p>}
     {detailRows.map(([label, item]) => <section className="history-topic-extra" key={label}><h4>{label}</h4><ValueView value={item} memberNames={memberNames} /></section>)}
-    {resources.length > 0 && <section className="history-topic-extra"><h4>相关资源</h4><div className="history-topic-resources">{resources.map((item, index) => <ResourcePreview key={`${String(item.id || item.url || item.title || "resource")}-${index}`} value={item} memberNames={memberNames} />)}</div></section>}
+    {resources.length > 0 && <section className="history-topic-extra"><h4>相关资源</h4><div className="history-topic-resources">{resources.map((item, index) => {
+      const target = targetById.get(String(item.redaction_target_id || ""));
+      return <ResourcePreview key={`${String(item.id || item.url || item.title || "resource")}-${index}`} value={item} memberNames={memberNames} editMode={editMode} target={target} selected={Boolean(target && selectedIds.includes(target.id))} onToggle={onToggle} />;
+    })}</div></section>}
   </div>;
 }
 
@@ -259,7 +276,21 @@ function resourcePlatform(value: string, type: string) {
   return { key: "web", label: "网页" };
 }
 
-function ResourcePreview({ value, memberNames }: { value: unknown; memberNames: Record<string, string> }) {
+function ResourcePreview({
+  value,
+  memberNames,
+  editMode = null,
+  target,
+  selected = false,
+  onToggle,
+}: {
+  value: unknown;
+  memberNames: Record<string, string>;
+  editMode?: "redact" | "delete" | null;
+  target?: RedactionTarget;
+  selected?: boolean;
+  onToggle?: (target: RedactionTarget) => void;
+}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return <ValueView value={value} memberNames={memberNames} />;
   }
@@ -275,9 +306,26 @@ function ResourcePreview({ value, memberNames }: { value: unknown; memberNames: 
   const url = String(resource.url || "").trim();
   const platform = resourcePlatform(url, type);
   const showTopic = topic && topic !== "其他 / 未归类" && topic !== "其他/未归类";
+  const selectable = Boolean(editMode && target && onToggle && (editMode === "delete" || !target.redacted));
 
-  return <div className="history-resource-preview">
-    <div className="history-resource-tags"><span className={`platform-${platform.key}`}>{platform.label}</span>{showTopic && <small>{topic}</small>}</div>
+  return <div
+    className={`history-resource-preview${selectable ? " resource-edit-selectable" : ""}${selected ? " resource-edit-selected" : ""}`}
+    role={selectable ? "checkbox" : undefined}
+    aria-checked={selectable ? selected : undefined}
+    tabIndex={selectable ? 0 : undefined}
+    onClick={(event) => {
+      if (editMode) event.stopPropagation();
+      if (selectable && target && onToggle) onToggle(target);
+    }}
+    onKeyDown={(event) => {
+      if (editMode) event.stopPropagation();
+      if (selectable && target && onToggle && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault();
+        onToggle(target);
+      }
+    }}
+  >
+    <div className="history-resource-tags"><span className={`platform-${platform.key}`}>{platform.label}</span>{showTopic && <small>{topic}</small>}{selectable && <em className="history-resource-edit-state">{selected ? "已选择" : editMode === "delete" ? "选择删除" : "选择屏蔽"}</em>}</div>
     {context && <p><MemberText value={context} memberNames={memberNames} /></p>}
     {(sender || sentAt) && <div className="history-resource-meta">{sender && <MemberText value={sender} memberNames={memberNames} />}{sender && sentAt ? " · " : ""}{sentAt}</div>}
     {url && <div className="history-resource-domain" title={url}>{resourceDomain(url)}</div>}
@@ -291,6 +339,8 @@ function ModuleCard({
   target,
   selected,
   onToggle,
+  targetById,
+  selectedIds,
   showSectionLabel = true,
 }: {
   module: HistoryModule;
@@ -299,6 +349,8 @@ function ModuleCard({
   target?: RedactionTarget;
   selected: boolean;
   onToggle: (target: RedactionTarget) => void;
+  targetById: Map<string, RedactionTarget>;
+  selectedIds: string[];
   showSectionLabel?: boolean;
 }) {
   const redacted = Boolean(module.content && typeof module.content === "object" && !Array.isArray(module.content) && (module.content as Record<string, unknown>).redacted);
@@ -325,7 +377,7 @@ function ModuleCard({
       : module.module_key === "member_activity"
         ? <MemberObservationView value={module.content} title={module.title} memberNames={memberNames} />
         : module.module_key === "topics"
-        ? <TopicPreview value={module.content} memberNames={memberNames} />
+        ? <TopicPreview value={module.content} memberNames={memberNames} editMode={editMode} targetById={targetById} selectedIds={selectedIds} onToggle={onToggle} />
       : module.module_key === "resources"
         ? <ResourcePreview value={module.content} memberNames={memberNames} />
         : <ValueView value={module.content} memberNames={memberNames} />}
@@ -694,11 +746,11 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
           {detailModule === "all"
             ? <div className="history-report-sections">{reportSections.map((section) => <section className="history-report-section" key={section.key}><h3>{section.label}</h3><div className="history-module-list">{section.modules.map((module) => {
               const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
-              return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} editMode={editMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} showSectionLabel={false} />;
+              return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} editMode={editMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} targetById={redactionTargetById} selectedIds={selectedRedactions} showSectionLabel={false} />;
             })}</div></section>)}{!reportSections.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}<footer className="history-report-end"><strong>报告结尾</strong><span><MemberText value={String(detail.content.conclusion || "以上为本次群聊日报整理。")} memberNames={memberNames} /></span><small>报告由群聊拾遗生成 · {detail.display_name} · {periodLabel(detail.period_start, detail.period_end)}<br />生成时间：{detail.generated_at.slice(0, 19)}</small></footer></div>
             : <div className="history-module-list">{visibleModules.map((module) => {
               const target = module.redaction_target_id ? redactionTargetById.get(module.redaction_target_id) : undefined;
-              return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} editMode={editMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} />;
+              return <ModuleCard key={`${module.module_key}-${module.ordinal}`} module={module} memberNames={memberNames} editMode={editMode} target={target} selected={Boolean(target && selectedRedactions.includes(target.id))} onToggle={toggleRedaction} targetById={redactionTargetById} selectedIds={selectedRedactions} />;
             })}{!visibleModules.length && <div className="history-empty compact">这份报告没有对应模块内容</div>}</div>}
         </>}
       </section>

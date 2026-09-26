@@ -93,6 +93,10 @@ test("history hides observation kind and supports versioned content deletion", (
   assert.match(history, /"delete_report_content"/);
   assert.match(history, /mode=\{editMode\}/);
   assert.match(history, /删除报告/);
+  assert.match(history, /item\.redaction_target_id/);
+  assert.match(history, /resource-edit-selectable/);
+  assert.match(history, /event\.stopPropagation\(\)/);
+  assert.match(styles, /\.history-resource-preview\.resource-edit-selectable/);
 });
 
 test("history default view follows report sections without duplicate activity totals", () => {

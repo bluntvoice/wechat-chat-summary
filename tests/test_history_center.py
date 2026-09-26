@@ -209,6 +209,35 @@ class HistoryCenterQueryTests(unittest.TestCase):
                 self.assertNotIn("effective_message_count", activity_stats["content"])
                 self.assertNotIn("participant_count", activity_stats["content"])
 
+    def test_unassigned_resource_preview_keeps_its_delete_target(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            document = history_document(root)
+            document["content"]["resources"]["groups"].append({
+                "topic_id": "other",
+                "topic": "其他 / 未归类",
+                "items": [{
+                    "id": "res-other",
+                    "type": "link",
+                    "title": "未归类重复链接",
+                    "url": "https://example.com/other",
+                }],
+            })
+            document["content"]["resources"]["count"] = 3
+
+            with HistoryStore(root / "history.sqlite3") as store:
+                report_id = store.upsert_report(document)
+                detail = store.get_report_detail(report_id)
+
+            other_topic = next(
+                item for item in detail["modules"]
+                if item["module_key"] == "topics" and item["title"] == "其他 / 未归类资源"
+            )
+            resource = other_topic["content"]["related_resources"][0]
+            self.assertEqual(resource["redaction_target_id"], "resources:1:0")
+            valid_target_ids = {item["id"] for item in list_redaction_targets(document)}
+            self.assertIn(resource["redaction_target_id"], valid_target_ids)
+
     def test_history_queries_default_to_latest_and_keep_all_versions(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

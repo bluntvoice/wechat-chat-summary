@@ -265,14 +265,37 @@ class DesktopBridgeTests(unittest.TestCase):
                 ctx={"username": "room@chatroom", "display_name": "测试群"},
                 start_time="2026-08-31 00:00:00", end_time="2026-08-31 23:59:59", version=1,
                 stats={"message_count": 2, "participant_count": 1},
-                report={"one_line_summary": "摘要", "theme_cards": [{"title": "重复内容", "summary": "应从新版本删除"}], "sections": []},
-                resources={"count": 0, "groups": []},
+                report={"one_line_summary": "摘要", "theme_cards": [], "sections": []},
+                resources={
+                    "count": 2,
+                    "groups": [{
+                        "topic_id": "other",
+                        "topic": "其他 / 未归类",
+                        "items": [
+                            {
+                                "id": "duplicate-link",
+                                "type": "link",
+                                "title": "未归类重复链接",
+                                "url": "https://example.com/duplicate-link",
+                            },
+                            {
+                                "id": "kept-link",
+                                "type": "link",
+                                "title": "保留链接",
+                                "url": "https://example.com/kept-link",
+                            },
+                        ],
+                    }],
+                },
                 exports={"json": str(source_path), "html": "old.html", "png": "old.png"},
                 provider="deepseek", model="model", dry_run=False, chunk_count=1, chunk_plan={},
             )
             source_path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
 
-            def fake_export(_html_path: Path, image_path: Path, **_kwargs: object) -> str:
+            rendered_html: list[str] = []
+
+            def fake_export(html_path: Path, image_path: Path, **_kwargs: object) -> str:
+                rendered_html.append(html_path.read_text(encoding="utf-8"))
                 image_path.write_bytes(b"test-png")
                 return ""
 
@@ -284,18 +307,26 @@ class DesktopBridgeTests(unittest.TestCase):
             ):
                 result = _delete_report_content(
                     {"export_root": str(root), "image_dpi": 300},
-                    {"json_path": str(source_path), "target_ids": ["themes:0"]},
+                    {"json_path": str(source_path), "target_ids": ["resources:0:0"]},
                 )
 
             self.assertEqual(result["version"], 2)
             self.assertFalse(ai_client.called)
             new_payload = Path(result["json_path"]).read_text(encoding="utf-8")
-            self.assertNotIn("重复内容", new_payload)
+            self.assertNotIn("未归类重复链接", new_payload)
+            self.assertNotIn("https://example.com/duplicate-link", new_payload)
             self.assertNotIn("已屏蔽", new_payload)
+            self.assertIn("保留链接", new_payload)
+            self.assertEqual(len(rendered_html), 1)
+            self.assertNotIn("未归类重复链接", rendered_html[0])
+            self.assertNotIn("https://example.com/duplicate-link", rendered_html[0])
+            self.assertIn("保留链接", rendered_html[0])
+            self.assertTrue(Path(result["png_path"]).exists())
             with ActualHistoryStore(history_path) as history:
                 stored = history.get_report_detail(result["report_id"])
             self.assertEqual(stored["version"], 2)
-            self.assertFalse(any(module["module_key"] == "themes" for module in stored["modules"]))
+            resource_titles = [item["title"] for item in stored["resources"]]
+            self.assertEqual(resource_titles, ["保留链接"])
 
     def test_chat_list_pins_summarized_ids_and_never_injects_missing_wechat_groups(self) -> None:
         class FakeAPI:

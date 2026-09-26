@@ -453,6 +453,11 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertEqual(edited["metadata"]["deletion_count"], 2)
         self.assertEqual(edited["metadata"]["version"], 2)
         self.assertEqual(document["content"]["resources"]["count"], 3)
+        html = render_html_report(edited)
+        self.assertNotIn("重复链接 A", html)
+        self.assertNotIn("https://example.com/a", html)
+        self.assertNotIn("重复链接 B", html)
+        self.assertIn("保留链接", html)
         validate_report_schema_2_2(edited)
 
     def test_cross_time_sections_with_same_topic_id_are_merged(self):

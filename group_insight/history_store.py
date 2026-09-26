@@ -426,16 +426,21 @@ class HistoryStore:
             related_resources: list[dict[str, Any]] = []
             for group_index, group in resource_groups:
                 items = [
-                    item for item in group.get("items", []) or []
+                    (item_index, item)
+                    for item_index, item in enumerate(group.get("items", []) or [])
                     if isinstance(item, dict) and not item.get("redacted")
                 ]
                 if (topic_id and str(group.get("topic_id") or "") == topic_id) or any(
-                    str(item.get("id") or "") in linked_resource_ids for item in items
+                    str(item.get("id") or "") in linked_resource_ids for _item_index, item in items
                 ):
                     assigned_resource_groups.add(group_index)
                     related_resources.extend(
-                        {"topic": str(group.get("topic") or "相关资源"), **item}
-                        for item in items
+                        {
+                            "topic": str(group.get("topic") or "相关资源"),
+                            **item,
+                            "redaction_target_id": target_id(item, f"resources:{group_index}:{item_index}"),
+                        }
+                        for item_index, item in items
                     )
             core = {
                 key: topic.get(key)
@@ -459,8 +464,12 @@ class HistoryStore:
             if group_index in assigned_resource_groups:
                 continue
             items = [
-                {"topic": str(group.get("topic") or "其他 / 未归类"), **item}
-                for item in group.get("items", []) or []
+                {
+                    "topic": str(group.get("topic") or "其他 / 未归类"),
+                    **item,
+                    "redaction_target_id": target_id(item, f"resources:{group_index}:{item_index}"),
+                }
+                for item_index, item in enumerate(group.get("items", []) or [])
                 if isinstance(item, dict) and not item.get("redacted")
             ]
             if items:
