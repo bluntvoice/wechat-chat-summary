@@ -86,6 +86,15 @@ test("history preview supports validated inline redaction with an auxiliary targ
   assert.match(styles, /\.history-module\.redaction-selectable/);
 });
 
+test("history hides observation kind and supports versioned content deletion", () => {
+  assert.match(history, /"kind"/);
+  assert.match(history, /time: "时间"/);
+  assert.match(history, /删除内容/);
+  assert.match(history, /"delete_report_content"/);
+  assert.match(history, /mode=\{editMode\}/);
+  assert.match(history, /删除报告/);
+});
+
 test("history default view follows report sections without duplicate activity totals", () => {
   assert.match(history, /REPORT_SECTION_KEYS = \["themes", "topics", "ai_observations", "member_activity"\]/);
   assert.match(history, /history-report-sections/);

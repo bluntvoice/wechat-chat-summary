@@ -27,7 +27,7 @@ from .heatmap import build_heatmap_data, ensure_chat_daily_stats
 from .history_store import HistoryStore
 from .progress import read_progress
 from .llm import DeepSeekClient, OpenAICompatibleClient, normalize_chat_completions_url
-from .redaction import list_redaction_targets, redact_report_document
+from .redaction import delete_report_content, list_redaction_targets, redact_report_document
 from .rendering import render_html_report
 from .report_paths import allocate_report_paths, build_report_date_label
 from .report_schema import upgrade_legacy_report, validate_report_schema_2_2
@@ -450,6 +450,62 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
     }
 
 
+def _delete_report_content(settings: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """删除所选报告条目并在本机生成新版本；不读取聊天，也不调用 AI。"""
+
+    _source_path, document = _load_report_document(payload)
+    target_ids = payload.get("target_ids", [])
+    if not isinstance(target_ids, list) or not target_ids:
+        raise ValueError("请至少选择一项需要删除的报告内容。")
+    metadata = document.get("metadata", {})
+    chat = metadata.get("chat", {})
+    period = metadata.get("period", {})
+    configured_output_root = str(settings.get("export_root") or "").strip()
+    if not configured_output_root:
+        raise ValueError("请先选择独立的报告根目录。")
+    output_root = Path(configured_output_root).expanduser()
+    paths = allocate_report_paths(
+        output_root,
+        str(chat.get("name") or "群聊"),
+        str(period.get("start") or ""),
+        str(period.get("end") or ""),
+    )
+    json_path = paths.data_dir / f"{paths.data_stem}.json"
+    html_path = paths.data_dir / f"{paths.data_stem}.html"
+    exports = {
+        "json": str(json_path.resolve()),
+        "html": str(html_path.resolve()),
+        "png": str(paths.image_path.resolve()),
+    }
+    edited = delete_report_content(
+        document,
+        [str(value) for value in target_ids],
+        version=paths.version,
+        exports=exports,
+    )
+    json_path.write_text(json.dumps(edited, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        _render_report_files(edited, html_path, paths.image_path, max(1, int(settings.get("image_dpi") or 300)))
+    except RuntimeError as exc:
+        raise RuntimeError(f"内容删除版 {exc}") from exc
+    with HistoryStore() as history:
+        history.upsert_report(edited)
+        summarized_chat_ids = history.summarized_chat_ids()
+    return {
+        "completed": True,
+        "report_id": str(edited.get("metadata", {}).get("report_id") or ""),
+        "version": paths.version,
+        "deletion_count": int(edited.get("metadata", {}).get("deletion_count") or 0),
+        "chat_dir": str(paths.chat_dir),
+        "data_dir": str(paths.data_dir),
+        "image_dir": str(paths.image_dir),
+        "json_path": str(json_path),
+        "html_path": str(html_path),
+        "png_path": str(paths.image_path),
+        "summarized_chat_ids": summarized_chat_ids,
+    }
+
+
 def _history_document(report_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     with HistoryStore() as history:
         detail = history.get_report_detail(report_id)
@@ -770,6 +826,8 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _get_redaction_targets(payload)
     if command == "redact_report":
         return _redact_report(settings, payload)
+    if command == "delete_report_content":
+        return _delete_report_content(settings, payload)
     raise ValueError(f"未知命令: {command}")
 
 

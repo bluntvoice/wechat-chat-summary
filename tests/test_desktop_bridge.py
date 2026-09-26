@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from group_insight.desktop_bridge import (
+    _delete_report_content,
     _ensure_daily_stats,
     _generate,
     _list_chats,
@@ -252,6 +253,49 @@ class DesktopBridgeTests(unittest.TestCase):
                 stored = history.get_report_detail(result["report_id"])
             self.assertEqual(stored["version"], 2)
             self.assertEqual(stored["exports"]["json"]["path"], result["json_path"])
+
+    def test_content_deletion_rerenders_and_indexes_a_new_version_without_ai(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "reports"
+            first_paths = allocate_report_paths(
+                root, "测试群", "2026-08-31 00:00:00", "2026-08-31 23:59:59"
+            )
+            source_path = first_paths.data_dir / f"{first_paths.data_stem}.json"
+            document = build_report_document(
+                ctx={"username": "room@chatroom", "display_name": "测试群"},
+                start_time="2026-08-31 00:00:00", end_time="2026-08-31 23:59:59", version=1,
+                stats={"message_count": 2, "participant_count": 1},
+                report={"one_line_summary": "摘要", "theme_cards": [{"title": "重复内容", "summary": "应从新版本删除"}], "sections": []},
+                resources={"count": 0, "groups": []},
+                exports={"json": str(source_path), "html": "old.html", "png": "old.png"},
+                provider="deepseek", model="model", dry_run=False, chunk_count=1, chunk_plan={},
+            )
+            source_path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+
+            def fake_export(_html_path: Path, image_path: Path, **_kwargs: object) -> str:
+                image_path.write_bytes(b"test-png")
+                return ""
+
+            history_path = Path(temp_dir) / "history.sqlite3"
+            with (
+                patch("group_insight.desktop_bridge.export_report_image", side_effect=fake_export),
+                patch("group_insight.desktop_bridge.HistoryStore", side_effect=lambda: ActualHistoryStore(history_path)),
+                patch("group_insight.desktop_bridge.DeepSeekClient") as ai_client,
+            ):
+                result = _delete_report_content(
+                    {"export_root": str(root), "image_dpi": 300},
+                    {"json_path": str(source_path), "target_ids": ["themes:0"]},
+                )
+
+            self.assertEqual(result["version"], 2)
+            self.assertFalse(ai_client.called)
+            new_payload = Path(result["json_path"]).read_text(encoding="utf-8")
+            self.assertNotIn("重复内容", new_payload)
+            self.assertNotIn("已屏蔽", new_payload)
+            with ActualHistoryStore(history_path) as history:
+                stored = history.get_report_detail(result["report_id"])
+            self.assertEqual(stored["version"], 2)
+            self.assertFalse(any(module["module_key"] == "themes" for module in stored["modules"]))
 
     def test_chat_list_pins_summarized_ids_and_never_injects_missing_wechat_groups(self) -> None:
         class FakeAPI:

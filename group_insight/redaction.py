@@ -1,4 +1,4 @@
-"""报告条目屏蔽：生成可审计的新版本，不在新版本中保留被屏蔽正文。"""
+"""报告条目编辑：屏蔽或删除内容，并生成可回退的新版本。"""
 
 from __future__ import annotations
 
@@ -316,4 +316,130 @@ def redact_report_document(
         existing[item["target_id"]] = item
     result["redactions"] = list(existing.values())
     metadata["redaction_count"] = len(result["redactions"])
+    return result
+
+
+def _deletion_sort_key(target_id: str) -> tuple[Any, ...]:
+    """先处理较深层、较大下标的条目，避免删除时数组下标漂移。"""
+
+    parts = target_id.split(":")
+    first_index = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else -1
+    detail_key = parts[2] if len(parts) > 2 and not parts[2].isdigit() else ""
+    nested_index = int(parts[-1]) if len(parts) > 2 and parts[-1].isdigit() else -1
+    return parts[0], first_index, len(parts), detail_key, nested_index
+
+
+def _resource_ids(value: Any) -> set[str]:
+    if not isinstance(value, dict):
+        return set()
+    if isinstance(value.get("items"), list):
+        return {
+            str(item.get("id") or "").strip()
+            for item in value["items"]
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+    resource_id = str(value.get("id") or "").strip()
+    return {resource_id} if resource_id else set()
+
+
+def delete_report_content(
+    document: dict[str, Any],
+    target_ids: list[str],
+    *,
+    version: int,
+    exports: dict[str, str],
+) -> dict[str, Any]:
+    """复制报告并彻底移除所选条目；原报告版本保持不变。"""
+
+    selected = {str(value) for value in target_ids if str(value).strip()}
+    if not selected:
+        raise ValueError("请至少选择一项需要删除的报告内容。")
+    result = copy.deepcopy(document)
+    content = result.setdefault("content", {})
+    target_map = {item["id"]: item for item in list_redaction_targets(result)}
+    unknown = sorted(selected - set(target_map))
+    if unknown:
+        raise ValueError(f"报告中不存在这些待删除条目: {', '.join(unknown)}")
+
+    deleted_resource_ids: set[str] = set()
+    deleted_prefixes: list[str] = []
+    applied = 0
+    for target_id in sorted(selected, key=_deletion_sort_key, reverse=True):
+        target = target_map[target_id]
+        parts = target_id.split(":")
+        if parts[0] == "resources":
+            group_index = int(parts[1])
+            groups = content.get("resources", {}).get("groups", [])
+            if len(parts) == 2:
+                original = groups.pop(group_index)
+                deleted_resource_ids.update(_resource_ids(original))
+            else:
+                item_index = int(parts[2])
+                original = groups[group_index].get("items", []).pop(item_index)
+                deleted_resource_ids.update(_resource_ids(original))
+        elif parts[0] == "topics" and len(parts) >= 3:
+            topic_index = int(parts[1])
+            detail_key = parts[2]
+            topic = content["topics"][topic_index]
+            if len(parts) == 3:
+                topic[detail_key] = None
+            else:
+                topic.get(detail_key, []).pop(int(parts[3]))
+        else:
+            module_key, index_text = parts[0], parts[1]
+            original = content[module_key].pop(int(index_text))
+            if module_key == "members":
+                _sanitize_member_stats(result, original)
+        deleted_prefixes.append(target_id)
+        applied += 1
+
+    resources = content.get("resources", {}) if isinstance(content.get("resources"), dict) else {}
+    groups = resources.get("groups", []) if isinstance(resources.get("groups"), list) else []
+    resources["groups"] = [
+        group for group in groups
+        if isinstance(group, dict) and isinstance(group.get("items"), list) and group["items"]
+    ]
+    resources["count"] = sum(
+        1
+        for group in resources["groups"]
+        for item in group.get("items", [])
+        if isinstance(item, dict) and not item.get("redacted")
+    )
+    if deleted_resource_ids:
+        for topic in content.get("topics", []) or []:
+            if not isinstance(topic, dict) or not isinstance(topic.get("resource_ids"), list):
+                continue
+            topic["resource_ids"] = [
+                resource_id for resource_id in topic["resource_ids"]
+                if str(resource_id) not in deleted_resource_ids
+            ]
+
+    had_redactions = "redactions" in result
+    existing_redactions = [
+        item for item in result.get("redactions", []) or []
+        if isinstance(item, dict) and not any(
+            str(item.get("target_id") or "") == prefix
+            or str(item.get("target_id") or "").startswith(prefix + ":")
+            for prefix in deleted_prefixes
+        )
+    ]
+    if existing_redactions or had_redactions:
+        result["redactions"] = existing_redactions
+
+    metadata = result.setdefault("metadata", {})
+    previous_report_id = str(metadata.get("report_id") or "")
+    chat = metadata.get("chat", {})
+    period = metadata.get("period", {})
+    previous_deletion_count = int(metadata.get("deletion_count") or 0)
+    metadata.update(
+        {
+            "report_id": make_report_id(str(chat.get("id") or ""), str(period.get("start") or ""), str(period.get("end") or ""), version),
+            "parent_report_id": previous_report_id,
+            "version": version,
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "exports": exports,
+            "redaction_count": len(existing_redactions),
+            "deletion_count": previous_deletion_count + applied,
+        }
+    )
     return result

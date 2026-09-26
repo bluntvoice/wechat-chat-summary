@@ -12,9 +12,11 @@ type Props = {
   onApply: () => void;
 };
 
-type TargetGroupsProps = Pick<Props, "targets" | "selectedIds" | "busy" | "onToggle">;
+type TargetGroupsProps = Pick<Props, "targets" | "selectedIds" | "busy" | "onToggle"> & {
+  mode?: "redact" | "delete";
+};
 
-export function RedactionTargetGroups({ targets, selectedIds, busy, onToggle }: TargetGroupsProps) {
+export function RedactionTargetGroups({ targets, selectedIds, busy, onToggle, mode = "redact" }: TargetGroupsProps) {
   const groups = useMemo(() => {
     const values = new Map<string, RedactionTarget[]>();
     targets.forEach((target) => {
@@ -23,7 +25,7 @@ export function RedactionTargetGroups({ targets, selectedIds, busy, onToggle }: 
     return [...values.entries()];
   }, [targets]);
 
-  return <div className="redaction-groups">{groups.map(([label, groupTargets]) => <div className="redaction-group" key={label}><h3>{label}<span>{groupTargets.length}</span></h3>{groupTargets.map((target) => <label className={`redaction-row ${target.redacted ? "already" : ""}`} key={target.id}><input type="checkbox" checked={selectedIds.includes(target.id)} disabled={target.redacted || busy} onChange={() => onToggle(target)} /><span><strong>{target.redacted ? "已屏蔽" : target.preview}</strong><small>{target.time_label}{target.redacted ? " · 已屏蔽，建议在群内查看" : ""}</small></span></label>)}</div>)}</div>;
+  return <div className="redaction-groups">{groups.map(([label, groupTargets]) => <div className="redaction-group" key={label}><h3>{label}<span>{groupTargets.length}</span></h3>{groupTargets.map((target) => <label className={`redaction-row ${mode === "redact" && target.redacted ? "already" : ""}`} key={target.id}><input type="checkbox" checked={selectedIds.includes(target.id)} disabled={(mode === "redact" && target.redacted) || busy} onChange={() => onToggle(target)} /><span><strong>{target.redacted ? "已屏蔽内容" : target.preview}</strong><small>{target.time_label}{target.redacted ? " · 已屏蔽，建议在群内查看" : ""}</small></span></label>)}</div>)}</div>;
 }
 
 export default function RedactionEditor({

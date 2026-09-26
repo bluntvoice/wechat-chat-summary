@@ -10,8 +10,13 @@ from group_insight.history_store import HistoryStore
 from group_insight.llm import build_final_prompts
 from group_insight.models import StructuredMessage
 from group_insight.report_model import dedupe_sections, repair_final_report
-from group_insight.report_schema import build_report_document, upgrade_legacy_report
-from group_insight.redaction import REDACTION_NOTICE, list_redaction_targets, redact_report_document
+from group_insight.report_schema import build_report_document, upgrade_legacy_report, validate_report_schema_2_2
+from group_insight.redaction import (
+    REDACTION_NOTICE,
+    delete_report_content,
+    list_redaction_targets,
+    redact_report_document,
+)
 from group_insight.rendering import render_html_report
 from group_insight.resources import build_resource_catalog, classify_resource_platform, extract_resources
 from group_insight.stats import extract_word_cloud_terms
@@ -407,6 +412,48 @@ class ReportSchemaHistoryTests(unittest.TestCase):
         self.assertNotIn("敏感讨论落点", serialized)
         self.assertNotIn("敏感开放问题", serialized)
         self.assertGreaterEqual(render_html_report(redacted).count(REDACTION_NOTICE), 2)
+
+    def test_selected_content_is_deleted_without_placeholder_and_resource_refs_are_recounted(self):
+        document = build_report_document(
+            ctx={"username": "room@chatroom", "display_name": "测试群"},
+            start_time="2026-08-31 00:00:00", end_time="2026-08-31 23:59:59", version=1,
+            stats={"message_count": 3, "effective_char_count": 30, "participant_count": 1},
+            report={
+                "one_line_summary": "当日摘要。", "theme_cards": [],
+                "sections": [{
+                    "id": "topic-a", "title": "资料整理", "discussion_flow": "整理了三个链接。",
+                    "resource_ids": ["r1", "r2", "r3"],
+                }],
+            },
+            resources={
+                "count": 3,
+                "groups": [{
+                    "topic_id": "topic-a", "topic": "资料整理", "items": [
+                        {"id": "r1", "type": "link", "title": "重复链接 A", "url": "https://example.com/a"},
+                        {"id": "r2", "type": "link", "title": "保留链接", "url": "https://example.com/keep"},
+                        {"id": "r3", "type": "link", "title": "重复链接 B", "url": "https://example.com/b"},
+                    ],
+                }],
+            },
+            exports={"json": "a", "html": "b", "png": "c"},
+            provider="deepseek", model="deepseek-v4-flash", dry_run=False, chunk_count=1, chunk_plan={},
+        )
+        edited = delete_report_content(
+            document, ["resources:0:0", "resources:0:2"], version=2,
+            exports={"json": "d", "html": "e", "png": "f"},
+        )
+
+        serialized = json.dumps(edited, ensure_ascii=False)
+        self.assertNotIn("重复链接 A", serialized)
+        self.assertNotIn("重复链接 B", serialized)
+        self.assertNotIn(REDACTION_NOTICE, serialized)
+        self.assertIn("保留链接", serialized)
+        self.assertEqual(edited["content"]["resources"]["count"], 1)
+        self.assertEqual(edited["content"]["topics"][0]["resource_ids"], ["r2"])
+        self.assertEqual(edited["metadata"]["deletion_count"], 2)
+        self.assertEqual(edited["metadata"]["version"], 2)
+        self.assertEqual(document["content"]["resources"]["count"], 3)
+        validate_report_schema_2_2(edited)
 
     def test_cross_time_sections_with_same_topic_id_are_merged(self):
         topics = dedupe_sections(
