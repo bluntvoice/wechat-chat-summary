@@ -18,7 +18,7 @@ from .report_model import BLOCKED_OBSERVATION_PHRASES
 from .report_schema import SCHEMA_VERSION, upgrade_legacy_report
 
 
-DATABASE_SCHEMA_VERSION = 4
+DATABASE_SCHEMA_VERSION = 5
 
 HISTORY_MODULE_ORDER = (
     "summary",
@@ -305,6 +305,12 @@ class HistoryStore:
         if connection.execute("PRAGMA foreign_key_check").fetchone():
             raise RuntimeError("历史数据库关联校验失败。")
 
+    @classmethod
+    def _migrate_v4_to_v5(cls, connection: sqlite3.Connection) -> None:
+        """重建历史派生索引，为话题卡片内的资源补充内容编辑目标。"""
+
+        cls._migrate_v2_to_v3(connection)
+
     def _ensure_schema(self) -> None:
         current_version = int(self.connection.execute("PRAGMA user_version").fetchone()[0])
         if current_version > DATABASE_SCHEMA_VERSION:
@@ -316,6 +322,7 @@ class HistoryStore:
             2: self._migrate_v1_to_v2,
             3: self._migrate_v2_to_v3,
             4: self._migrate_v3_to_v4,
+            5: self._migrate_v4_to_v5,
         }
         for target_version in range(current_version + 1, DATABASE_SCHEMA_VERSION + 1):
             migration = migrations.get(target_version)

@@ -168,6 +168,56 @@ class HistoryCenterMigrationTests(unittest.TestCase):
             with closing(sqlite3.connect(path)) as connection:
                 self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
 
+    def test_v4_database_rebuilds_inline_targets_for_unassigned_resources(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "history.sqlite3"
+            document = history_document(root)
+            document["content"]["resources"]["groups"].append({
+                "topic_id": "other",
+                "topic": "其他 / 未归类",
+                "items": [{
+                    "id": "res-other",
+                    "type": "link",
+                    "title": "未归类重复链接",
+                    "url": "https://example.com/other",
+                }],
+            })
+            document["content"]["resources"]["count"] = 3
+
+            with patch("group_insight.history_store.DATABASE_SCHEMA_VERSION", 4):
+                with HistoryStore(path) as store:
+                    report_id = store.upsert_report(document)
+                    row = store.connection.execute(
+                        "SELECT ordinal, content_json FROM report_modules "
+                        "WHERE report_id=? AND module_key='topics' AND title='其他 / 未归类资源'",
+                        (report_id,),
+                    ).fetchone()
+                    legacy_content = json.loads(row["content_json"])
+                    legacy_content["related_resources"][0].pop("redaction_target_id")
+                    with store.connection:
+                        store.connection.execute(
+                            "UPDATE report_modules SET content_json=? "
+                            "WHERE report_id=? AND module_key='topics' AND ordinal=?",
+                            (json.dumps(legacy_content, ensure_ascii=False), report_id, row["ordinal"]),
+                        )
+
+            with HistoryStore(path) as store:
+                self.assertEqual(
+                    store.connection.execute("PRAGMA user_version").fetchone()[0],
+                    DATABASE_SCHEMA_VERSION,
+                )
+                detail = store.get_report_detail(report_id)
+
+            other_topic = next(
+                item for item in detail["modules"]
+                if item["module_key"] == "topics" and item["title"] == "其他 / 未归类资源"
+            )
+            self.assertEqual(
+                other_topic["content"]["related_resources"][0]["redaction_target_id"],
+                "resources:1:0",
+            )
+
 
 class HistoryCenterQueryTests(unittest.TestCase):
     def test_schema_22_default_sections_include_report_content_without_activity_totals(self) -> None:
