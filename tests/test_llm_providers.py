@@ -1,17 +1,36 @@
 from __future__ import annotations
 
+import json
 import unittest
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from group_insight.llm import (
     DeepSeekClient,
     OpenAICompatibleClient,
+    OutputTruncatedError,
     build_deepseek_balance_url,
     normalize_chat_completions_url,
 )
 
 
 class LLMProviderTests(unittest.TestCase):
+    def test_length_finish_reason_fails_without_retry_or_repair_even_with_valid_json(self):
+        client = OpenAICompatibleClient(
+            api_key="secret", model="vendor-model", api_url="https://vendor.example/v1",
+            max_retries=3, allow_json_repair=True,
+        )
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "choices": [{"finish_reason": "length", "message": {"content": '{"ok": true}'}}],
+        }).encode("utf-8")
+        with patch("group_insight.llm.urllib.request.urlopen", return_value=response) as request:
+            with patch.object(client, "_repair_json") as repair:
+                with self.assertRaisesRegex(OutputTruncatedError, "不会保存为完整报告或自动重试"):
+                    client.chat_json("system", "user")
+        self.assertEqual(request.call_count, 1)
+        repair.assert_not_called()
+
     def test_generic_payload_contains_only_standard_fields(self):
         client = OpenAICompatibleClient(
             api_key="generic-secret",

@@ -92,7 +92,7 @@ check_app:
     System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
     ${If} $0 != 0
       System::Call 'kernel32::CloseHandle(p r0)'
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "群聊拾遗未能自动正常关闭。$\r$\n$\r$\n请确认软件中的任务已经结束并手动关闭，再点击重试继续安装；点击取消将退出安装。" IDRETRY check_app IDCANCEL cancel_install
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "群聊拾遗仍在运行。$\r$\n$\r$\n请确认软件中的任务已经结束，从系统托盘右键菜单选择“退出群聊拾遗”，再点击重试继续安装；点击取消将退出安装。" IDRETRY check_app IDCANCEL cancel_install
     ${EndIf}
   ${EndIf}
   Return
@@ -135,7 +135,7 @@ check_app:
     System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_RUNNING_MUTEX}") p .r0'
     ${If} $0 != 0
       System::Call 'kernel32::CloseHandle(p r0)'
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "群聊拾遗未能自动正常关闭。$\r$\n$\r$\n请确认软件中的任务已经结束并手动关闭，再点击重试继续卸载；点击取消将退出卸载。" IDRETRY check_app IDCANCEL cancel_uninstall
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "群聊拾遗仍在运行。$\r$\n$\r$\n请确认软件中的任务已经结束，从系统托盘右键菜单选择“退出群聊拾遗”，再点击重试继续卸载；点击取消将退出卸载。" IDRETRY check_app IDCANCEL cancel_uninstall
     ${EndIf}
   ${EndIf}
   Return

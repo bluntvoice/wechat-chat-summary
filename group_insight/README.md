@@ -60,7 +60,7 @@ GROUP_INSIGHT_OUTPUT_ROOT=<用户选择的独立报告目录>
 - 主流程固定走 `map -> reduce -> final`，不再暴露 `direct_range` / `topic-first` 这类分支模式。
 - LLM 返回 JSON 自动修复按显式开关理解，默认关闭；需要时显式传 `--allow-json-repair`。
 - DeepSeek 与 OpenAI Compatible 的模型标识均接受用户填写的任意非空值；已知 DeepSeek 名称只是推荐值，不是限制新模型的白名单。
-- DeepSeek 默认显式传 `max_tokens` 预算，避免 JSON 输出链路在思考模式或异常情况下失控扩张；如需改预算，优先从命令行参数或代码常量调整。
+- DeepSeek 默认显式传 `max_tokens` 预算，避免 JSON 输出链路在思考模式或异常情况下失控扩张；本次不提高预算。报告正文在清洗、合并和 Schema 载荷构建时保留完整文本；`finish_reason=length` 明确报错且不自动重试或 JSON 修复，避免把不完整输出当成完整报告或重复计费。
 - 通用 OpenAI Compatible Provider 不发送 `thinking` 或 `reasoning_effort`；这些字段和余额接口仅属于 DeepSeek，连接测试则对两种 Provider 都核验实际响应模型。
 - LLM 花费改为按任务前后余额快照对比，不再在每次请求后动态打印 usage 计费估算。
 - 文档只保留当前推荐参数，不再展开旧兼容入口。
@@ -201,7 +201,7 @@ MCP Server 也不读取 DeepSeek Key。
 
 桌面端的“定时总结管理”使用软件内置定时器，可按稳定 `chat_id` 为多个群聊分别保存一项当日或昨日任务，
 支持独立增删改和启停；旧单群配置会幂等迁移。多个到期任务按 `chat_id + report_date` 去重并串行执行，
-单项失败不阻断后续任务。软件关闭时不执行，并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划
+单项失败不阻断后续任务。主窗口关闭后缩小到托盘，定时继续生效；从托盘菜单退出后不执行，重新打开只等待下一个正常定时，不补跑关闭期间错过的任务，并与本文件后文供 CLI/RPA 场景使用的 Windows 任务计划
 注册模块相互独立。
 
 ## RPA 发送前预热

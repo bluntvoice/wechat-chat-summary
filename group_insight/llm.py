@@ -22,6 +22,10 @@ from .settings import (
 )
 
 
+class OutputTruncatedError(RuntimeError):
+    """模型耗尽输出预算；不得把不完整内容当作有效报告或自动修复。"""
+
+
 class LLMClientProtocol:
     """所有 LLM 客户端需要实现的最小 JSON 对话协议。"""
     provider: str
@@ -121,6 +125,8 @@ class OpenAICompatibleClient(LLMClientProtocol):
                 if not content.strip():
                     raise ValueError(f"{self.provider} 返回空内容")
                 return safe_json_loads(content)
+            except OutputTruncatedError as exc:
+                raise OutputTruncatedError(str(self._redact_error(exc))) from None
             except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, RuntimeError) as exc:
                 last_error = self._redact_error(exc)
                 if isinstance(exc, json.JSONDecodeError) and self.allow_json_repair:
@@ -131,6 +137,8 @@ class OpenAICompatibleClient(LLMClientProtocol):
                         )
                         if repaired:
                             return safe_json_loads(repaired)
+                    except OutputTruncatedError as exc:
+                        raise OutputTruncatedError(str(self._redact_error(exc))) from None
                     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, RuntimeError) as repair_exc:
                         last_error = self._redact_error(repair_exc)
                 if attempt >= self.max_retries:
@@ -188,6 +196,11 @@ class OpenAICompatibleClient(LLMClientProtocol):
         choices = parsed.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise ValueError(f"{self.provider} 响应缺少 choices")
+        if choices[0].get("finish_reason") == "length":
+            raise OutputTruncatedError(
+                f"{self.provider} 输出达到模型长度上限，内容尚未完成；已停止本次生成，"
+                "不会保存为完整报告或自动重试。请缩小报告时间范围或选用输出容量更大的模型后手动重试。"
+            )
         message = choices[0].get("message")
         if not isinstance(message, dict):
             raise ValueError(f"{self.provider} 响应缺少 message")
@@ -523,7 +536,7 @@ def build_map_prompts(chat_name: str, chunk: MessageChunk) -> tuple[str, str]:
 5. 允许保留轻度口语化，但不能夸张、不能编造。
 6. 控制片段输出长度，但要保留话题缘起、观点变化和阶段结果所需的信息。
 7. theme_cards 最多 3 条，highlight_sections 最多 4 条，participant_notes 最多 4 条。
-8. 每个话题以 discussion_flow 为核心，通常 50-250 个汉字；信息较少就短写，不得为了长度重复同义内容。信息较多时使用 2-5 个换行分隔的短段，优先按讨论顺序、不同成员观点或子问题组织；同一成员连续表达的内容必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
+8. 每个话题以 discussion_flow 为核心，长度按实际信息量决定，必须完整表达，不得为凑字数压缩到半句或用省略号代替未写完的内容；信息较少就短写，不得为了长度重复同义内容。信息较多时使用 2-5 个换行分隔的短段，优先按讨论顺序、不同成员观点或子问题组织；同一成员连续表达的内容必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
 9. outcome 固定返回 null，不生成讨论落点；open_questions/risk_flags/quotes/resource_ids 是可选细节，没有可靠内容就返回空数组。action_items 固定返回空数组，不提取行动事项。
 10. 每个话题 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选项只保留直接影响后续理解的信息。
 11. highlight_sections 表示语义话题而不是机械时间切段；时间相邻只是弱线索。只有讨论对象、核心问题与上下文指向相同，或存在明确回复/承接关系时才能合并。
@@ -558,7 +571,7 @@ def build_reduce_prompts(bundle_id: str, items: list[dict[str, Any]]) -> tuple[s
 3. highlight_sections 应按语义话题整理；跨 shard 只有在讨论对象、核心问题和上下文指向一致，或存在明确回复/承接关系时才合并，并用 time_ranges 保留多个区间。
 4. source_refs 必须引用输入里的 shard_id 或 bundle_id。
 5. outcome 固定返回 null，不生成讨论落点；open_questions/risk_flags/quotes/resource_ids 是可选细节，无可靠内容就返回空数组。action_items 固定返回空数组，不提取行动事项。
-6. discussion_flow 通常 50-250 个汉字；保留理解讨论发展所需的缘起、观点、补充、转折或结果，但不重复同义信息；较长内容用换行分成 2-5 个短段。
+6. discussion_flow 长度按实际信息量决定，必须完整表达，不得为凑字数压缩到半句或用省略号代替未写完的内容；保留理解讨论发展所需的缘起、观点、补充、转折或结果，但不重复同义信息；较长内容用换行分成 2-5 个短段。
 7. theme_cards 最多 4 条，highlight_sections 最多 6 条，participant_notes 最多 6 条。
 8. 每个话题 quotes 默认 0-1 条、最多 2 条，open_questions 最多 2 条。
 9. 合并时检查是否遗漏持续但相对次级的话题，不要只保留最热主线。
@@ -600,7 +613,7 @@ def build_final_prompts(
 2. theme_cards 是“今日速览”，动态生成约 3-5 条短卡片；不强制凑足，不展开完整讨论过程。
 3. sections 是“今日主要话题”，表示语义话题而不是机械时间段；数量根据当天内容动态决定，不设最低数量。
 4. 报表语言要像运营洞察报告，不要写成泛泛总结。
-5. 每个 section 以 discussion_flow 为唯一必需正文，自然叙述缘起、展开、观点、补充、转折与进展；通常 50-250 个汉字，信息少就短写，禁止同义反复。内容较长时使用 2-5 个换行分隔的短段，按讨论顺序、不同成员观点或子问题选择最自然的组织方式；同一成员连续表达必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
+5. 每个 section 以 discussion_flow 为唯一必需正文，自然叙述缘起、展开、观点、补充、转折与进展；长度按实际信息量决定，必须完整表达，不得为凑字数压缩到半句或用省略号代替未写完的内容，信息少就短写，禁止同义反复。内容较长时使用 2-5 个换行分隔的短段，按讨论顺序、不同成员观点或子问题选择最自然的组织方式；同一成员连续表达必须保留在同一段，不能仅因字数较长拆成两段，不要输出 Markdown 项目符号。
 6. outcome 固定返回 null，不生成讨论落点；open_questions/risk_flags/quotes/resource_ids 为话题内可选字段，没有可靠内容就返回空数组。action_items 固定返回空数组，不提取行动事项。
 7. theme_cards 最多 5 条且每条只做速览，不复述完整 discussion_flow；participant_insights 最多 6 条。
 8. 每个 section 的 quotes 默认 0-1 条、最多 2 条；open_questions 最多 2 条；其余可选细节从严保留。

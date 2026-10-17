@@ -44,9 +44,10 @@ export function refreshScheduleTaskNames(tasks: ScheduleTask[], chats: Chat[]) {
   });
 }
 
-export function dueScheduleTasks(tasks: ScheduleTask[], today: string, clock: string) {
+export function dueScheduleTasks(tasks: ScheduleTask[], today: string, clock: string, startedAt: Date) {
   return tasks
-    .filter((task) => task.enabled && task.time <= clock && task.last_attempt_date !== today)
+    .filter((task) => task.enabled && task.time <= clock && task.last_attempt_date !== today
+      && new Date(`${today}T${task.time}:00`).getTime() > startedAt.getTime())
     .sort((left, right) => left.time.localeCompare(right.time) || left.created_at.localeCompare(right.created_at) || left.task_id.localeCompare(right.task_id));
 }
 

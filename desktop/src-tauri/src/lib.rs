@@ -7,9 +7,53 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
 
 mod updater;
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "打开群聊拾遗", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出群聊拾遗", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    TrayIconBuilder::with_id("main-tray")
+        .icon(
+            app.default_window_icon()
+                .expect("application icon is required")
+                .clone(),
+        )
+        .tooltip("群聊拾遗（关闭窗口后仍在运行）")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -339,6 +383,18 @@ pub fn run() {
     let _running_instance_mutex = RunningInstanceMutex::create();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| Ok(setup_tray(app)?))
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    // Hide only after the tray is available; a failed hide keeps the window usable.
+                    if window.app_handle().tray_by_id("main-tray").is_some() {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
         .manage(McpProcessState::default())
         .manage(updater::UpdateProcessState::default())
         .invoke_handler(tauri::generate_handler![

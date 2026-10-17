@@ -68,7 +68,28 @@ test("due selection uses per-task time and last attempt date", () => {
   const second = createScheduleTask({ id: "b", name: "B" }, "22:00", "today", "b");
   const disabled = { ...createScheduleTask({ id: "c", name: "C" }, "20:00", "today", "c"), enabled: false };
   const attempted = { ...createScheduleTask({ id: "d", name: "D" }, "20:00", "today", "d"), last_attempt_date: "2026-09-08" };
-  assert.deepEqual(dueScheduleTasks([second, disabled, attempted, first], "2026-09-08", "21:30").map((item) => item.task_id), ["a"]);
+  assert.deepEqual(dueScheduleTasks([second, disabled, attempted, first], "2026-09-08", "21:30", new Date("2026-09-08T20:00:00")).map((item) => item.task_id), ["a"]);
+});
+
+test("restart skips missed times but keeps future schedules and next day enabled", () => {
+  const missed = createScheduleTask({ id: "a", name: "A" }, "21:00", "today", "a");
+  const future = createScheduleTask({ id: "b", name: "B" }, "22:00", "yesterday", "b");
+  const tasks = [missed, future];
+  const startedAt = new Date("2026-10-17T21:30:00");
+  assert.deepEqual(dueScheduleTasks(tasks, "2026-10-17", "21:30", startedAt), []);
+  assert.deepEqual(dueScheduleTasks(tasks, "2026-10-17", "22:00", startedAt).map((item) => item.task_id), ["b"]);
+  assert.deepEqual(dueScheduleTasks(tasks, "2026-10-18", "21:00", startedAt).map((item) => item.task_id), ["a"]);
+  assert.equal(missed.enabled, true);
+  assert.equal(missed.last_attempt_date, "");
+});
+
+test("startup in the scheduled minute never backfills and midnight crosses month/year", () => {
+  const task = createScheduleTask({ id: "a", name: "A" }, "00:00", "yesterday", "a");
+  assert.deepEqual(dueScheduleTasks([task], "2027-01-01", "00:00", new Date("2027-01-01T00:00:15")), []);
+  assert.deepEqual(dueScheduleTasks([task], "2027-01-01", "00:00", new Date("2026-12-31T23:59:59")), [task]);
+  const restartedAfterDays = new Date("2027-02-04T10:00:00");
+  assert.deepEqual(dueScheduleTasks([task], "2027-02-04", "10:00", restartedAfterDays), []);
+  assert.deepEqual(dueScheduleTasks([task], "2027-02-05", "00:00", restartedAfterDays), [task]);
 });
 
 test("serial queue keeps B pending, deduplicates chat/date and isolates A failure", async () => {

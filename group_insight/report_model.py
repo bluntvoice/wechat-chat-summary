@@ -37,7 +37,7 @@ def filter_serious_items(items: Any, *, content_key: str = "content", threshold:
     filtered: list[Any] = []
     for item in items:
         if isinstance(item, str):
-            text = normalize_text(item, max_len=320)
+            text = normalize_text(item)
             if text:
                 filtered.append(text)
             continue
@@ -55,7 +55,7 @@ def filter_serious_items(items: Any, *, content_key: str = "content", threshold:
             continue
         cleaned = dict(item)
         if content_key in cleaned:
-            cleaned[content_key] = normalize_text(cleaned.get(content_key, ""), max_len=320)
+            cleaned[content_key] = normalize_text(cleaned.get(content_key, ""))
             if not cleaned[content_key]:
                 continue
         filtered.append(cleaned)
@@ -109,7 +109,7 @@ def dedupe_theme_cards(cards: list[dict[str, Any]], limit: int = 4) -> list[dict
     deduped: list[dict[str, Any]] = []
     for card in cards:
         title = normalize_text(card.get("title", ""), max_len=120)
-        summary = normalize_text(card.get("summary", ""), max_len=420)
+        summary = normalize_text(card.get("summary", ""))
         if not title and not summary:
             continue
         key = (title.lower(), summary.lower())
@@ -172,7 +172,7 @@ def _merge_serious_items(
     for source in sources:
         for item in filter_serious_items(source, content_key=content_key):
             text = item if isinstance(item, str) else item.get(content_key, "")
-            key = normalize_text(str(text or ""), max_len=320).casefold()
+            key = normalize_text(str(text or "")).casefold()
             if not key or key in seen:
                 continue
             seen.add(key)
@@ -193,7 +193,7 @@ def _merge_quotes(*sources: Any, limit: int = 2) -> list[dict[str, Any]]:
         for item in source:
             if not isinstance(item, dict):
                 continue
-            quote = normalize_text(item.get("quote", "") or item.get("content", ""), max_len=240)
+            quote = normalize_text(item.get("quote", "") or item.get("content", ""))
             key = quote.casefold()
             if not quote or key in seen:
                 continue
@@ -226,12 +226,12 @@ def normalize_ai_observations(items: Any, mood: Any) -> list[dict[str, Any]]:
     source = items if isinstance(items, list) else []
     for item in source:
         if isinstance(item, str):
-            content = normalize_text(item, max_len=420)
+            content = normalize_text(item)
             if content and not any(phrase in content for phrase in BLOCKED_OBSERVATION_PHRASES):
                 result.append({"title": "今日观察", "content": content, "kind": "observation"})
         elif isinstance(item, dict):
             title = normalize_text(item.get("title", ""), max_len=80) or "今日观察"
-            content = normalize_text(item.get("content", ""), max_len=420)
+            content = normalize_text(item.get("content", ""))
             if not content or any(
                 phrase in f"{title} {content}" for phrase in BLOCKED_OBSERVATION_PHRASES
             ):
@@ -247,7 +247,7 @@ def normalize_ai_observations(items: Any, mood: Any) -> list[dict[str, Any]]:
             break
     if not result and isinstance(mood, dict):
         label = normalize_text(mood.get("label", ""), max_len=60)
-        reason = normalize_text(mood.get("reason", ""), max_len=420)
+        reason = normalize_text(mood.get("reason", ""))
         if label or reason:
             result.append({"title": label or "整体氛围", "content": reason or label, "kind": "mood"})
     return result
@@ -263,7 +263,7 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         title = normalize_text(section.get("title", ""), max_len=140)
         topic_id = normalize_text(section.get("id", "") or section.get("topic_key", ""), max_len=80)
         discussion_flow = normalize_multiline_text(
-            section.get("discussion_flow", "") or section.get("summary", ""), max_len=360
+            section.get("discussion_flow", "") or section.get("summary", "")
         )
         time_ranges = _normalized_time_ranges(section)
         if not title and not discussion_flow:
@@ -302,7 +302,7 @@ def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             existing["end_time"] = existing["time_ranges"][-1]["end"]
         if discussion_flow and discussion_flow not in existing["discussion_flow"]:
             existing["discussion_flow"] = normalize_multiline_text(
-                f"{existing['discussion_flow']}\n{discussion_flow}", max_len=360
+                f"{existing['discussion_flow']}\n{discussion_flow}"
             )
         existing["action_items"] = []
         existing["open_questions"] = _merge_serious_items(
@@ -706,15 +706,15 @@ def repair_final_report(
     repaired = {
         "headline": normalize_text(report.get("headline", ""), max_len=120) or f"{chat_name} 群洞察报表",
         "tagline": normalize_text(report.get("tagline", ""), max_len=180) or f"{start_time} - {end_time}",
-        "lead_summary": normalize_text(report.get("lead_summary", ""), max_len=1600),
-        "one_line_summary": normalize_text(report.get("one_line_summary", ""), max_len=120),
+        "lead_summary": normalize_text(report.get("lead_summary", "")),
+        "one_line_summary": normalize_text(report.get("one_line_summary", "")),
         "theme_cards": dedupe_theme_cards(report.get("theme_cards", []), limit=5),
         "sections": sections,
         "ai_observations": normalize_ai_observations(report.get("ai_observations", []), report.get("mood", {})),
         "participant_insights": report.get("participant_insights", [])[:6],
         "light_moments": normalize_light_moments(report.get("light_moments", [])),
         "mood": report.get("mood", {}) if isinstance(report.get("mood"), dict) else {},
-        "conclusion": normalize_text(report.get("conclusion", ""), max_len=240),
+        "conclusion": normalize_text(report.get("conclusion", "")),
     }
 
     bundle_sections = build_report_sections_from_bundles(bundles)
@@ -731,7 +731,7 @@ def repair_final_report(
             f"参与成员 {stats.get('participant_count', 0)} 位。"
         )
     if not repaired["one_line_summary"]:
-        repaired["one_line_summary"] = normalize_text(repaired["lead_summary"], max_len=90)
+        repaired["one_line_summary"] = normalize_text(repaired["lead_summary"])
     if not repaired["theme_cards"]:
         repaired["theme_cards"] = build_theme_cards_from_bundles(bundles) or [
             {

@@ -59,6 +59,7 @@ function GeneratePage({
   const [scheduledPendingCount, setScheduledPendingCount] = useState(0);
   const scheduleQueue = useRef(new SerialGenerationQueue());
   const scheduleCheckGuard = useRef(false);
+  const scheduleStartedAt = useRef(new Date());
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const { busy, setBusy, progress, currentTask, result, setResult, batchResults, runGeneration, runBatchGeneration } = useReportGeneration({
@@ -93,7 +94,7 @@ function GeneratePage({
       const now = new Date();
       const today = localDate();
       const clock = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const due = dueScheduleTasks(settingsRef.current.schedule_tasks || [], today, clock);
+      const due = dueScheduleTasks(settingsRef.current.schedule_tasks || [], today, clock, scheduleStartedAt.current);
       const enqueued = due.filter((task) => scheduleQueue.current.enqueue({
         key: `${task.chat_id}:${scheduledReportDate(today, task.date_mode)}`,
         scheduleTaskId: task.task_id,
@@ -403,7 +404,7 @@ function GeneratePage({
           <label><span>独立报告根目录</span><div className="path-control"><input readOnly value={settings.export_root || "尚未配置"} /><button className="button secondary" onClick={onOpenSettings}>打开设置</button></div></label>
           <div className="archive-preview"><span>自动归档</span><code>群聊 / 导出图 / 年 / 月</code><code>群聊 / 报告数据 / 日期报告数据</code></div>
           <div className="schedule-box schedule-manager">
-            <div className="schedule-title"><div><strong>定时总结管理</strong><small>每个群聊一项独立任务；仅软件保持运行时执行</small></div><button className="button secondary small inline-icon" disabled={busy || !chats.length} onClick={openNewScheduleEditor}><Plus size={14} aria-hidden="true" />添加定时总结</button></div>
+            <div className="schedule-title"><div><strong>定时总结管理</strong><small>仅运行期间触发（含托盘）；重新打开跳过错过的任务</small></div><button className="button secondary small inline-icon" disabled={busy || !chats.length} onClick={openNewScheduleEditor}><Plus size={14} aria-hidden="true" />添加定时总结</button></div>
             {scheduledPendingCount > 0 && <p className="schedule-queue-status">另有 {scheduledPendingCount} 项定时任务正在等待串行执行。</p>}
             <div className="schedule-task-list">
               {(settings.schedule_tasks || []).map((task) => <article className={`schedule-task-row ${task.enabled ? "enabled" : "disabled"}`} key={task.task_id}>

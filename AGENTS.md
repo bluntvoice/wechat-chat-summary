@@ -209,6 +209,8 @@
 - 手动生成、软件内定时生成和历史重新生成必须复用同一主 generation pipeline。每次生成使用应用级
   immutable task context，至少固定 `task_id/source/chat_id/chat_name/date_range/started_at/status/progress`；
   进度框只能读取真实任务上下文，不得读取当前 `selectedChat`、`selectedDate` 或其他表单状态。
+- 主窗口关闭默认缩小到系统托盘；左键图标或托盘菜单恢复窗口，退出菜单才真正退出并停止 MCP。托盘运行期间定时有效；重新启动跳过已错过的任务，从下一个正常定时时间恢复，不补跑。安装 / 卸载等待退出时，用户可从托盘菜单退出后重试。
+- 报告正文、主题摘要、AI 观察、引用和结尾不得按固定字符数截断并添加省略号；模型 `finish_reason=length` 必须显式失败，不自动重试、修复或续写，不保存为完整报告。
 - 软件内定时总结支持多个群聊独立任务，每个稳定 `chat_id` 最多一项；群名只作显示并可按 ID 刷新，
   不得按名称重绑。旧单群配置必须幂等迁移；到期任务按 `chat_id + report_date` 去重并串行执行，单项失败
   不得阻断后续任务。停用保留配置，删除必须二次确认；不得扩展为 Service、Task Scheduler 或云调度。

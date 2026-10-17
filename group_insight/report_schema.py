@@ -55,8 +55,8 @@ REPORT_SCHEMA_2_2 = {
             "additionalProperties": False,
             "properties": {
                 "headline": {"type": "string", "maxLength": 300},
-                "one_line_summary": {"type": "string", "minLength": 1, "maxLength": 300},
-                "lead_summary": {"type": "string", "maxLength": 4000},
+                "one_line_summary": {"type": "string", "minLength": 1},
+                "lead_summary": {"type": "string"},
                 "themes": {"type": "array", "maxItems": 5, "items": {"type": "object"}},
                 "topics": {
                     "type": "array",
@@ -75,7 +75,7 @@ REPORT_SCHEMA_2_2 = {
                             "start_time": {"type": "string", "maxLength": 32},
                             "end_time": {"type": "string", "maxLength": 32},
                             "time_ranges": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
-                            "discussion_flow": {"type": "string", "minLength": 1, "maxLength": 4000},
+                            "discussion_flow": {"type": "string", "minLength": 1},
                             "outcome": {"type": "null"},
                             "action_items": {"type": "array", "maxItems": 0, "items": {"type": "object"}},
                             "open_questions": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
@@ -91,7 +91,7 @@ REPORT_SCHEMA_2_2 = {
                 "ai_observations": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
                 "members": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
                 "mood": {"type": "object"},
-                "conclusion": {"type": "string", "maxLength": 1000},
+                "conclusion": {"type": "string"},
                 "resources": {
                     "type": "object",
                     "required": ["count", "groups"],
@@ -131,7 +131,6 @@ def make_report_id(chat_id: str, start_time: str, end_time: str, version: int) -
 def _one_line(report: dict[str, Any], chat_name: str) -> str:
     value = normalize_text(
         report.get("one_line_summary", "") or report.get("tagline", "") or report.get("lead_summary", ""),
-        max_len=90,
     )
     value = re.sub(r"^(一句话总结|总结|摘要)[:：]\s*", "", value)
     if value:
@@ -149,7 +148,7 @@ def _canonical_topic(item: dict[str, Any], index: int) -> dict[str, Any]:
         "end_time": str(item.get("end_time") or ""),
         "time_ranges": item.get("time_ranges", []) if isinstance(item.get("time_ranges"), list) else [],
         "discussion_flow": normalize_multiline_text(
-            item.get("discussion_flow", "") or item.get("summary", ""), max_len=360
+            item.get("discussion_flow", "") or item.get("summary", "")
         ),
         # Schema 2.2 为兼容旧报告保留字段；新报告不再生成讨论落点。
         "outcome": None,
@@ -256,13 +255,13 @@ def build_report_document(
         "content": {
             "headline": f"{chat_name}：{report_date.replace('-', '')} 总结",
             "one_line_summary": _one_line(report, chat_name),
-            "lead_summary": normalize_text(report.get("lead_summary", ""), max_len=1600),
+            "lead_summary": normalize_text(report.get("lead_summary", "")),
             "themes": report.get("theme_cards", []),
             "topics": topics,
             "ai_observations": report.get("ai_observations", []),
             "members": report.get("participant_insights", []) or stats.get("top_speakers", []),
             "mood": report.get("mood", {}),
-            "conclusion": normalize_text(report.get("conclusion", ""), max_len=240),
+            "conclusion": normalize_text(report.get("conclusion", "")),
             "resources": resources,
         },
     }
