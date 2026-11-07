@@ -429,6 +429,8 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
         exports=exports,
         text_redactions=text_redactions,
     )
+    with HistoryStore() as history:
+        redacted["metadata"].update(history.redaction_version_fields(redacted))
     json_path.write_text(json.dumps(redacted, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         _render_report_files(redacted, html_path, paths.image_path, max(1, int(settings.get("image_dpi") or 300)))
@@ -436,12 +438,14 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
         raise RuntimeError(f"屏蔽版 {exc}") from exc
     with HistoryStore() as history:
         history.upsert_report(redacted)
+        version_label = history.get_report_detail(redacted["metadata"]["report_id"])["version_label"]
         summarized_chat_ids = history.summarized_chat_ids()
     return {
         "completed": True,
         "report_id": str(redacted.get("metadata", {}).get("report_id") or ""),
         "version": paths.version,
         "redaction_count": len(redacted.get("redactions", []) or []),
+        "version_label": version_label,
         "chat_dir": str(paths.chat_dir),
         "data_dir": str(paths.data_dir),
         "image_dir": str(paths.image_dir),
@@ -485,6 +489,8 @@ def _delete_report_content(settings: dict[str, Any], payload: dict[str, Any]) ->
         version=paths.version,
         exports=exports,
     )
+    with HistoryStore() as history:
+        edited["metadata"].update(history.redaction_version_fields(edited))
     json_path.write_text(json.dumps(edited, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         _render_report_files(edited, html_path, paths.image_path, max(1, int(settings.get("image_dpi") or 300)))

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+from contextlib import closing
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,7 @@ from .report_model import BLOCKED_OBSERVATION_PHRASES
 from .report_schema import SCHEMA_VERSION, upgrade_legacy_report
 
 
-DATABASE_SCHEMA_VERSION = 5
+DATABASE_SCHEMA_VERSION = 6
 
 HISTORY_MODULE_ORDER = (
     "summary",
@@ -311,18 +313,106 @@ class HistoryStore:
 
         cls._migrate_v2_to_v3(connection)
 
+    @classmethod
+    def _migrate_v5_to_v6(cls, connection: sqlite3.Connection) -> None:
+        """保留编辑来源和稳定的屏蔽次序；旧报告文件只读。"""
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(reports)")}
+        for name, definition in (
+            ("parent_report_id", "TEXT NOT NULL DEFAULT ''"),
+            ("redaction_base_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("redaction_revision", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE reports ADD COLUMN {name} {definition}")
+        rows = connection.execute(
+            "SELECT * FROM reports WHERE report_variant='normal' "
+            "ORDER BY chat_id, period_start, period_end, version"
+        ).fetchall()
+        for row in rows:
+            metadata: dict[str, Any] = {}
+            path = str(row["json_path"] or "")
+            if path:
+                try:
+                    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+                    if isinstance(raw, dict) and isinstance(raw.get("metadata"), dict):
+                        metadata = dict(raw["metadata"])
+                except (OSError, ValueError):
+                    # JSON 是可选的来源证据；缺失时仍保留 SQLite 中的屏蔽类型，不猜测来源。
+                    pass
+            metadata.update(report_id=row["report_id"], chat={"id": row["chat_id"]},
+                            period={"start": row["period_start"], "end": row["period_end"]},
+                            version=row["version"])
+            redacted = bool(connection.execute(
+                "SELECT 1 FROM report_redactions WHERE report_id=? LIMIT 1", (row["report_id"],)
+            ).fetchone())
+            fields = cls._redaction_version_fields(connection, metadata, redacted)
+            connection.execute(
+                "UPDATE reports SET parent_report_id=?, redaction_base_version=?, redaction_revision=? WHERE report_id=?",
+                (fields["parent_report_id"], fields["redaction_base_version"], fields["redaction_revision"], row["report_id"]),
+            )
+
+    @staticmethod
+    def _redaction_version_fields(connection: sqlite3.Connection, metadata: dict[str, Any], redacted: bool) -> dict[str, Any]:
+        parent_id = str(metadata.get("parent_report_id") or "")
+        empty = {"parent_report_id": parent_id, "redaction_base_version": 0, "redaction_revision": 0}
+        if not redacted:
+            return empty
+        report_id = str(metadata.get("report_id") or "")
+        existing = connection.execute("SELECT * FROM reports WHERE report_id=?", (report_id,)).fetchone()
+        if existing is not None and existing["redaction_revision"] > 0:
+            return {key: existing[key] for key in empty}
+        chat_id = str(metadata.get("chat", {}).get("id") or "")
+        period = metadata.get("period", {})
+        scope = (chat_id, str(period.get("start") or ""), str(period.get("end") or ""))
+        parent = connection.execute(
+            "SELECT * FROM reports WHERE report_id=? AND report_variant='normal' "
+            "AND chat_id=? AND period_start=? AND period_end=? AND version<?",
+            (parent_id, *scope, int(metadata.get("version") or 1)),
+        ).fetchone()
+        base = int(metadata.get("redaction_base_version") or 0)
+        if parent is not None:
+            if parent["redaction_base_version"] > 0:
+                base = int(parent["redaction_base_version"])
+            elif not connection.execute("SELECT 1 FROM report_redactions WHERE report_id=? LIMIT 1", (parent_id,)).fetchone():
+                base = int(parent["version"])
+        if not 0 < base < int(metadata.get("version") or 1):
+            return empty
+        revision = int(metadata.get("redaction_revision") or 0)
+        if revision > 0 and not connection.execute(
+            "SELECT 1 FROM reports WHERE chat_id=? AND period_start=? AND period_end=? "
+            "AND redaction_base_version=? AND redaction_revision=? AND report_id<>?",
+            (*scope, base, revision, report_id),
+        ).fetchone():
+            return {"parent_report_id": parent_id, "redaction_base_version": base, "redaction_revision": revision}
+        revision = int(connection.execute(
+            "SELECT coalesce(max(redaction_revision), 0)+1 FROM reports "
+            "WHERE chat_id=? AND period_start=? AND period_end=? AND redaction_base_version=?",
+            (*scope, base),
+        ).fetchone()[0])
+        return {"parent_report_id": parent_id, "redaction_base_version": base, "redaction_revision": revision}
+
+    def redaction_version_fields(self, document: dict[str, Any]) -> dict[str, Any]:
+        return self._redaction_version_fields(self.connection, document.get("metadata", {}), bool(document.get("redactions")))
+
     def _ensure_schema(self) -> None:
         current_version = int(self.connection.execute("PRAGMA user_version").fetchone()[0])
         if current_version > DATABASE_SCHEMA_VERSION:
             raise RuntimeError(
                 f"数据库版本 {current_version} 高于当前程序支持的 {DATABASE_SCHEMA_VERSION}。"
             )
+        if current_version < 6 and (current_version > 0 or self._table_exists(self.connection, "reports")):
+            backup_path = self.path.with_name(f"{self.path.name}.before-v6-{datetime.now():%Y%m%d-%H%M%S-%f}.bak")
+            with closing(sqlite3.connect(backup_path)) as backup:
+                self.connection.backup(backup)
+                if backup.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                    raise RuntimeError("历史数据库升级前备份校验失败。")
         migrations = {
             1: self._migrate_v0_to_v1,
             2: self._migrate_v1_to_v2,
             3: self._migrate_v2_to_v3,
             4: self._migrate_v3_to_v4,
             5: self._migrate_v4_to_v5,
+            6: self._migrate_v5_to_v6,
         }
         for target_version in range(current_version + 1, DATABASE_SCHEMA_VERSION + 1):
             migration = migrations.get(target_version)
@@ -785,6 +875,9 @@ class HistoryStore:
         report_id = str(metadata["report_id"])
         generated_at = str(metadata.get("generated_at") or "")
         with self.connection:
+            version_fields = self.redaction_version_fields(document) if variant == "normal" else {
+                "parent_report_id": "", "redaction_base_version": 0, "redaction_revision": 0,
+            }
             self.connection.execute(
                 """INSERT INTO chats(chat_id, display_name, first_seen_at, last_seen_at, last_report_at)
                    VALUES(?, ?, ?, ?, ?)
@@ -799,8 +892,9 @@ class HistoryStore:
                        report_id, chat_id, report_date, period_start, period_end, version,
                        schema_version, generated_at, provider, model, headline, one_line_summary,
                        message_count, participant_count, resource_count, json_path, html_path,
-                       png_path, stats_json, content_json, report_variant, source_report_id)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       png_path, stats_json, content_json, report_variant, source_report_id,
+                       parent_report_id, redaction_base_version, redaction_revision)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(report_id) DO UPDATE SET
                      generated_at=excluded.generated_at, provider=excluded.provider,
                      model=excluded.model, headline=excluded.headline,
@@ -812,7 +906,10 @@ class HistoryStore:
                      png_path=excluded.png_path, stats_json=excluded.stats_json,
                      content_json=excluded.content_json,
                      report_variant=excluded.report_variant,
-                     source_report_id=excluded.source_report_id""",
+                     source_report_id=excluded.source_report_id,
+                     parent_report_id=excluded.parent_report_id,
+                     redaction_base_version=excluded.redaction_base_version,
+                     redaction_revision=excluded.redaction_revision""",
                 (
                     report_id, chat["id"], period["report_date"], period["start"], period["end"],
                     int(metadata.get("version") or 1), document.get("schema_version", ""), generated_at,
@@ -822,6 +919,7 @@ class HistoryStore:
                     int(resources.get("count") or 0), str(exports.get("json") or ""),
                     str(exports.get("html") or ""), str(exports.get("png") or ""),
                     json.dumps(stats, ensure_ascii=False), json.dumps(content, ensure_ascii=False), variant, source_id,
+                    version_fields["parent_report_id"], version_fields["redaction_base_version"], version_fields["redaction_revision"],
                 ),
             )
             self.connection.execute("DELETE FROM resources WHERE report_id=?", (report_id,))
@@ -909,8 +1007,28 @@ class HistoryStore:
         present = {str(row["module_key"]) for row in rows}
         return [key for key in HISTORY_MODULE_ORDER if key in present]
 
+    def _version_presentation(self, row: sqlite3.Row) -> dict[str, Any]:
+        version = int(row["version"])
+        base = int(row["redaction_base_version"])
+        revision = int(row["redaction_revision"])
+        redacted = str(row["report_variant"]) != "anonymous" and (revision > 0 or bool(self.connection.execute(
+            "SELECT 1 FROM report_redactions WHERE report_id=? LIMIT 1", (row["report_id"],)
+        ).fetchone()))
+        source_label = ""
+        if row["report_variant"] == "anonymous":
+            source = self.connection.execute("SELECT * FROM reports WHERE report_id=? AND report_variant='normal'", (row["source_report_id"],)).fetchone()
+            source_label = self._version_presentation(source)["version_label"] if source is not None else f"正常版 v{version}"
+            label = f"匿名版 · 来源{source_label}" if source_label.startswith("屏蔽版") else f"匿名版 · 来源 v{version}"
+        elif redacted:
+            label = f"屏蔽版 v{base}.{revision}" if base > 0 and revision > 0 else f"屏蔽版 v{version}"
+        else:
+            label = f"正常版 v{version}"
+        return {"version_label": label, "is_redacted": redacted, "source_version_label": source_label,
+                "redaction_base_version": base, "redaction_revision": revision}
+
     def _report_summary(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
+            **self._version_presentation(row),
             "report_variant": str(row["report_variant"]),
             "source_report_id": str(row["source_report_id"]),
             "report_id": str(row["report_id"]),
@@ -1246,7 +1364,7 @@ class HistoryStore:
         select_sql = """SELECT f.report_id, f.module_key, f.chat_name, f.title, f.body,
                                r.chat_id, r.report_date, r.period_start, r.period_end,
                                r.version, r.generated_at, r.one_line_summary,
-                               r.report_variant, r.source_report_id
+                               r.report_variant, r.source_report_id, r.redaction_base_version, r.redaction_revision
                         FROM report_search_fts AS f
                         JOIN reports AS r ON r.report_id = f.report_id"""
         candidates: list[sqlite3.Row] = []
@@ -1285,6 +1403,7 @@ class HistoryStore:
             results.append(
                 {
                     "report_id": key[0],
+                    **self._version_presentation(row),
                     "chat_id": str(row["chat_id"]),
                     "chat_name": str(row["chat_name"]),
                     "report_date": str(row["report_date"]),
@@ -1326,7 +1445,11 @@ class HistoryStore:
         result = {"scanned": 0, "imported": 0, "skipped": 0, "failed": 0}
         if not export_root.is_dir():
             return result
-        for path in sorted(export_root.glob("*/报告数据/*报告数据*/*_群聊总结*.json"), key=lambda p: ("-匿名版" in p.stem, str(p))):
+        def import_order(path: Path) -> tuple[bool, int, str]:
+            match = re.search(r"_v(\d+)(?:-匿名版)?$", path.stem)
+            return "-匿名版" in path.stem, int(match.group(1)) if match else 1, str(path)
+
+        for path in sorted(export_root.glob("*/报告数据/*报告数据*/*_群聊总结*.json"), key=import_order):
             result["scanned"] += 1
             stat = path.stat()
             cached = self.connection.execute(

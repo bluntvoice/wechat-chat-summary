@@ -147,7 +147,9 @@ class SummaryRedactionTests(unittest.TestCase):
                 self.assertNotIn("私密片段甲", json.dumps(document, ensure_ascii=False))
                 self.assertTrue(Path(result["png_path"]).is_file())
                 with HistoryStore() as history:
-                    self.assertIsNotNone(history.get_report_detail(result["report_id"]))
+                    detail = history.get_report_detail(result["report_id"])
+                    self.assertTrue(detail["is_redacted"])
+                    self.assertEqual(result["version_label"], detail["version_label"])
         self.assertEqual(source.read_bytes(), source_bytes)
 
     def test_member_card_redaction_and_deletion_keep_names_in_visible_topics_and_quotes(self):

@@ -154,6 +154,13 @@ v1.2.4 增加 `one_line_summary`、`conclusion` 和 `stats.word_cloud` 屏蔽目
 关键词支持逐项和全选，逐项使用原数组下标，屏蔽后不再展示关键词。两类新目标仅用于屏蔽，
 不扩展既有内容删除入口。成员观察屏蔽及删除均在全部选中项处理完成后清理统计回退，仍被
 可见正文引用的 `member_aliases` 必须保留，以免其他话题、原话和总结退化为“群成员”。
+历史索引 schema 6 保存 `parent_report_id`、`redaction_base_version`、`redaction_revision`，
+向界面统一返回 `version_label`。正常版 v1 的屏蔽派生版按 v1.1、v1.2 命名；同源分支与连续屏蔽
+共用次序，已有编号在重复导入、删除其他派生版后保持稳定。内部 `version` 和文件名继续递增，
+`report_variant` 仍保留原有存储语义，匿名版的来源标签可指向具体屏蔽版。升级前自动备份并
+执行 `quick_check`，旧 JSON 只读补齐来源；缺失时仅显示“屏蔽版 v<内部版本>”，不推测来源。
+新屏蔽 JSON 保存来源版本和屏蔽次序，重建索引可继续识别。关键词编辑仅保留完整列表入口，
+`ActivityStatsView` 中的关键词保持只读。
 “轻松插曲”已从对外报告结构和渲染中移除，内部 tone 分类仍用于严肃结论过滤。
 
 桌面端可通过 `--progress-file <path>` 读取原子写入的阶段进度 JSON，并通过

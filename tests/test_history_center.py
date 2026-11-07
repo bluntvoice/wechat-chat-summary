@@ -185,22 +185,24 @@ class HistoryCenterMigrationTests(unittest.TestCase):
             })
             document["content"]["resources"]["count"] = 3
 
-            with patch("group_insight.history_store.DATABASE_SCHEMA_VERSION", 4):
-                with HistoryStore(path) as store:
-                    report_id = store.upsert_report(document)
-                    row = store.connection.execute(
-                        "SELECT ordinal, content_json FROM report_modules "
-                        "WHERE report_id=? AND module_key='topics' AND title='其他 / 未归类资源'",
-                        (report_id,),
-                    ).fetchone()
-                    legacy_content = json.loads(row["content_json"])
-                    legacy_content["related_resources"][0].pop("redaction_target_id")
-                    with store.connection:
-                        store.connection.execute(
-                            "UPDATE report_modules SET content_json=? "
-                            "WHERE report_id=? AND module_key='topics' AND ordinal=?",
-                            (json.dumps(legacy_content, ensure_ascii=False), report_id, row["ordinal"]),
-                        )
+            with HistoryStore(path) as store:
+                report_id = store.upsert_report(document)
+                row = store.connection.execute(
+                    "SELECT ordinal, content_json FROM report_modules "
+                    "WHERE report_id=? AND module_key='topics' AND title='其他 / 未归类资源'",
+                    (report_id,),
+                ).fetchone()
+                legacy_content = json.loads(row["content_json"])
+                legacy_content["related_resources"][0].pop("redaction_target_id")
+                with store.connection:
+                    store.connection.execute(
+                        "UPDATE report_modules SET content_json=? "
+                        "WHERE report_id=? AND module_key='topics' AND ordinal=?",
+                        (json.dumps(legacy_content, ensure_ascii=False), report_id, row["ordinal"]),
+                    )
+                    for column in ("parent_report_id", "redaction_base_version", "redaction_revision"):
+                        store.connection.execute(f"ALTER TABLE reports DROP COLUMN {column}")
+                    store.connection.execute("PRAGMA user_version=4")
 
             with HistoryStore(path) as store:
                 self.assertEqual(

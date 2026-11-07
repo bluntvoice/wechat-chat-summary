@@ -415,6 +415,7 @@ def redact_report_document(
         _sanitize_member_stats(result, member)
 
     metadata = result.setdefault("metadata", {})
+    metadata.pop("redaction_revision", None)
     previous_report_id = str(metadata.get("report_id") or "")
     chat = metadata.get("chat", {})
     period = metadata.get("period", {})
@@ -552,6 +553,7 @@ def delete_report_content(
     previous_report_id = str(metadata.get("report_id") or "")
     chat = metadata.get("chat", {})
     period = metadata.get("period", {})
+    metadata.pop("redaction_revision", None)
     previous_deletion_count = int(metadata.get("deletion_count") or 0)
     metadata.update(
         {

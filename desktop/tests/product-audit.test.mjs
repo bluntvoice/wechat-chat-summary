@@ -114,10 +114,10 @@ test("history default view follows report sections without duplicate activity to
 
 test("history keeps derived anonymous reports in the right-side version switcher", () => {
   assert.match(history, /version_strategy: "latest"/);
-  assert.match(history, /匿名版 · 来源 v\$\{version\.version\}/);
-  assert.match(history, /查看原报告 · v\{detail\.version\}/);
+  assert.match(history, /reportVersionLabel\(version\)/);
+  assert.match(history, /detail\.source_version_label/);
   assert.match(history, /detail\?\.period_start === report\.period_start/);
-  assert.match(history, /hit\.report_variant === "anonymous" \? "匿名版 · " : ""/);
+  assert.match(history, /reportVersionLabel\(hit\)/);
 });
 
 test("history anonymous derivation and regeneration have separate guarded actions", () => {

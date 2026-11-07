@@ -115,6 +115,7 @@ export type BridgeResponse<T> = {
 };
 
 export type GenerationResult = {
+  version_label?: string;
   completed: boolean;
   ai_called?: boolean;
   protocol_version?: number;
@@ -157,6 +158,9 @@ export type HistoryChat = {
 };
 
 export type HistoryReport = {
+  version_label?: string;
+  source_version_label?: string;
+  is_redacted?: boolean;
   report_variant?: "normal" | "anonymous";
   source_report_id?: string;
   report_id: string;
@@ -199,6 +203,8 @@ export type HistoryReportDetail = Omit<HistoryReport, "modules"> & {
 };
 
 export type HistorySearchHit = {
+  version_label?: string;
+  source_version_label?: string;
   report_variant?: "normal" | "anonymous";
   source_report_id?: string;
   report_id: string;
