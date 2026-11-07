@@ -255,14 +255,14 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
         names = {name: name for name in re.findall(r"群友\d{2,}", str(content))}
 
     def resolved(value: Any) -> str:
-        return _esc(_resolve(value, names))
+        return re.sub(r"■+", r'<span class="redaction-mask">\g<0></span>', _esc(_resolve(value, names)))
 
     def topic_resolved(value: Any) -> str:
-        return _resolve_html(
+        return re.sub(r"■+", r'<span class="redaction-mask">\g<0></span>', _resolve_html(
             value,
             names,
             member_class="topic-member",
-        )
+        ))
 
     themes = content.get("themes", []) or []
     topics = [item for item in content.get("topics", []) or [] if isinstance(item, dict)]
@@ -568,7 +568,7 @@ def render_html_report(document: dict[str, Any] | None = None, **legacy_kwargs: 
 .words{{display:flex;gap:8px 11px;align-items:baseline;flex-wrap:wrap;padding:6px 2px}} .word{{color:#4b8e60;font-weight:700;font-size:calc(11px + var(--w) * 1.5px)}} .time-row{{display:grid;grid-template-columns:58px 1fr 28px;align-items:center;gap:8px;font-size:11px;margin:7px 0}} .time-row i{{height:8px;border-radius:8px;background:#edf2e9;overflow:hidden}} .time-row b{{display:block;height:100%;background:linear-gradient(90deg,#8bd092,#5eae79);border-radius:8px}} .time-row strong{{text-align:right}}
 .resource-group{{border:1px solid rgba(225,106,151,.15);border-radius:8px;padding:11px;margin-top:8px;background:linear-gradient(180deg,#fffdf5,#fff7fb)}} .resource-group header{{display:flex;justify-content:space-between;gap:10px}} .resource-group header span{{font-size:11px;color:var(--muted)}} .group-note{{font-size:12px;margin-bottom:7px}} .resource-item{{display:grid;grid-template-columns:62px 1fr;gap:8px;border-top:1px dashed #e8e6d7;padding:9px 0}} .resource-kind{{font-size:10px;color:#48775a;background:#dff0df;border-radius:6px;height:max-content;text-align:center;padding:2px 4px;font-weight:800}} .platform-xiaohongshu{{background:#ffe8e8;color:#a9343c}} .platform-taobao{{background:#fff0dd;color:#a65314}} .platform-wechat{{background:#e2f4e5;color:#267044}} .platform-zhihu{{background:#e6f1ff;color:#2767a3}} .platform-jd{{background:#ffe8e8;color:#ad2d2d}} .platform-douyin{{background:#ecebed;color:#443d49}} .platform-bilibili{{background:#e5f5fb;color:#28738f}} .platform-weibo{{background:#fff0de;color:#9b541d}} .platform-web{{background:#edf1ef;color:#56645c}} .platform-file{{background:#e7f1e8;color:#3f704c}} .resource-item strong{{font-size:13px;display:block}} .resource-item p{{font-size:12px;line-height:1.55}} .resource-item small,.resource-item a{{display:block;font-size:11px;color:var(--muted)}} .resource-item a{{color:#3b79bb}}
 .quote-item{{padding:8px 0}} blockquote{{margin:5px 0 0;padding:12px;border-radius:8px;background:linear-gradient(180deg,#fffdf5,#fdf2f8);border:1px solid rgba(225,106,151,.15);font-size:13px;color:#526159}} .quote-item p{{font-size:11px;margin:6px 9px 0}} .quote-meta{{font-size:var(--topic-body-size);line-height:1.6}} .quote-speaker{{color:#3478bd;font-weight:800}} .quote-time,.quote-separator{{color:var(--muted);font-weight:400}}
-.redacted-card{{display:flex!important;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 13px!important;margin:6px 0;border:1px dashed #d5b96a!important;border-radius:10px;background:#fff9e5!important;list-style:none}} .redacted-card span{{font-size:10px;color:#91783a}} .redacted-card strong{{font-size:12px;color:#6b5a32}}
+.redaction-mask{{color:#000}} .redacted-card{{display:flex!important;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 13px!important;margin:6px 0;border:1px dashed #d5b96a!important;border-radius:10px;background:#fff9e5!important;list-style:none}} .redacted-card span{{font-size:10px;color:#91783a}} .redacted-card strong{{font-size:12px;color:#6b5a32}}
 .report-end{{text-align:center}} .report-end p{{font-size:13px;color:#43584a}} .footer{{display:grid;gap:2px;text-align:center;padding:14px 6px 0;font-size:11px;line-height:1.6;color:#8b978f}} .empty{{font-size:12px;color:#87928b}}
 @media(max-width:520px){{.metrics{{grid-template-columns:repeat(2,1fr)}}}}
 </style></head><body><main class="page">

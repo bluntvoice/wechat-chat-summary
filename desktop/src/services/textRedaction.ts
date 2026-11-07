@@ -1,6 +1,7 @@
 import type { RedactionTarget, TextRedaction } from "../types/desktop";
 
 export const REDACTION_NOTICE = "已屏蔽，建议在群内查看";
+export const REDACTION_MASK = "■";
 
 export function toggleKeywordSelection(current: string[], targets: RedactionTarget[]): string[] {
   const ids = targets.filter((target) => target.id.startsWith("word_cloud:") && !target.redacted).map((target) => target.id);
@@ -33,5 +34,5 @@ export function previewTextRedactions(text: string, edits: TextRedaction[]): str
   const chars = Array.from(text);
   const hidden = new Set<number>();
   edits.forEach(({ start, end }) => { for (let index = start; index < end; index += 1) hidden.add(index); });
-  return chars.map((char, index) => hidden.has(index) ? hidden.has(index - 1) ? "" : REDACTION_NOTICE : char).join("");
+  return chars.map((char, index) => hidden.has(index) ? REDACTION_MASK : char).join("");
 }

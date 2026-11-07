@@ -11,6 +11,7 @@ from .report_schema import make_report_id
 
 
 REDACTION_NOTICE = "已屏蔽，建议在群内查看"
+REDACTION_MASK = "■"
 TEXT_REDACTION_FIELDS = {"one_line_summary": "开头一句话总结", "conclusion": "报告结尾"}
 REDACTABLE_MODULES = {
     "themes": "今日速览",
@@ -251,7 +252,8 @@ def _redact_text_ranges(document: dict[str, Any], edits: Any) -> dict[str, str]:
                 merged.append((start, end))
         value = content[key]
         for start, end in reversed(merged):
-            value = value[:start] + REDACTION_NOTICE + value[end:]
+            displayed, _offsets = _display_text_offsets(value[start:end], _member_names(document))
+            value = value[:start] + REDACTION_MASK * len(displayed) + value[end:]
         replacements[key] = value
     return replacements
 

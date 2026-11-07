@@ -78,7 +78,7 @@ class SummaryRedactionTests(unittest.TestCase):
         edit = self.edit("one_line_summary", "私密片段甲")
         overlap = {**edit, "end": edit["end"] + 1, "text": "私密片段甲，"}
         result = self.redact(edits=[overlap, edit, edit])
-        self.assertEqual(result["content"]["one_line_summary"].count(REDACTION_NOTICE), 1)
+        self.assertEqual(result["content"]["one_line_summary"], "开头保留😀■■■■■■中间保留，私密片段乙结尾保留。")
         self.assertEqual(self.redact(["one_line_summary"], [edit])["content"]["one_line_summary"], REDACTION_NOTICE)
 
     def test_displayed_nickname_partial_selection_masks_whole_token_preserves_other_tokens(self):
@@ -87,8 +87,23 @@ class SummaryRedactionTests(unittest.TestCase):
         self.document["content"]["one_line_summary"] = "😀[[user:a]]讨论，[[user:b]]补充。\r\n保留下一行"
         edit = self.edit("one_line_summary", "明同")
         result = self.redact(edits=[edit])
-        self.assertEqual(result["content"]["one_line_summary"], f"😀{REDACTION_NOTICE}讨论，[[user:b]]补充。\r\n保留下一行")
+        self.assertEqual(result["content"]["one_line_summary"], "😀■■■■讨论，[[user:b]]补充。\r\n保留下一行")
         self.assertIn("小红同学", render_html_report(result))
+
+    def test_two_chinese_characters_become_two_black_squares_in_json_and_html(self):
+        self.document["content"]["one_line_summary"] = "下午聊翻墙隐私"
+        result = self.redact(edits=[self.edit("one_line_summary", "翻墙")])
+        self.assertEqual(result["content"]["one_line_summary"], "下午聊■■隐私")
+        self.assertIn('下午聊<span class="redaction-mask">■■</span>隐私', render_html_report(result))
+        self.assertNotIn(REDACTION_NOTICE, result["content"]["one_line_summary"])
+
+    def test_unicode_mask_count_and_partial_version_keep_original_character_length(self):
+        self.document["content"]["conclusion"] = "保留A😀，结尾"
+        first = self.redact(edits=[self.edit("conclusion", "A😀，")])
+        self.assertEqual(first["content"]["conclusion"], "保留■■■结尾")
+        second = self.redact(document=first, edits=[{
+            "target_id": "conclusion", "start": 5, "end": 7, "text": "结尾"}], version=3)
+        self.assertEqual(second["content"]["conclusion"], "保留■■■■■")
 
     def test_invalid_unknown_stale_and_out_of_bounds_ranges_are_rejected(self):
         good = self.edit("one_line_summary", "私密片段甲")

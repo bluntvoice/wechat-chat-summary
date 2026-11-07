@@ -96,12 +96,14 @@ function resolveMemberTokensText(value: string, memberNames: Record<string, stri
 
 function memberTokenNodes(value: string, memberNames: Record<string, string> = {}): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /\[\[user:([^\]]+)\]\]|群友\d{2,}/g;
+  const pattern = /\[\[user:([^\]]+)\]\]|群友\d{2,}|■+/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(value)) !== null) {
     if (match.index > cursor) nodes.push(value.slice(cursor, match.index));
-    nodes.push(<strong className="history-member-name" key={`${match.index}-${match[1]}`}>{match[1] ? memberNames[match[1]] || "群成员" : match[0]}</strong>);
+    nodes.push(match[0].startsWith("■")
+      ? <span className="history-redaction-mask" key={match.index}>{match[0]}</span>
+      : <strong className="history-member-name" key={`${match.index}-${match[1]}`}>{match[1] ? memberNames[match[1]] || "群成员" : match[0]}</strong>);
     cursor = match.index + match[0].length;
   }
   if (cursor < value.length) nodes.push(value.slice(cursor));

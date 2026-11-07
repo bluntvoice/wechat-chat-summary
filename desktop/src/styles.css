@@ -666,5 +666,6 @@ label em, .mini-segmented button, .archive-preview span, .schedule-date-mode > s
 .text-redaction-selections li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid #e5ebe6; }
 .text-redaction-selections span, .text-redaction-preview p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .text-redaction-preview { margin-top: 12px; padding: 12px; border-radius: 8px; background: #fff9e5; }
-.text-redaction-preview p { margin-bottom: 0; line-height: 1.8; }
+.text-redaction-preview p { margin-bottom: 0; line-height: 1.8; color: #000; }
+.history-redaction-mask { color: #000; }
 .history-keyword-list label { padding: 7px 10px; border-radius: 8px; background: #edf3e9; font-size: 14px; }
