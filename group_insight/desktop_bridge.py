@@ -399,7 +399,8 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
 
     _source_path, document = _load_report_document(payload)
     target_ids = payload.get("target_ids", [])
-    if not isinstance(target_ids, list) or not target_ids:
+    text_redactions = payload.get("text_redactions", [])
+    if not isinstance(target_ids, list) or not isinstance(text_redactions, list) or not (target_ids or text_redactions):
         raise ValueError("请至少选择一项需要屏蔽的报告内容。")
     metadata = document.get("metadata", {})
     chat = metadata.get("chat", {})
@@ -426,6 +427,7 @@ def _redact_report(settings: dict[str, Any], payload: dict[str, Any]) -> dict[st
         [str(value) for value in target_ids],
         version=paths.version,
         exports=exports,
+        text_redactions=text_redactions,
     )
     json_path.write_text(json.dumps(redacted, ensure_ascii=False, indent=2), encoding="utf-8")
     try:

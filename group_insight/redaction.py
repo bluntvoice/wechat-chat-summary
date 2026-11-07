@@ -11,6 +11,7 @@ from .report_schema import make_report_id
 
 
 REDACTION_NOTICE = "已屏蔽，建议在群内查看"
+TEXT_REDACTION_FIELDS = {"one_line_summary": "开头一句话总结", "conclusion": "报告结尾"}
 REDACTABLE_MODULES = {
     "themes": "今日速览",
     "topics": "今日主要话题",
@@ -107,6 +108,41 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
     content = document.get("content", {})
     names = _member_names(document)
     targets: list[dict[str, Any]] = []
+    for key, label in TEXT_REDACTION_FIELDS.items():
+        value = content.get(key)
+        if isinstance(value, str) and value.strip():
+            text, offsets = _display_text_offsets(value, names)
+            atomic_ranges: list[dict[str, int]] = []
+            for index, (start, end) in enumerate(offsets):
+                if value[start:end].startswith("[[user:"):
+                    if index and offsets[index - 1] == (start, end):
+                        atomic_ranges[-1]["end"] = index + 1
+                    else:
+                        atomic_ranges.append({"start": index, "end": index + 1})
+            targets.append({
+                "id": key, "module_key": key, "module_label": label,
+                "preview": text[:100], "text": text,
+                "atomic_ranges": atomic_ranges,
+                "time_label": _period_label(document),
+                "redacted": value == REDACTION_NOTICE, "redact_only": True,
+            })
+    words = document.get("stats", {}).get("word_cloud", []) or []
+    if words:
+        targets.append({
+            "id": "word_cloud", "module_key": "word_cloud", "module_label": "群关键词",
+            "preview": "全部群关键词", "time_label": _period_label(document),
+            "redacted": all(isinstance(item, dict) and item.get("redacted") for item in words),
+            "redact_only": True,
+        })
+    for index, item in enumerate(words):
+        if not isinstance(item, dict) or not (item.get("word") or item.get("redacted")):
+            continue
+        targets.append({
+            "id": f"word_cloud:{index}", "module_key": "word_cloud", "module_label": "群关键词",
+            "preview": REDACTION_NOTICE if item.get("redacted") else _resolve_members(str(item["word"]), names),
+            "time_label": _period_label(document), "redacted": bool(item.get("redacted")),
+            "redact_only": True,
+        })
     for module_key, module_label in REDACTABLE_MODULES.items():
         for index, item in enumerate(content.get(module_key, []) or []):
             target_id = str(item.get("redaction_id") or f"{module_key}:{index}") if isinstance(item, dict) else f"{module_key}:{index}"
@@ -175,6 +211,51 @@ def list_redaction_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
     return targets
 
 
+def _display_text_offsets(value: str, names: dict[str, str]) -> tuple[str, list[tuple[int, int]]]:
+    """显示昵称与标准换行，同时保留每个显示字符对应的原文范围。"""
+    text: list[str] = []
+    offsets: list[tuple[int, int]] = []
+    for match in re.finditer(r"\[\[user:([^\]]+)\]\]|\r\n|\r|[\s\S]", value):
+        displayed = names.get(match.group(1), "群成员") if match.group(1) else match.group().replace("\r\n", "\n").replace("\r", "\n")
+        text.append(displayed)
+        offsets.extend([(match.start(), match.end())] * len(displayed))
+    return "".join(text), offsets
+
+
+def _redact_text_ranges(document: dict[str, Any], edits: Any) -> dict[str, str]:
+    if not isinstance(edits, list):
+        raise ValueError("局部屏蔽必须是文字范围列表。")
+    ranges: dict[str, list[tuple[int, int]]] = {}
+    content = document.get("content", {})
+    for edit in edits:
+        if not isinstance(edit, dict) or not isinstance(edit.get("target_id"), str) or edit["target_id"] not in TEXT_REDACTION_FIELDS:
+            raise ValueError("局部屏蔽仅支持开头一句话总结和报告结尾。")
+        key = edit["target_id"]
+        value = content.get(key)
+        if not isinstance(value, str) or value == REDACTION_NOTICE:
+            raise ValueError("该总结不存在或已经全部屏蔽。")
+        text, offsets = _display_text_offsets(value, _member_names(document))
+        start, end = edit.get("start"), edit.get("end")
+        if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text):
+            raise ValueError("局部屏蔽的文字范围无效，请重新选择。")
+        if edit.get("text") != text[start:end]:
+            raise ValueError("待屏蔽文字与当前报告不一致，请重新选择。")
+        ranges.setdefault(key, []).append((offsets[start][0], offsets[end - 1][1]))
+    replacements: dict[str, str] = {}
+    for key, spans in ranges.items():
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+            else:
+                merged.append((start, end))
+        value = content[key]
+        for start, end in reversed(merged):
+            value = value[:start] + REDACTION_NOTICE + value[end:]
+        replacements[key] = value
+    return replacements
+
+
 def _stub(target_id: str, time_label: str, *, original_id: str = "") -> dict[str, Any]:
     return {
         "id": original_id or target_id,
@@ -186,7 +267,7 @@ def _stub(target_id: str, time_label: str, *, original_id: str = "") -> dict[str
 
 
 def _sanitize_member_stats(document: dict[str, Any], original: Any) -> None:
-    """屏蔽成员条目时，避免同一成员从统计目录回退显示或留在新 JSON。"""
+    """移除所选成员的统计回退；保留可见正文仍需使用的昵称映射。"""
 
     if not isinstance(original, dict):
         return
@@ -219,7 +300,24 @@ def _sanitize_member_stats(document: dict[str, Any], original: Any) -> None:
         values = {str(value or "") for value in item.values() if not isinstance(value, (dict, list))}
         return bool(values & (names | ids))
 
-    for key in ("member_aliases", "speaker_directory", "top_speakers"):
+    def referenced_ids(value: Any) -> set[str]:
+        if isinstance(value, str):
+            return set(re.findall(r"\[\[user:([^\]]+)\]\]", value))
+        if isinstance(value, dict):
+            if value.get("redacted"):
+                return set()
+            return set().union(*(referenced_ids(item) for item in value.values()))
+        if isinstance(value, list):
+            return set().union(*(referenced_ids(item) for item in value))
+        return set()
+
+    visible_ids = referenced_ids(document.get("content", {}))
+    if isinstance(stats.get("member_aliases"), list):
+        stats["member_aliases"] = [
+            item for item in stats["member_aliases"]
+            if not matches(item) or (isinstance(item, dict) and str(item.get("sender_id") or "") in visible_ids)
+        ]
+    for key in ("speaker_directory", "top_speakers"):
         if isinstance(stats.get(key), list):
             stats[key] = [item for item in stats[key] if not matches(item)]
     if isinstance(stats.get("known_speakers"), list):
@@ -237,11 +335,13 @@ def redact_report_document(
     *,
     version: int,
     exports: dict[str, str],
+    text_redactions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """复制报告并将指定条目替换为无正文的屏蔽占位卡。"""
 
     selected = {str(value) for value in target_ids if str(value).strip()}
-    if not selected:
+    replacements = _redact_text_ranges(document, text_redactions if text_redactions is not None else [])
+    if not selected and not replacements:
         raise ValueError("请至少选择一项需要屏蔽的报告内容。")
     result = copy.deepcopy(document)
     content = result.setdefault("content", {})
@@ -256,10 +356,21 @@ def redact_report_document(
         raise ValueError(f"报告中不存在这些屏蔽条目: {', '.join(unknown)}")
 
     applied: list[dict[str, str]] = []
-    for target_id in sorted(selected, key=lambda value: value.count(":"), reverse=True):
+    edited_members: list[Any] = []
+    for target_id in sorted(selected | set(replacements), key=lambda value: value.count(":"), reverse=True):
         target = target_map[target_id]
         parts = target_id.split(":")
-        if parts[0] == "resources":
+        if target_id in TEXT_REDACTION_FIELDS:
+            original = content[target_id]
+            content[target_id] = REDACTION_NOTICE if target_id in selected else replacements[target_id]
+            if target_id == "one_line_summary" and content.get("lead_summary") == original:
+                content["lead_summary"] = content[target_id]
+        elif parts[0] == "word_cloud":
+            words = result["stats"]["word_cloud"]
+            indices = range(len(words)) if len(parts) == 1 else [int(parts[1])]
+            for index in indices:
+                words[index] = _stub(f"word_cloud:{index}", target["time_label"])
+        elif parts[0] == "resources":
             group_index = int(parts[1])
             groups = content.get("resources", {}).get("groups", [])
             if len(parts) == 2:
@@ -286,7 +397,7 @@ def redact_report_document(
             module_key, index_text = parts[0], parts[1]
             original = content[module_key][int(index_text)]
             if module_key == "members":
-                _sanitize_member_stats(result, original)
+                edited_members.append(original)
             original_id = str(original.get("id") or "") if isinstance(original, dict) else ""
             content[module_key][int(index_text)] = _stub(target_id, target["time_label"], original_id=original_id)
         applied.append(
@@ -297,6 +408,9 @@ def redact_report_document(
                 "notice": REDACTION_NOTICE,
             }
         )
+
+    for member in edited_members:
+        _sanitize_member_stats(result, member)
 
     metadata = result.setdefault("metadata", {})
     previous_report_id = str(metadata.get("report_id") or "")
@@ -360,9 +474,12 @@ def delete_report_content(
     unknown = sorted(selected - set(target_map))
     if unknown:
         raise ValueError(f"报告中不存在这些待删除条目: {', '.join(unknown)}")
+    if any(target_map[target_id].get("redact_only") for target_id in selected):
+        raise ValueError("总结和群关键词请使用屏蔽功能编辑。")
 
     deleted_resource_ids: set[str] = set()
     deleted_prefixes: list[str] = []
+    edited_members: list[Any] = []
     applied = 0
     for target_id in sorted(selected, key=_deletion_sort_key, reverse=True):
         target = target_map[target_id]
@@ -389,9 +506,12 @@ def delete_report_content(
             module_key, index_text = parts[0], parts[1]
             original = content[module_key].pop(int(index_text))
             if module_key == "members":
-                _sanitize_member_stats(result, original)
+                edited_members.append(original)
         deleted_prefixes.append(target_id)
         applied += 1
+
+    for member in edited_members:
+        _sanitize_member_stats(result, member)
 
     resources = content.get("resources", {}) if isinstance(content.get("resources"), dict) else {}
     groups = resources.get("groups", []) if isinstance(resources.get("groups"), list) else []

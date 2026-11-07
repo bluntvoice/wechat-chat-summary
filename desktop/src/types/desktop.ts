@@ -251,7 +251,12 @@ export type RedactionTarget = {
   preview: string;
   time_label: string;
   redacted: boolean;
+  text?: string;
+  atomic_ranges?: Array<{ start: number; end: number }>;
+  redact_only?: boolean;
 };
+
+export type TextRedaction = { target_id: string; start: number; end: number; text: string };
 
 export const INITIAL_SETTINGS: Settings = {
   wechat_api_url: "http://127.0.0.1:10392",

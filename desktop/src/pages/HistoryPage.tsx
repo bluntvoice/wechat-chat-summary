@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useReportGeneration } from "../hooks/useReportGeneration";
 import { RedactionTargetGroups } from "../components/RedactionEditor";
+import { ReportRedactionControls } from "../components/ReportRedactionControls";
+import { toggleKeywordSelection } from "../services/textRedaction";
 import { bridge, openSystemPath } from "../services/desktopBridge";
 import type {
   Settings,
@@ -15,6 +17,7 @@ import type {
   HistoryNavigationTarget,
   Paginated,
   RedactionTarget,
+  TextRedaction,
 } from "../types/desktop";
 
 type HistoryPageProps = { active: boolean; target?: HistoryNavigationTarget | null };
@@ -153,7 +156,12 @@ function ValueView({ value, memberNames, fieldKey = "" }: { value: unknown; memb
   return <dl className="history-value-grid">{entries.map(([key, item]) => <div key={key}><dt>{FIELD_LABELS[key] || key}</dt><dd><ValueView value={item} memberNames={memberNames} fieldKey={key} /></dd></div>)}</dl>;
 }
 
-function ActivityStatsView({ value, memberNames }: { value: unknown; memberNames: Record<string, string> }) {
+function ActivityStatsView({ value, memberNames, editMode, targetById, selectedIds, onToggle }: {
+  value: unknown; memberNames: Record<string, string>;
+  editMode: "redact" | "delete" | null;
+  targetById: Map<string, RedactionTarget>; selectedIds: string[];
+  onToggle: (target: RedactionTarget) => void;
+}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return <ValueView value={value} memberNames={memberNames} />;
   }
@@ -174,7 +182,12 @@ function ActivityStatsView({ value, memberNames }: { value: unknown; memberNames
       const count = Number(item.message_count) || 0;
       return <li key={`${String(item.name || "群成员")}-${index}`}><span>{Number(item.rank) || index + 1}</span><div className="history-speaker-name"><MemberText value={String(item.name || "群成员")} memberNames={memberNames} /></div><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / speakerMax * 100))}%` }} /></i><em>{count} 条</em></li>;
     })}</ol></section>}
-    {keywords.length > 0 && <section className="history-activity-block"><h4>群关键词</h4><div className="history-keyword-list">{keywords.map((item, index) => <span key={`${String(item.word)}-${index}`}>{resolveMemberTokensText(String(item.word), memberNames)}<small>{Number(item.count) || ""}</small></span>)}</div></section>}
+    {keywords.length > 0 && <section className="history-activity-block"><h4>群关键词</h4><div className="history-keyword-list">{keywords.map((item, index) => {
+      const target = targetById.get(`word_cloud:${(stats.word_cloud as unknown[]).indexOf(item)}`);
+      return editMode === "redact" && target
+        ? <label key={target.id}><input type="checkbox" checked={selectedIds.includes(target.id) || selectedIds.includes("word_cloud")} onChange={() => onToggle(target)} />{resolveMemberTokensText(String(item.word), memberNames)}<small>{Number(item.count) || ""}</small></label>
+        : <span key={`${String(item.word)}-${index}`}>{resolveMemberTokensText(String(item.word), memberNames)}<small>{Number(item.count) || ""}</small></span>;
+    })}</div></section>}
     {segments.length > 0 && <section className="history-activity-block"><h4>活跃时段</h4><div className="history-segment-list">{segments.map((item, index) => {
       const count = Number(item.count) || 0;
       return <div key={`${String(item.label || "时段")}-${index}`}><span>{String(item.label || "时段")}</span><i aria-hidden="true"><b style={{ width: `${Math.max(3, Math.round(count / segmentMax * 100))}%` }} /></i><strong>{count}</strong></div>;
@@ -373,7 +386,7 @@ function ModuleCard({
   >
     <div className="history-module-heading">{showSectionLabel && <span>{module.module_label}</span>}<h3>{redacted ? "已屏蔽内容" : <MemberText value={module.title} memberNames={memberNames} />}</h3>{editMode && target && <span className="history-redaction-state">{selected ? "已选择" : editMode === "delete" ? "选择删除" : target.redacted ? "已屏蔽" : "选择屏蔽"}</span>}</div>
     {isActivityStatsModule(module)
-      ? <ActivityStatsView value={module.content} memberNames={memberNames} />
+      ? <ActivityStatsView value={module.content} memberNames={memberNames} editMode={editMode} targetById={targetById} selectedIds={selectedIds} onToggle={onToggle} />
       : module.module_key === "member_activity"
         ? <MemberObservationView value={module.content} title={module.title} memberNames={memberNames} />
         : module.module_key === "topics"
@@ -404,6 +417,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
   const [editMode, setEditMode] = useState<"redact" | "delete" | null>(null);
   const [redactionTargets, setRedactionTargets] = useState<RedactionTarget[]>([]);
   const [selectedRedactions, setSelectedRedactions] = useState<string[]>([]);
+  const [textRedactions, setTextRedactions] = useState<TextRedaction[]>([]);
   const [redactionBusy, setRedactionBusy] = useState(false);
   const [message, setMessage] = useState("历史数据仅来自本机 SQLite，不搜索完整原始聊天正文。");
 
@@ -562,6 +576,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
     setEditMode(null);
     setRedactionTargets([]);
     setSelectedRedactions([]);
+    setTextRedactions([]);
   }, [selectedReportId]);
 
   useEffect(() => {
@@ -603,11 +618,12 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       const data = await bridge<{ version: number; targets: RedactionTarget[] }>("get_redaction_targets", {
         json_path: detail.exports.json.path,
       });
-      setRedactionTargets(data.targets);
+      setRedactionTargets(mode === "delete" ? data.targets.filter((target) => !target.redact_only) : data.targets);
+      setTextRedactions([]);
       setSelectedRedactions(mode === "redact" ? data.targets.filter((target) => target.redacted).map((target) => target.id) : []);
       setDetailModule("all");
       setEditMode(mode);
-      setMessage(`已进入${mode === "delete" ? "删除" : "屏蔽"}模式，可直接选择报告条目；完整列表共 ${data.targets.length} 项。`);
+      setMessage(`已进入${mode === "delete" ? "删除" : "屏蔽"}模式，可直接选择报告条目；共 ${data.targets.filter((target) => mode !== "delete" || !target.redact_only).length} 项可编辑内容。`);
     } catch (error) {
       setMessage(`无法进入${mode === "delete" ? "删除" : "屏蔽"}模式：${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -620,14 +636,28 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
     setEditMode(null);
     setRedactionTargets([]);
     setSelectedRedactions([]);
+    setTextRedactions([]);
     setMessage(`已退出${action}模式，报告未发生变化。`);
   }
 
   function toggleRedaction(target: RedactionTarget) {
     if ((editMode === "redact" && target.redacted) || redactionBusy) return;
+    if (target.id === "word_cloud") {
+      toggleAllKeywords();
+      return;
+    }
     setSelectedRedactions((current) => current.includes(target.id)
       ? current.filter((targetId) => targetId !== target.id)
       : [...current, target.id]);
+  }
+
+  function toggleAllKeywords() {
+    if (redactionBusy) return;
+    setSelectedRedactions((current) => toggleKeywordSelection(current, redactionTargets));
+  }
+
+  function updateTextRedactions(targetId: string, edits: TextRedaction[]) {
+    setTextRedactions((current) => [...current.filter((edit) => edit.target_id !== targetId), ...edits]);
   }
 
   async function applyContentEdit() {
@@ -636,7 +666,8 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
     const actionSelections = action === "redact"
       ? selectedRedactions.filter((targetId) => !redactionTargets.find((target) => target.id === targetId)?.redacted)
       : selectedRedactions;
-    if (!actionSelections.length) {
+    const textSelections = action === "redact" ? textRedactions.filter((edit) => !actionSelections.includes(edit.target_id)) : [];
+    if (!actionSelections.length && !textSelections.length) {
       setMessage(`请至少${action === "delete" ? "选择一项需要删除" : "新增选择一项需要屏蔽"}的内容。`);
       return;
     }
@@ -646,10 +677,12 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       const updated = await bridge<GenerationResult>(action === "delete" ? "delete_report_content" : "redact_report", {
         json_path: detail.exports.json.path,
         target_ids: actionSelections,
+        ...(action === "redact" ? { text_redactions: textSelections } : {}),
       });
       setEditMode(null);
       setRedactionTargets([]);
       setSelectedRedactions([]);
+      setTextRedactions([]);
       await refreshHistory(false);
       if (updated.report_id) setSelectedReportId(updated.report_id);
       setDetailModule("all");
@@ -680,7 +713,8 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
   const redactionTargetById = useMemo(() => new Map(redactionTargets.map((target) => [target.id, target])), [redactionTargets]);
   const actionSelectionCount = editMode === "delete"
     ? selectedRedactions.length
-    : selectedRedactions.filter((targetId) => !redactionTargetById.get(targetId)?.redacted).length;
+    : selectedRedactions.filter((targetId) => !redactionTargetById.get(targetId)?.redacted).length
+      + textRedactions.filter((edit) => !selectedRedactions.includes(edit.target_id)).length;
 
   return <div className="workspace history-workspace">
     <header className="topbar history-topbar"><div><h1>历史中心</h1></div><button className="button secondary" disabled={busy} onClick={() => refreshHistory(true)}>{busy ? "刷新中…" : "刷新与导入"}</button></header>
@@ -724,7 +758,7 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
       <section className="history-detail-pane">
         {!detail && <div className="history-empty detail-empty"><strong>选择一份历史报告</strong><span>这里会显示报告模块、全部版本和导出文件。</span></div>}
         {detail && <>
-          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)} · {detail.report_variant === "anonymous" ? `匿名版（来源正常版 v${detail.version}）` : `正常版 v${detail.version}`}</span><h2>{detail.headline}</h2><p>{detail.one_line_summary}</p></div><div className="history-stat-row"><span>今日消息 {detail.message_count} 条</span><span>今日字数 {Number(detail.stats.effective_char_count) || 0} 字</span><span>参与人数 {detail.participant_count} 人</span>{detail.resource_count > 0 && <span>整理资源 {detail.resource_count} 项</span>}</div></div>
+          <div className="history-detail-head"><div><span>{periodLabel(detail.period_start, detail.period_end)} · {detail.report_variant === "anonymous" ? `匿名版（来源正常版 v${detail.version}）` : `正常版 v${detail.version}`}</span><h2>{detail.headline}</h2><p><MemberText value={detail.one_line_summary} memberNames={memberNames} /></p></div><div className="history-stat-row"><span>今日消息 {detail.message_count} 条</span><span>今日字数 {Number(detail.stats.effective_char_count) || 0} 字</span><span>参与人数 {detail.participant_count} 人</span>{detail.resource_count > 0 && <span>整理资源 {detail.resource_count} 项</span>}</div></div>
           <div className="history-export-row">
             <button className="button primary small" disabled={!detail.exports.png.exists} onClick={() => openExport(detail.exports.png.path)}>打开 PNG</button>
             <button className="button secondary" disabled={!detail.exports.html.exists} onClick={() => openExport(detail.exports.html.path)}>打开 HTML</button>
@@ -740,8 +774,9 @@ export default function HistoryPage({ active, target }: HistoryPageProps) {
             {Object.values(detail.exports).some((item) => !item.exists) && <small>灰色文件已移动或不存在</small>}
           </div>
           <div className="history-versions"><span>历史版本</span><div>{versions.map((version) => <button key={version.report_id} className={selectedReportId === version.report_id ? "selected" : ""} onClick={() => { setSelectedReportId(version.report_id); setDetailModule("all"); }}>{version.report_variant === "anonymous" ? `匿名版 · 来源 v${version.version}` : `正常版 v${version.version}`}<small>{version.generated_at.slice(5, 16)}</small></button>)}</div></div>
-          {editMode && <div className="history-redaction-toolbar" aria-live="polite"><div><strong>选择要{editMode === "delete" ? "删除" : "屏蔽"}的报告条目</strong><span>点击下方带边框的整项；未直接呈现的条目可在完整列表中补充。{editMode === "delete" ? "新版本中将不再保留所选条目。" : ""}</span></div><div><span>已选择 {actionSelectionCount} 项</span><button className="button secondary" disabled={redactionBusy} onClick={closeContentEditMode}>取消</button><button className="button primary small" disabled={redactionBusy || !actionSelectionCount} onClick={applyContentEdit}>{redactionBusy ? "正在生成…" : editMode === "delete" ? "生成内容删除版" : "生成屏蔽版"}</button></div></div>}
-          {editMode && <details className="history-redaction-list"><summary>查看全部可{editMode === "delete" ? "删除" : "屏蔽"}项 <span>{redactionTargets.length}</span></summary><RedactionTargetGroups targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onToggle={toggleRedaction} mode={editMode} /></details>}
+          {editMode && <div className="history-redaction-toolbar" aria-live="polite"><div><strong>选择要{editMode === "delete" ? "删除" : "屏蔽"}的报告条目</strong><span>{editMode === "redact" ? "开头和结尾支持选中文字或整段屏蔽，群关键词可逐个选择或全选；其他内容点击整项选择。" : "点击下方带边框的整项；新版本中将不再保留所选条目。"}</span></div><div><span>已选择 {actionSelectionCount} 项</span><button className="button secondary" disabled={redactionBusy} onClick={closeContentEditMode}>取消</button><button className="button primary small" disabled={redactionBusy || !actionSelectionCount} onClick={applyContentEdit}>{redactionBusy ? "正在生成…" : editMode === "delete" ? "生成内容删除版" : "生成屏蔽版"}</button></div></div>}
+          {editMode === "redact" && <ReportRedactionControls targets={redactionTargets} selectedIds={selectedRedactions} textRedactions={textRedactions} busy={redactionBusy} onToggle={toggleRedaction} onTextChange={updateTextRedactions} onToggleKeywords={toggleAllKeywords} />}
+          {editMode && <details className="history-redaction-list"><summary>查看{editMode === "redact" ? "其他" : "全部"}可{editMode === "delete" ? "删除" : "屏蔽"}项 <span>{redactionTargets.filter((target) => !target.redact_only).length}</span></summary><RedactionTargetGroups targets={redactionTargets.filter((target) => !target.redact_only)} selectedIds={selectedRedactions} busy={redactionBusy} onToggle={toggleRedaction} mode={editMode} /></details>}
           {!editMode && detailModule !== "all" && <div className="history-module-focus"><span>当前模块：{MODULE_OPTIONS.find(([key]) => key === detailModule)?.[1] || detailModule}</span><button onClick={() => setDetailModule("all")}>查看全部</button></div>}
           {detailModule === "all"
             ? <div className="history-report-sections">{reportSections.map((section) => <section className="history-report-section" key={section.key}><h3>{section.label}</h3><div className="history-module-list">{section.modules.map((module) => {

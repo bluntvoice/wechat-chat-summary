@@ -1,7 +1,8 @@
 import { X } from "lucide-react";
 import { useMemo } from "react";
 
-import type { RedactionTarget } from "../types/desktop";
+import { ReportRedactionControls } from "./ReportRedactionControls";
+import type { RedactionTarget, TextRedaction } from "../types/desktop";
 
 type Props = {
   targets: RedactionTarget[];
@@ -10,6 +11,9 @@ type Props = {
   onClose: () => void;
   onToggle: (target: RedactionTarget) => void;
   onApply: () => void;
+  textRedactions: TextRedaction[];
+  onTextChange: (targetId: string, edits: TextRedaction[]) => void;
+  onToggleKeywords: () => void;
 };
 
 type TargetGroupsProps = Pick<Props, "targets" | "selectedIds" | "busy" | "onToggle"> & {
@@ -35,12 +39,17 @@ export default function RedactionEditor({
   onClose,
   onToggle,
   onApply,
+  textRedactions,
+  onTextChange,
+  onToggleKeywords,
 }: Props) {
   const existingCount = targets.filter((target) => target.redacted).length;
+  const partialCount = textRedactions.filter((edit) => !selectedIds.includes(edit.target_id)).length;
 
   return <section className="redaction-panel">
     <div className="redaction-heading"><div><h2>人工屏蔽报告内容</h2><p>勾选后将生成本地新版本；不再次调用 AI。已屏蔽条目不能在当前版本取消，可回到原版本重新编辑。</p></div><button className="icon-button" onClick={onClose} aria-label="收起屏蔽编辑器" title="收起"><X size={18} aria-hidden="true" /></button></div>
-    <RedactionTargetGroups targets={targets} selectedIds={selectedIds} busy={busy} onToggle={onToggle} />
-    <div className="redaction-footer"><span>已选择 {selectedIds.length} 项（含既有屏蔽）</span><button className="button primary" disabled={busy || selectedIds.length <= existingCount} onClick={onApply}>{busy ? "正在生成…" : "生成屏蔽版新报告"}</button></div>
+    <ReportRedactionControls targets={targets} selectedIds={selectedIds} textRedactions={textRedactions} busy={busy} onToggle={onToggle} onTextChange={onTextChange} onToggleKeywords={onToggleKeywords} />
+    <RedactionTargetGroups targets={targets.filter((target) => !target.redact_only)} selectedIds={selectedIds} busy={busy} onToggle={onToggle} />
+    <div className="redaction-footer"><span>已选择 {selectedIds.length + partialCount} 项（含既有屏蔽）</span><button className="button primary" disabled={busy || (selectedIds.length <= existingCount && !partialCount)} onClick={onApply}>{busy ? "正在生成…" : "生成屏蔽版新报告"}</button></div>
   </section>;
 }

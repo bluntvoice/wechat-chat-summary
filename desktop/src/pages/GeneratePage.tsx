@@ -1,6 +1,7 @@
 import { CheckCircle2, CircleHelp, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import RedactionEditor from "../components/RedactionEditor";
+import { toggleKeywordSelection } from "../services/textRedaction";
 import { generationSourceLabel } from "../contexts/GenerationTaskContext";
 import { useReportGeneration } from "../hooks/useReportGeneration";
 import { inclusiveDateRange, localDate, scheduledReportDate } from "../services/dates";
@@ -20,6 +21,7 @@ import {
   type Chat,
   type GenerationResult,
   type RedactionTarget,
+  type TextRedaction,
   type ScheduleTask,
   type Settings,
 } from "../types/desktop";
@@ -50,6 +52,7 @@ function GeneratePage({
   const [wechatErrorDetail, setWechatErrorDetail] = useState("");
   const [redactionTargets, setRedactionTargets] = useState<RedactionTarget[]>([]);
   const [selectedRedactions, setSelectedRedactions] = useState<string[]>([]);
+  const [textRedactions, setTextRedactions] = useState<TextRedaction[]>([]);
   const [redactionEditorOpen, setRedactionEditorOpen] = useState(false);
   const [redactionBusy, setRedactionBusy] = useState(false);
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
@@ -71,6 +74,7 @@ function GeneratePage({
       setRedactionEditorOpen(false);
       setRedactionTargets([]);
       setSelectedRedactions([]);
+      setTextRedactions([]);
     },
   });
   const runGenerationRef = useRef(runGeneration);
@@ -308,6 +312,7 @@ function GeneratePage({
   async function loadRedactionTargets(jsonPath: string) {
     const data = await bridge<{ version: number; targets: RedactionTarget[] }>("get_redaction_targets", { json_path: jsonPath });
     setRedactionTargets(data.targets);
+    setTextRedactions([]);
     setSelectedRedactions(data.targets.filter((target) => target.redacted).map((target) => target.id));
     return data;
   }
@@ -328,20 +333,25 @@ function GeneratePage({
   }
 
   function toggleRedaction(target: RedactionTarget) {
-    if (target.redacted) return;
+    if (target.redacted || redactionBusy) return;
     setSelectedRedactions((current) => current.includes(target.id) ? current.filter((id) => id !== target.id) : [...current, target.id]);
+  }
+
+  function updateTextRedactions(targetId: string, edits: TextRedaction[]) {
+    setTextRedactions((current) => [...current.filter((edit) => edit.target_id !== targetId), ...edits]);
   }
 
   async function applyRedactions() {
     if (!result?.json_path) return;
-    const existingCount = redactionTargets.filter((target) => target.redacted).length;
-    if (selectedRedactions.length <= existingCount) {
+    const selections = selectedRedactions.filter((id) => !redactionTargets.find((target) => target.id === id)?.redacted);
+    const textSelections = textRedactions.filter((edit) => !selections.includes(edit.target_id));
+    if (!selections.length && !textSelections.length) {
       setMessage("请至少新增选择一项需要屏蔽的内容。");
       return;
     }
     setBusy(true); setRedactionBusy(true); setMessage("正在本机生成屏蔽版报告，不会读取群聊或调用 AI…");
     try {
-      const updated = await bridge<GenerationResult>("redact_report", { json_path: result.json_path, target_ids: selectedRedactions });
+      const updated = await bridge<GenerationResult>("redact_report", { json_path: result.json_path, target_ids: selections, text_redactions: textSelections });
       setResult(updated);
       await loadRedactionTargets(updated.json_path || "");
       setMessage(`屏蔽版报告 v${updated.version || "新"} 已生成；原报告保持不变。`);
@@ -427,7 +437,7 @@ function GeneratePage({
       <section className={`action-dock ${result || batchResults.length ? "has-result" : ""}`}><div><strong>{dockChatName}{currentTask ? ` · ${generationSourceLabel(currentTask.source)}` : ""}</strong><span>{dockStart === dockEnd ? dockStart : `${dockStart} 至 ${dockEnd}`}{!currentTask && isDailyBatch && selectedDayCount ? ` · ${selectedDayCount} 份单日报告` : ""} · PNG {settings.image_dpi} DPI</span>{progress && <div className="progress-wrap"><i><b style={{ width: `${progress.percent}%` }} /></i><small>{progress.percent}% · {progress.message} · 已用 {Math.round(progress.elapsed_seconds)} 秒</small></div>}</div><button className="button primary" onClick={generate} disabled={busy || !chatId}>{busy ? "正在生成…" : isDailyBatch && selectedDayCount ? `生成 ${selectedDayCount} 份单日报告` : "生成群聊总结"}</button></section>
       {batchResults.length > 0 && <section className="batch-result-panel"><div className="batch-result-heading"><div><h2>逐日生成结果</h2><p>每个日期均独立归档；失败日期可单独重试。</p></div><strong>{batchResults.filter((item) => item.status === "success").length}/{batchResults.length} 成功</strong></div><div className="batch-result-list">{batchResults.map((item) => <article key={item.date} className={`batch-result-row status-${item.status}`}><div><strong>{item.date}</strong><span>{item.status === "success" ? `已生成${item.result?.version ? ` · v${item.result.version}` : ""}` : item.status === "skipped" ? "无消息，已跳过" : "生成失败"}</span>{item.status === "failed" && item.message && <small title={item.message}>{item.message}</small>}</div><div>{item.status === "success" && <><button className="button secondary small" onClick={() => openPath(item.result?.png_path)}>打开图片</button><button className="button ghost small" onClick={() => openPath(item.result?.html_path)}>打开 HTML</button><button className="button ghost small" disabled={redactionBusy} onClick={() => openRedactionEditor(item.result)}>编辑内容</button></>}{item.status === "failed" && <button className="button secondary small" disabled={busy} onClick={() => retryBatchDate(item.date)}>重试</button>}</div></article>)}</div></section>}
       {result && batchResults.length === 0 && <section className="result-panel"><div className="result-copy"><CheckCircle2 className="result-check" size={36} aria-hidden="true" /><div><h2>报告生成完成{result.version ? ` · v${result.version}` : ""}</h2><p>PNG 与 HTML 已生成，旧版本不会被覆盖。</p></div></div><div className="result-actions"><button className="button primary small" onClick={() => openPath(result.png_path)}>打开图片</button><button className="button secondary" onClick={() => openPath(result.html_path)}>打开 HTML</button><button className="button secondary" onClick={() => openPath(result.chat_dir || result.data_dir)}>打开报告所在目录</button><button className="button ghost" disabled={redactionBusy} onClick={() => openRedactionEditor()}>{redactionBusy ? "读取中…" : "编辑并屏蔽内容"}</button></div></section>}
-      {result && redactionEditorOpen && <RedactionEditor targets={redactionTargets} selectedIds={selectedRedactions} busy={redactionBusy} onClose={() => setRedactionEditorOpen(false)} onToggle={toggleRedaction} onApply={applyRedactions} />}
+      {result && redactionEditorOpen && <RedactionEditor targets={redactionTargets} selectedIds={selectedRedactions} textRedactions={textRedactions} busy={redactionBusy} onClose={() => setRedactionEditorOpen(false)} onToggle={toggleRedaction} onTextChange={updateTextRedactions} onToggleKeywords={() => setSelectedRedactions((current) => toggleKeywordSelection(current, redactionTargets))} onApply={applyRedactions} />}
   </div>;
 }
 export default GeneratePage;
