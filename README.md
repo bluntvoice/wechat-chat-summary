@@ -11,7 +11,7 @@
 除了生成单次总结外，项目还提供历史报告管理、全文搜索、群聊活跃热力图、内容屏蔽、多群定时生成以及 MCP Server 等功能。
 
 <!-- release-readme:current-version:start -->
-> 当前版本：**v1.2.3**
+> 当前版本：**v1.2.4**
 <!-- release-readme:current-version:end -->
 <!-- release-readme:release-status:start -->
 > 当前主要面向 Windows 桌面环境。
@@ -205,8 +205,8 @@ MCP Server 属于高级功能。软件自身生成总结时使用用户配置的
 当前正式版本主要面向 Windows x64。用户可从 [最新版下载页](https://github.com/bluntvoice/wechat-chat-summary/releases/latest) 下载：
 
 ```text
-WeChat-Chat-Summary_1.2.3_x64-setup.exe
-WeChat-Chat-Summary_1.2.3_x64-setup.exe.sha256
+WeChat-Chat-Summary_1.2.4_x64-setup.exe
+WeChat-Chat-Summary_1.2.4_x64-setup.exe.sha256
 ```
 
 安装步骤：
@@ -417,6 +417,14 @@ wechat-chat-summary
 ## 版本更新日志
 
 <!-- release-readme:history -->
+
+### v1.2.4
+
+- **新增**：开头一句话总结和报告结尾支持任意文字屏蔽，可标记多处、撤销和预览，屏蔽后按字数显示黑色方框，也可整段屏蔽；
+- **新增**：群关键词支持逐个勾选、全选与取消全选，全选后可取消个别词；
+- **修复**：屏蔽成员观察或话题后，其他未屏蔽话题、原话和总结中的昵称继续正常显示；
+- **修复**：正常版 v1 的屏蔽派生报告显示为“屏蔽版 v1.1”“屏蔽版 v1.2”，统一历史列表、搜索和版本切换中的标识；
+- **优化**：关键词屏蔽只保留上方完整列表，移除下方重复且不完整的勾选入口。
 
 ### v1.2.3
 
